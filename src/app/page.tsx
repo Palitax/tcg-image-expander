@@ -24,10 +24,49 @@ interface ProgressStep {
 
 const INITIAL_STEPS: ProgressStep[] = [
   { id: "LAYOUT", label: "Layout Analysis", description: "Gemini detects inner card artwork bounding box", status: "idle" },
-  { id: "CROP", label: "Artwork Extraction", description: "Sharp extracts the illustration using pixel coordinates", status: "idle" },
+  { id: "CROP", label: "Artwork Extraction", description: "Sharp extracts the illustration using coordinates", status: "idle" },
   { id: "OUTPAINT", label: "Background Expansion", description: "Imagen 3 outpaints background in target aspect ratio", status: "idle" },
   { id: "MERGE", label: "Card Compositing", description: "Overlay card with elegant soft shadow and finish", status: "idle" }
 ];
+
+// Helper to convert file to Base64 data URL
+const fileToDataUrl = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read file."));
+    reader.readAsDataURL(file);
+  });
+};
+
+// Client-side fetch retry helper to prevent Vercel timeouts and network resets
+const fetchWithRetry = async (
+  url: string, 
+  options: RequestInit, 
+  retries = 3, 
+  delay = 2000, 
+  onRetry?: (msg: string) => void
+): Promise<Response> => {
+  try {
+    const response = await fetch(url, options);
+    // 503 is Service Unavailable (high demand)
+    if (response.status === 503 && retries > 0) {
+      const msg = `Google API busy. Retrying in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
+      if (onRetry) onRetry(msg);
+      await new Promise(r => setTimeout(r, delay));
+      return fetchWithRetry(url, options, retries - 1, delay * 2, onRetry);
+    }
+    return response;
+  } catch (e: any) {
+    if (retries > 0) {
+      const msg = `Connection glitch. Retrying in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
+      if (onRetry) onRetry(msg);
+      await new Promise(r => setTimeout(r, delay));
+      return fetchWithRetry(url, options, retries - 1, delay * 2, onRetry);
+    }
+    throw e;
+  }
+};
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
@@ -104,77 +143,82 @@ export default function Home() {
     setErrorMessage(null);
     setResultImageUrl(null);
     setElapsedTime(0);
-    setActiveStepMessage("Initializing connection...");
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
 
-    const formData = new FormData();
-    formData.append("cardImage", file);
-    formData.append("aspectRatio", aspectRatio);
-
     try {
-      const response = await fetch("/api/expand", {
+      // 0. Convert original file to Base64 for the final merge step
+      setActiveStepMessage("Converting card image...");
+      const originalBase64 = await fileToDataUrl(file);
+
+      // STEP 1 & 2: Bounding Box Detection & Crop
+      updateStepStatus("LAYOUT", "running");
+      setActiveStepMessage("Locating artwork bounding box...");
+      
+      const cropFormData = new FormData();
+      cropFormData.append("cardImage", file);
+
+      const cropResponse = await fetch("/api/pipeline/crop", {
         method: "POST",
-        body: formData,
+        body: cropFormData
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || "Failed to process image.");
+      if (!cropResponse.ok) {
+        const errData = await cropResponse.json();
+        throw new Error(errData.error || "Failed to analyze and crop card artwork.");
       }
 
-      if (!response.body) {
-        throw new Error("No response body received from server.");
+      const { croppedImage, coords } = await cropResponse.json();
+      updateStepStatus("LAYOUT", "success");
+      updateStepStatus("CROP", "success");
+
+      // STEP 3: Outpainting with style analysis & Imagen 3
+      updateStepStatus("OUTPAINT", "running");
+      setActiveStepMessage("Analyzing visual style with Gemini...");
+
+      const outpaintResponse = await fetchWithRetry(
+        "/api/pipeline/outpaint",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ croppedImage, aspectRatio })
+        },
+        3,
+        2000,
+        (msg) => setActiveStepMessage(msg)
+      );
+
+      if (!outpaintResponse.ok) {
+        const errData = await outpaintResponse.json();
+        throw new Error(errData.error || "Failed to outpaint and extend background.");
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+      const { backgroundImage } = await outpaintResponse.json();
+      updateStepStatus("OUTPAINT", "success");
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // STEP 4: Merge card + shadow over background
+      updateStepStatus("MERGE", "running");
+      setActiveStepMessage("Overlaying card with 3D drop shadow...");
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+      const mergeResponse = await fetch("/api/pipeline/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ originalImage: originalBase64, backgroundImage })
+      });
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            
-            if (data.step) {
-              setActiveStepMessage(data.message || "");
-              
-              if (data.step === "LAYOUT") {
-                updateStepStatus("LAYOUT", "running");
-              } else if (data.step === "CROP") {
-                updateStepStatus("LAYOUT", "success");
-                updateStepStatus("CROP", "running");
-              } else if (data.step === "OUTPAINT") {
-                updateStepStatus("CROP", "success");
-                updateStepStatus("OUTPAINT", "running");
-              } else if (data.step === "MERGE") {
-                updateStepStatus("OUTPAINT", "success");
-                updateStepStatus("MERGE", "running");
-              } else if (data.step === "SUCCESS") {
-                updateStepStatus("MERGE", "success");
-                if (data.data && data.data.resultImageUrl) {
-                  setResultImageUrl(data.data.resultImageUrl);
-                }
-              } else if (data.step === "ERROR") {
-                throw new Error(data.message || "An error occurred during pipeline execution.");
-              }
-            }
-          } catch (e: any) {
-            console.error("Failed to parse chunk:", e);
-            throw new Error(e.message || "Error parsing server update stream.");
-          }
-        }
+      if (!mergeResponse.ok) {
+        const errData = await mergeResponse.json();
+        throw new Error(errData.error || "Failed to merge card and background.");
       }
+
+      const { resultImageUrl } = await mergeResponse.json();
+      updateStepStatus("MERGE", "success");
+      setResultImageUrl(resultImageUrl);
+      setActiveStepMessage("Completed!");
+
     } catch (error: any) {
       console.error("Pipeline error:", error);
-      setErrorMessage(error.message || "An unexpected error occurred.");
+      setErrorMessage(error.message || "An unexpected error occurred during processing.");
+      
       // Mark current running step as error
       setSteps(prev => {
         const runningIdx = prev.findIndex(s => s.status === "running" || s.status === "idle");
@@ -217,7 +261,7 @@ export default function Home() {
             TCG Art Studio
           </h1>
           <p className="mt-3 text-lg text-zinc-400 max-w-2xl">
-            Expand card illustrations into immersive backgrounds. Display cards in stunning portrait layouts optimized for websites and online stores.
+            Expand card illustrations into immersive backgrounds. Display cards in stunning layouts optimized for web shops and social media sharing.
           </p>
         </header>
 
@@ -441,7 +485,7 @@ export default function Home() {
                               <span className="truncate">{activeStepMessage}</span>
                             </div>
                           ) : (
-                            <p className="text-xs text-zinc-550 mt-0.5 truncate">{step.description}</p>
+                            <p className="text-xs text-zinc-500 mt-0.5">{step.description}</p>
                           )}
                         </div>
                       </div>
@@ -483,9 +527,9 @@ export default function Home() {
                     </a>
                   </div>
                 ) : (
-                  <div className="text-center text-zinc-500 p-8 flex flex-col items-center">
-                    <div className="w-16 h-16 rounded-full border border-zinc-800 bg-zinc-900/40 flex items-center justify-center mb-4">
-                      <ImageIcon className="w-8 h-8 text-zinc-600" />
+                  <div className="text-center text-zinc-550 p-8 flex flex-col items-center">
+                    <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
+                      <ImageIcon className="w-8 h-8 text-zinc-650" />
                     </div>
                     <p className="text-sm font-semibold text-zinc-400">No showcase generated yet</p>
                     <p className="text-xs text-zinc-600 mt-2 max-w-[240px]">
@@ -501,7 +545,7 @@ export default function Home() {
         </div>
 
         {/* Footer */}
-        <footer className="mt-16 text-center text-xs text-zinc-600 border-t border-zinc-900 pt-8 pb-4">
+        <footer className="mt-16 text-center text-xs text-zinc-650 border-t border-zinc-900 pt-8 pb-4">
           <p>© {new Date().getFullYear()} TCG Art Studio. Powered by Google Gemini & Imagen 3.</p>
         </footer>
 
