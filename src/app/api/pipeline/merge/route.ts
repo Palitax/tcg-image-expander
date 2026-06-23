@@ -38,12 +38,24 @@ export async function POST(request: Request) {
 
     const resizedCard = await sharp(originalImageBuffer)
       .resize(targetCardWidth, targetCardHeight)
+      .png() // Force to PNG format
       .toBuffer();
 
     // Create elegant drop shadow canvas
     const shadowPadding = 45;
     const shadowWidth = targetCardWidth + shadowPadding * 2;
     const shadowHeight = targetCardHeight + shadowPadding * 2;
+
+    const innerShadowInput = await sharp({
+      create: {
+        width: targetCardWidth,
+        height: targetCardHeight,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0.5 } // soft dark shadow
+      }
+    })
+    .png() // Must output as PNG to be a valid input format in composite
+    .toBuffer();
 
     const cardShadow = await sharp({
       create: {
@@ -55,19 +67,13 @@ export async function POST(request: Request) {
     })
     .composite([
       {
-        input: await sharp({
-          create: {
-            width: targetCardWidth,
-            height: targetCardHeight,
-            channels: 4,
-            background: { r: 0, g: 0, b: 0, alpha: 0.5 } // soft dark shadow
-          }
-        }).toBuffer(),
+        input: innerShadowInput,
         top: shadowPadding,
         left: shadowPadding
       }
     ])
     .blur(22) // Gaussian blur for soft shadow
+    .png() // Must output as PNG to be a valid input format in the next step
     .toBuffer();
 
     // Overlay resized card over the shadow
@@ -79,6 +85,7 @@ export async function POST(request: Request) {
           left: shadowPadding
         }
       ])
+      .png() // Must output as PNG
       .toBuffer();
 
     // Overlay card + shadow in center of the background
