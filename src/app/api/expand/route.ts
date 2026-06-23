@@ -6,6 +6,36 @@ import sharp from "sharp";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
+// Helper function to retry API calls on 503 (high demand) and 429 (rate limits) errors
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delay = 1500
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries <= 0) throw error;
+
+    const errMsg = String(error.message || "");
+    const errStatus = error.status;
+    const isRetryable =
+      errMsg.includes("503") ||
+      errMsg.includes("429") ||
+      errMsg.includes("UNAVAILABLE") ||
+      errMsg.includes("high demand") ||
+      errMsg.includes("experiencing high demand") ||
+      errStatus === 503 ||
+      errStatus === 429;
+
+    if (!isRetryable) throw error;
+
+    console.warn(`API call failed (503/429), retrying in ${delay}ms... (${retries} retries left). Error: ${errMsg}`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    return retryWithBackoff(fn, retries - 1, delay * 2);
+  }
+}
+
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -17,7 +47,7 @@ export async function POST(request: Request) {
       try {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-          throw new Error("GEMINI_API_KEY is not configured. Please add it to your .env.local file.");
+          throw new Error("GEMINI_API_KEY is not configured. Please add it to your environment.");
         }
 
         const ai = new GoogleGenAI({ apiKey });
@@ -48,37 +78,39 @@ export async function POST(request: Request) {
 
         const base64Image = originalImageBuffer.toString("base64");
         
-        const layoutResponse = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: [
-            {
-              inlineData: {
-                data: base64Image,
-                mimeType: file.type || "image/png"
-              }
-            },
-            `The dimensions of the trading card image are ${width}x${height} pixels. Please identify the bounding box coordinates (x1, y1, x2, y2) of the inner primary illustration/artwork in these exact pixel coordinates.`
-          ],
-          config: {
-            systemInstruction: "Identify the bounding box of the inner primary illustration/artwork of this trading card. Exclude the card frames, text boxes, and borders. Return only the pixel coordinates.",
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: "OBJECT",
-              properties: {
-                x1: { type: "INTEGER", description: "Top-left X coordinate in pixels" },
-                y1: { type: "INTEGER", description: "Top-left Y coordinate in pixels" },
-                x2: { type: "INTEGER", description: "Bottom-right X coordinate in pixels" },
-                y2: { type: "INTEGER", description: "Bottom-right Y coordinate in pixels" }
+        const layoutText = await retryWithBackoff(async () => {
+          const layoutResponse = await ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: [
+              {
+                inlineData: {
+                  data: base64Image,
+                  mimeType: file.type || "image/png"
+                }
               },
-              required: ["x1", "y1", "x2", "y2"]
+              `The dimensions of the trading card image are ${width}x${height} pixels. Please identify the bounding box coordinates (x1, y1, x2, y2) of the inner primary illustration/artwork in these exact pixel coordinates.`
+            ],
+            config: {
+              systemInstruction: "Identify the bounding box of the inner primary illustration/artwork of this trading card. Exclude the card frames, text boxes, and borders. Return only the pixel coordinates.",
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "OBJECT",
+                properties: {
+                  x1: { type: "INTEGER", description: "Top-left X coordinate in pixels" },
+                  y1: { type: "INTEGER", description: "Top-left Y coordinate in pixels" },
+                  x2: { type: "INTEGER", description: "Bottom-right X coordinate in pixels" },
+                  y2: { type: "INTEGER", description: "Bottom-right Y coordinate in pixels" }
+                },
+                required: ["x1", "y1", "x2", "y2"]
+              }
             }
+          });
+          
+          if (!layoutResponse.text) {
+            throw new Error("Gemini layout analysis returned an empty response.");
           }
+          return layoutResponse.text;
         });
-
-        const layoutText = layoutResponse.text;
-        if (!layoutText) {
-          throw new Error("Gemini layout analysis returned an empty response.");
-        }
 
         let coords;
         try {
@@ -111,37 +143,56 @@ export async function POST(request: Request) {
 
         const croppedBase64 = croppedBuffer.toString("base64");
 
-        const styleResponse = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: [
-            {
-              inlineData: {
-                data: croppedBase64,
-                mimeType: "image/png"
-              }
-            },
-            "Describe the visual content, artistic style (e.g. anime, oil painting, watercolor), key color palette, character details, and backdrop elements of this trading card illustration. This description will be used as a prompt for Imagen 3 to expand the image. Do not mention card borders, text, or the card itself. Return only the description."
-          ]
+        const description = await retryWithBackoff(async () => {
+          const styleResponse = await ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: [
+              {
+                inlineData: {
+                  data: croppedBase64,
+                  mimeType: "image/png"
+                }
+              },
+              "Describe the visual content, artistic style (e.g. anime, oil painting, watercolor), key color palette, character details, and backdrop elements of this trading card illustration. This description will be used as a prompt for Imagen 3 to expand the image. Do not mention card borders, text, or the card itself. Return only the description."
+            ]
+          });
+          if (!styleResponse.text) {
+            throw new Error("Gemini style analysis returned an empty response.");
+          }
+          return styleResponse.text;
         });
-
-        const description = styleResponse.text;
-        if (!description) {
-          throw new Error("Gemini style analysis returned an empty response.");
-        }
 
         const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${description}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
 
-        const imagenResponse = await ai.models.generateImages({
-          model: "imagen-3.0-generate-002",
-          prompt: outpaintPrompt,
-          config: {
-            numberOfImages: 1,
-            aspectRatio: aspectRatio,
-            outputMimeType: "image/png"
+        // Generate outpainted background with robust fallback logic
+        const generatedImageBytes = await retryWithBackoff(async () => {
+          try {
+            console.log("Attempting image generation with imagen-3.0-generate-002");
+            const imagenResponse = await ai.models.generateImages({
+              model: "imagen-3.0-generate-002",
+              prompt: outpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: aspectRatio,
+                outputMimeType: "image/png"
+              }
+            });
+            return imagenResponse.generatedImages?.[0]?.image?.imageBytes;
+          } catch (e: any) {
+            console.warn("imagen-3.0-generate-002 failed or high demand, trying fallback to imagen-3.0-fast-generate-001. Error:", e.message);
+            const fallbackResponse = await ai.models.generateImages({
+              model: "imagen-3.0-fast-generate-001",
+              prompt: outpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: aspectRatio,
+                outputMimeType: "image/png"
+              }
+            });
+            return fallbackResponse.generatedImages?.[0]?.image?.imageBytes;
           }
         });
 
-        const generatedImageBytes = imagenResponse.generatedImages?.[0]?.image?.imageBytes;
         if (!generatedImageBytes) {
           throw new Error("Imagen image generation failed or returned no image bytes.");
         }
