@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   retries = 3,
-  delay = 1500
+  delay = 2000
 ): Promise<T> {
   try {
     return await fn();
@@ -36,6 +36,33 @@ async function retryWithBackoff<T>(
   }
 }
 
+// Helper to query Gemini with fallbacks (3.5 -> 2.5 -> 1.5)
+async function generateContentWithFallback(ai: any, contents: any[], config: any): Promise<string> {
+  const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
+  let lastError;
+
+  for (const model of models) {
+    try {
+      console.log(`[Gemini] Attempting generateContent with model: ${model}`);
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config
+      });
+      if (response.text) {
+        console.log(`[Gemini] Success using model: ${model}`);
+        return response.text;
+      }
+    } catch (e: any) {
+      console.warn(`[Gemini] Model ${model} failed: ${e.message}`);
+      lastError = e;
+      // Wait a moment before fallback to prevent hammering
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+  throw lastError || new Error("All Gemini models failed.");
+}
+
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -47,7 +74,7 @@ export async function POST(request: Request) {
       try {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-          throw new Error("GEMINI_API_KEY is not configured. Please add it to your environment.");
+          throw new Error("GEMINI_API_KEY is not configured. Please add it to your environment variables.");
         }
 
         const ai = new GoogleGenAI({ apiKey });
@@ -73,15 +100,15 @@ export async function POST(request: Request) {
           throw new Error("Failed to read image dimensions.");
         }
 
-        // STEP 1: Layout Analysis (Gemini 3.5 Bounding Box)
+        // STEP 1: Layout Analysis (Gemini Bounding Box)
         sendStep("LAYOUT", `Analyzing card layout (${width}x${height}px)...`);
 
         const base64Image = originalImageBuffer.toString("base64");
         
         const layoutText = await retryWithBackoff(async () => {
-          const layoutResponse = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
-            contents: [
+          return await generateContentWithFallback(
+            ai,
+            [
               {
                 inlineData: {
                   data: base64Image,
@@ -90,7 +117,7 @@ export async function POST(request: Request) {
               },
               `The dimensions of the trading card image are ${width}x${height} pixels. Please identify the bounding box coordinates (x1, y1, x2, y2) of the inner primary illustration/artwork in these exact pixel coordinates.`
             ],
-            config: {
+            {
               systemInstruction: "Identify the bounding box of the inner primary illustration/artwork of this trading card. Exclude the card frames, text boxes, and borders. Return only the pixel coordinates.",
               responseMimeType: "application/json",
               responseSchema: {
@@ -104,12 +131,7 @@ export async function POST(request: Request) {
                 required: ["x1", "y1", "x2", "y2"]
               }
             }
-          });
-          
-          if (!layoutResponse.text) {
-            throw new Error("Gemini layout analysis returned an empty response.");
-          }
-          return layoutResponse.text;
+          );
         });
 
         let coords;
@@ -144,9 +166,9 @@ export async function POST(request: Request) {
         const croppedBase64 = croppedBuffer.toString("base64");
 
         const description = await retryWithBackoff(async () => {
-          const styleResponse = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
-            contents: [
+          return await generateContentWithFallback(
+            ai,
+            [
               {
                 inlineData: {
                   data: croppedBase64,
@@ -154,43 +176,42 @@ export async function POST(request: Request) {
                 }
               },
               "Describe the visual content, artistic style (e.g. anime, oil painting, watercolor), key color palette, character details, and backdrop elements of this trading card illustration. This description will be used as a prompt for Imagen 3 to expand the image. Do not mention card borders, text, or the card itself. Return only the description."
-            ]
-          });
-          if (!styleResponse.text) {
-            throw new Error("Gemini style analysis returned an empty response.");
-          }
-          return styleResponse.text;
+            ],
+            undefined
+          );
         });
 
         const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${description}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
 
         // Generate outpainted background with robust fallback logic
         const generatedImageBytes = await retryWithBackoff(async () => {
-          try {
-            console.log("Attempting image generation with imagen-3.0-generate-002");
-            const imagenResponse = await ai.models.generateImages({
-              model: "imagen-3.0-generate-002",
-              prompt: outpaintPrompt,
-              config: {
-                numberOfImages: 1,
-                aspectRatio: aspectRatio,
-                outputMimeType: "image/png"
+          const imageModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
+          let lastError;
+
+          for (const model of imageModels) {
+            try {
+              console.log(`[Imagen] Attempting image generation with model: ${model}`);
+              const imagenResponse = await ai.models.generateImages({
+                model,
+                prompt: outpaintPrompt,
+                config: {
+                  numberOfImages: 1,
+                  aspectRatio: aspectRatio,
+                  outputMimeType: "image/png"
+                }
+              });
+              const bytes = imagenResponse.generatedImages?.[0]?.image?.imageBytes;
+              if (bytes) {
+                console.log(`[Imagen] Success using model: ${model}`);
+                return bytes;
               }
-            });
-            return imagenResponse.generatedImages?.[0]?.image?.imageBytes;
-          } catch (e: any) {
-            console.warn("imagen-3.0-generate-002 failed or high demand, trying fallback to imagen-3.0-fast-generate-001. Error:", e.message);
-            const fallbackResponse = await ai.models.generateImages({
-              model: "imagen-3.0-fast-generate-001",
-              prompt: outpaintPrompt,
-              config: {
-                numberOfImages: 1,
-                aspectRatio: aspectRatio,
-                outputMimeType: "image/png"
-              }
-            });
-            return fallbackResponse.generatedImages?.[0]?.image?.imageBytes;
+            } catch (e: any) {
+              console.warn(`[Imagen] Model ${model} failed: ${e.message}`);
+              lastError = e;
+              await new Promise(r => setTimeout(r, 500));
+            }
           }
+          throw lastError || new Error("All Imagen models failed.");
         });
 
         if (!generatedImageBytes) {
