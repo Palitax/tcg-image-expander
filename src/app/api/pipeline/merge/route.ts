@@ -12,8 +12,8 @@ export async function POST(request: Request) {
     }
 
     // Extract raw base64 data
-    const originalBase64 = originalImage.replace(/^data:image\/\w+;base64,/, "");
-    const backgroundBase64 = backgroundImage.replace(/^data:image\/\w+;base64,/, "");
+    const originalBase64 = originalImage.includes(",") ? originalImage.split(",")[1] : originalImage;
+    const backgroundBase64 = backgroundImage.includes(",") ? backgroundImage.split(",")[1] : backgroundImage;
 
     const originalImageBuffer = Buffer.from(originalBase64, "base64");
     const backgroundBuffer = Buffer.from(backgroundBase64, "base64");

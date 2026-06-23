@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     }
 
     // Extract raw base64 from Data URL
-    const base64Data = croppedImage.replace(/^data:image\/\w+;base64,/, "");
+    const base64Data = croppedImage.includes(",") ? croppedImage.split(",")[1] : croppedImage;
     const croppedBuffer = Buffer.from(base64Data, "base64");
 
     // Get target background dimensions
