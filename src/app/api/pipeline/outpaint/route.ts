@@ -93,25 +93,42 @@ export async function POST(request: Request) {
 
       const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
 
-      console.log(`[Outpaint API] Attempting Imagen 3 with prompt: "${outpaintPrompt}"`);
+      console.log(`[Outpaint API] Attempting Gemini 2.5 Flash Image with prompt: "${outpaintPrompt}"`);
 
-      // STEP 3B: Generate background with Imagen 3
-      const imagenResponse = await ai.models.generateImages({
-        model: "imagen-3.0-generate-002",
-        prompt: outpaintPrompt,
+      // STEP 3B: Generate background with Gemini 2.5 Flash Image
+      const imagenResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: [
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: "image/png"
+            }
+          },
+          outpaintPrompt
+        ],
         config: {
-          numberOfImages: 1,
-          aspectRatio: aspectRatio || "3:4",
-          outputMimeType: "image/png"
+          responseModalities: ["IMAGE"],
+          imageConfig: {
+            aspectRatio: aspectRatio || "3:4"
+          }
         }
       });
       
-      const bytes = imagenResponse.generatedImages?.[0]?.image?.imageBytes;
-      if (bytes) {
-        backgroundImageBase64 = bytes;
-        console.log("[Outpaint API] Imagen 3 generated successfully.");
+      let generatedBase64 = "";
+      const parts = imagenResponse.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          generatedBase64 = part.inlineData.data;
+          break;
+        }
+      }
+
+      if (generatedBase64) {
+        backgroundImageBase64 = generatedBase64;
+        console.log("[Outpaint API] Gemini 2.5 Flash Image generated successfully.");
       } else {
-        throw new Error("No image bytes returned by Imagen 3.");
+        throw new Error("No image bytes returned by Gemini 2.5 Flash Image.");
       }
 
     } catch (e: any) {
