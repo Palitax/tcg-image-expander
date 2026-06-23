@@ -19,6 +19,14 @@ async function retryWithBackoff<T>(
 
     const errMsg = String(error.message || "");
     const errStatus = error.status;
+    
+    // Safety blocks are not retryable (usually 400 or contains safety/blocked)
+    const isSafetyBlock = errMsg.toLowerCase().includes("safety") || 
+                          errMsg.toLowerCase().includes("blocked") ||
+                          errMsg.toLowerCase().includes("block");
+                          
+    if (isSafetyBlock) throw error;
+
     const isRetryable =
       errMsg.includes("503") ||
       errMsg.includes("429") ||
@@ -56,7 +64,10 @@ async function generateContentWithFallback(ai: any, contents: any[], config: any
     } catch (e: any) {
       console.warn(`[Gemini] Model ${model} failed: ${e.message}`);
       lastError = e;
-      // Wait a moment before fallback to prevent hammering
+      // If it's a safety block or invalid argument, don't try other models
+      if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
+        throw e;
+      }
       await new Promise(r => setTimeout(r, 500));
     }
   }
@@ -181,37 +192,41 @@ export async function POST(request: Request) {
           );
         });
 
-        const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${description}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
+        // Filter and sanitize description to prevent safety triggers in Imagen
+        let sanitizedDescription = description
+          .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy element")
+          .trim();
 
-        // Generate outpainted background with robust fallback logic
+        const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
+
+        console.log(`[Imagen] Generated Prompt for outpainting: "${outpaintPrompt}"`);
+
+        // Generate outpainted background using the primary supported model
         const generatedImageBytes = await retryWithBackoff(async () => {
-          const imageModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
-          let lastError;
-
-          for (const model of imageModels) {
-            try {
-              console.log(`[Imagen] Attempting image generation with model: ${model}`);
-              const imagenResponse = await ai.models.generateImages({
-                model,
-                prompt: outpaintPrompt,
-                config: {
-                  numberOfImages: 1,
-                  aspectRatio: aspectRatio,
-                  outputMimeType: "image/png"
-                }
-              });
-              const bytes = imagenResponse.generatedImages?.[0]?.image?.imageBytes;
-              if (bytes) {
-                console.log(`[Imagen] Success using model: ${model}`);
-                return bytes;
+          try {
+            console.log("[Imagen] Running imagen-3.0-generate-002...");
+            const imagenResponse = await ai.models.generateImages({
+              model: "imagen-3.0-generate-002",
+              prompt: outpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: aspectRatio,
+                outputMimeType: "image/png"
               }
-            } catch (e: any) {
-              console.warn(`[Imagen] Model ${model} failed: ${e.message}`);
-              lastError = e;
-              await new Promise(r => setTimeout(r, 500));
+            });
+            const bytes = imagenResponse.generatedImages?.[0]?.image?.imageBytes;
+            if (bytes) {
+              return bytes;
             }
+            throw new Error("No image bytes returned by Imagen 3.");
+          } catch (e: any) {
+            console.error("[Imagen] Generation failed:", e);
+            // If it's a safety block, provide a clear custom message
+            if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
+              throw new Error("The image content generated a description that triggered Google's safety filters. Please try another card image.");
+            }
+            throw e;
           }
-          throw lastError || new Error("All Imagen models failed.");
         });
 
         if (!generatedImageBytes) {
