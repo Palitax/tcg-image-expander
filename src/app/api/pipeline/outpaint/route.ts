@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "iad1"; // Force US-East server to bypass EU IP blocks for Imagen 3
 
 // Map aspect ratio string to dimensions for the fallback blurred background
 const getDimensionsForRatio = (ratio: string): { width: number; height: number } => {

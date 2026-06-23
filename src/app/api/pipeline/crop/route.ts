@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "iad1"; // Force US-East server
 
 export async function POST(request: Request) {
   try {
