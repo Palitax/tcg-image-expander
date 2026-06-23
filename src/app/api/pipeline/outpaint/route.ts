@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     const base64Data = croppedImage.replace(/^data:image\/\w+;base64,/, "");
 
     // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
-    const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
+    const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
     let description = "";
     let lastError;
 

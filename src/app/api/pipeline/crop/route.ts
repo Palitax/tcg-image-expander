@@ -36,8 +36,8 @@ export async function POST(request: Request) {
 
     const base64Image = originalImageBuffer.toString("base64");
     
-    // We try gemini-3.5-flash -> gemini-2.5-flash -> gemini-1.5-flash for layout
-    const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
+    // Fallback list of modern active Gemini models
+    const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
     let layoutText = "";
     let lastError;
 
@@ -59,12 +59,12 @@ export async function POST(request: Request) {
             systemInstruction: "Identify the bounding box of the inner primary illustration/artwork of this trading card. Exclude the card frames, text boxes, and borders. Return only the pixel coordinates.",
             responseMimeType: "application/json",
             responseSchema: {
-              type: "OBJECT",
+              type: "object",
               properties: {
-                x1: { type: "INTEGER", description: "Top-left X coordinate in pixels" },
-                y1: { type: "INTEGER", description: "Top-left Y coordinate in pixels" },
-                x2: { type: "INTEGER", description: "Bottom-right X coordinate in pixels" },
-                y2: { type: "INTEGER", description: "Bottom-right Y coordinate in pixels" }
+                x1: { type: "integer", description: "Top-left X coordinate in pixels" },
+                y1: { type: "integer", description: "Top-left Y coordinate in pixels" },
+                x2: { type: "integer", description: "Bottom-right X coordinate in pixels" },
+                y2: { type: "integer", description: "Bottom-right Y coordinate in pixels" }
               },
               required: ["x1", "y1", "x2", "y2"]
             }
@@ -77,6 +77,10 @@ export async function POST(request: Request) {
       } catch (e: any) {
         console.warn(`[Crop API] Model ${model} failed: ${e.message}`);
         lastError = e;
+        // If it's a safety block or validation/schema structure issue, stop and throw immediately
+        if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
+          throw e;
+        }
       }
     }
 
