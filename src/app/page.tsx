@@ -70,6 +70,7 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
   const [usedAmbientFallback, setUsedAmbientFallback] = useState<boolean>(false);
+  const [ambientFallbackReason, setAmbientFallbackReason] = useState<string>("");
   
   // Timer & active messages
   const [elapsedTime, setElapsedTime] = useState<number>(0);
@@ -188,8 +189,9 @@ export default function Home() {
         throw new Error(errData.error || "Failed to outpaint and extend background.");
       }
 
-      const { backgroundImage, usedFallback } = await outpaintResponse.json();
+      const { backgroundImage, usedFallback, fallbackReason } = await outpaintResponse.json();
       setUsedAmbientFallback(usedFallback || false);
+      setAmbientFallbackReason(fallbackReason || "");
       updateStepStatus("OUTPAINT", "success");
 
       // STEP 4: Merge card + shadow over background
@@ -235,6 +237,7 @@ export default function Home() {
     setResultImageUrl(null);
     setErrorMessage(null);
     setUsedAmbientFallback(false);
+    setAmbientFallbackReason("");
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
     setElapsedTime(0);
     setActiveStepMessage("");
@@ -517,9 +520,16 @@ export default function Home() {
 
                     {/* Fallback information badge */}
                     {usedAmbientFallback && (
-                      <div className="mt-4 flex items-center gap-2 px-3 py-1.5 rounded-lg border border-purple-500/20 bg-purple-500/5 text-purple-300 text-xs font-medium max-w-[320px]">
-                        <Info className="w-4 h-4 text-purple-400 shrink-0" />
-                        <span>Ambient Blur fallback used due to region limits.</span>
+                      <div className="mt-4 flex flex-col gap-1 px-3 py-2 rounded-lg border border-purple-500/20 bg-purple-500/5 text-purple-300 text-xs font-medium max-w-[320px]">
+                        <div className="flex items-center gap-2">
+                          <Info className="w-4 h-4 text-purple-400 shrink-0" />
+                          <span>Ambient Blur fallback used.</span>
+                        </div>
+                        {ambientFallbackReason && (
+                          <span className="text-zinc-400 font-mono text-[10px] break-all mt-1 bg-black/40 p-1.5 rounded border border-zinc-800 max-h-[80px] overflow-y-auto w-full block">
+                            {ambientFallbackReason}
+                          </span>
+                        )}
                       </div>
                     )}
                     

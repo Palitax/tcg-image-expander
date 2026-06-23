@@ -46,6 +46,7 @@ export async function POST(request: Request) {
 
     let backgroundImageBase64 = "";
     let usedFallback = false;
+    let fallbackReason = "";
 
     try {
       // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
@@ -114,8 +115,9 @@ export async function POST(request: Request) {
       }
 
     } catch (e: any) {
-      console.warn("[Outpaint API] AI Outpainting failed or not supported in this region. Falling back to blurred ambient backdrop. Error:", e.message);
+      console.warn("[Outpaint API] AI Outpainting failed. Error:", e.message);
       usedFallback = true;
+      fallbackReason = e.message || String(e);
       
       // GENERATE BLURRED AMBIENT BACKDROP (Bulletproof fallback)
       const blurredBgBuffer = await sharp(croppedBuffer)
@@ -130,7 +132,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       backgroundImage: `data:image/png;base64,${backgroundImageBase64}`,
-      usedFallback
+      usedFallback,
+      fallbackReason
     });
 
   } catch (error: any) {
