@@ -12,7 +12,8 @@ import {
   Maximize2, 
   AlertCircle,
   CheckCircle2,
-  Clock
+  Clock,
+  Info
 } from "lucide-react";
 
 interface ProgressStep {
@@ -43,26 +44,18 @@ const fileToDataUrl = (file: File): Promise<string> => {
 const fetchWithRetry = async (
   url: string, 
   options: RequestInit, 
-  retries = 3, 
-  delay = 2000, 
+  retries = 2, 
+  delay = 1500, 
   onRetry?: (msg: string) => void
 ): Promise<Response> => {
   try {
-    const response = await fetch(url, options);
-    // 503 is Service Unavailable (high demand)
-    if (response.status === 503 && retries > 0) {
-      const msg = `Google API busy. Retrying in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
-      if (onRetry) onRetry(msg);
-      await new Promise(r => setTimeout(r, delay));
-      return fetchWithRetry(url, options, retries - 1, delay * 2, onRetry);
-    }
-    return response;
+    return await fetch(url, options);
   } catch (e: any) {
     if (retries > 0) {
-      const msg = `Connection glitch. Retrying in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
+      const msg = `Retrying connection in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
       if (onRetry) onRetry(msg);
       await new Promise(r => setTimeout(r, delay));
-      return fetchWithRetry(url, options, retries - 1, delay * 2, onRetry);
+      return fetchWithRetry(url, options, retries - 1, delay * 1.5, onRetry);
     }
     throw e;
   }
@@ -76,6 +69,7 @@ export default function Home() {
   const [steps, setSteps] = useState<ProgressStep[]>(INITIAL_STEPS);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
+  const [usedAmbientFallback, setUsedAmbientFallback] = useState<boolean>(false);
   
   // Timer & active messages
   const [elapsedTime, setElapsedTime] = useState<number>(0);
@@ -107,6 +101,7 @@ export default function Home() {
       setPreviewUrl(URL.createObjectURL(selectedFile));
       setResultImageUrl(null);
       setErrorMessage(null);
+      setUsedAmbientFallback(false);
       setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
       setElapsedTime(0);
       setActiveStepMessage("");
@@ -142,6 +137,7 @@ export default function Home() {
     setIsProcessing(true);
     setErrorMessage(null);
     setResultImageUrl(null);
+    setUsedAmbientFallback(false);
     setElapsedTime(0);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
 
@@ -167,13 +163,13 @@ export default function Home() {
         throw new Error(errData.error || "Failed to analyze and crop card artwork.");
       }
 
-      const { croppedImage, coords } = await cropResponse.json();
+      const { croppedImage } = await cropResponse.json();
       updateStepStatus("LAYOUT", "success");
       updateStepStatus("CROP", "success");
 
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateStepStatus("OUTPAINT", "running");
-      setActiveStepMessage("Analyzing visual style with Gemini...");
+      setActiveStepMessage("Analyzing style with Gemini...");
 
       const outpaintResponse = await fetchWithRetry(
         "/api/pipeline/outpaint",
@@ -182,8 +178,8 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ croppedImage, aspectRatio })
         },
-        3,
-        2000,
+        2,
+        1500,
         (msg) => setActiveStepMessage(msg)
       );
 
@@ -192,7 +188,8 @@ export default function Home() {
         throw new Error(errData.error || "Failed to outpaint and extend background.");
       }
 
-      const { backgroundImage } = await outpaintResponse.json();
+      const { backgroundImage, usedFallback } = await outpaintResponse.json();
+      setUsedAmbientFallback(usedFallback || false);
       updateStepStatus("OUTPAINT", "success");
 
       // STEP 4: Merge card + shadow over background
@@ -237,6 +234,7 @@ export default function Home() {
     setPreviewUrl(null);
     setResultImageUrl(null);
     setErrorMessage(null);
+    setUsedAmbientFallback(false);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
     setElapsedTime(0);
     setActiveStepMessage("");
@@ -485,7 +483,7 @@ export default function Home() {
                               <span className="truncate">{activeStepMessage}</span>
                             </div>
                           ) : (
-                            <p className="text-xs text-zinc-500 mt-0.5">{step.description}</p>
+                            <p className="text-xs text-zinc-550 mt-0.5">{step.description}</p>
                           )}
                         </div>
                       </div>
@@ -516,6 +514,14 @@ export default function Home() {
                         className="w-full h-full object-cover"
                       />
                     </div>
+
+                    {/* Fallback information badge */}
+                    {usedAmbientFallback && (
+                      <div className="mt-4 flex items-center gap-2 px-3 py-1.5 rounded-lg border border-purple-500/20 bg-purple-500/5 text-purple-300 text-xs font-medium max-w-[320px]">
+                        <Info className="w-4 h-4 text-purple-400 shrink-0" />
+                        <span>Ambient Blur fallback used due to region limits.</span>
+                      </div>
+                    )}
                     
                     <a
                       href={resultImageUrl}
