@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { 
   Upload, 
@@ -11,7 +11,8 @@ import {
   Layers, 
   Maximize2, 
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Clock
 } from "lucide-react";
 
 interface ProgressStep {
@@ -22,7 +23,7 @@ interface ProgressStep {
 }
 
 const INITIAL_STEPS: ProgressStep[] = [
-  { id: "LAYOUT", label: "Layout Analysis", description: "Gemini 3.5 Flash detects inner card artwork bounding box", status: "idle" },
+  { id: "LAYOUT", label: "Layout Analysis", description: "Gemini detects inner card artwork bounding box", status: "idle" },
   { id: "CROP", label: "Artwork Extraction", description: "Sharp extracts the illustration using pixel coordinates", status: "idle" },
   { id: "OUTPAINT", label: "Background Expansion", description: "Imagen 3 outpaints background in target aspect ratio", status: "idle" },
   { id: "MERGE", label: "Card Compositing", description: "Overlay card with elegant soft shadow and finish", status: "idle" }
@@ -36,6 +37,29 @@ export default function Home() {
   const [steps, setSteps] = useState<ProgressStep[]>(INITIAL_STEPS);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
+  
+  // Timer & active messages
+  const [elapsedTime, setElapsedTime] = useState<number>(0);
+  const [activeStepMessage, setActiveStepMessage] = useState<string>("");
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (isProcessing) {
+      const startTime = Date.now();
+      timerRef.current = setInterval(() => {
+        setElapsedTime((Date.now() - startTime) / 1000);
+      }, 100);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [isProcessing]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
@@ -45,6 +69,8 @@ export default function Home() {
       setResultImageUrl(null);
       setErrorMessage(null);
       setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
+      setElapsedTime(0);
+      setActiveStepMessage("");
     }
   }, []);
 
@@ -77,6 +103,8 @@ export default function Home() {
     setIsProcessing(true);
     setErrorMessage(null);
     setResultImageUrl(null);
+    setElapsedTime(0);
+    setActiveStepMessage("Initializing connection...");
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
 
     const formData = new FormData();
@@ -116,6 +144,8 @@ export default function Home() {
             const data = JSON.parse(line);
             
             if (data.step) {
+              setActiveStepMessage(data.message || "");
+              
               if (data.step === "LAYOUT") {
                 updateStepStatus("LAYOUT", "running");
               } else if (data.step === "CROP") {
@@ -164,6 +194,8 @@ export default function Home() {
     setResultImageUrl(null);
     setErrorMessage(null);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
+    setElapsedTime(0);
+    setActiveStepMessage("");
   };
 
   return (
@@ -300,7 +332,7 @@ export default function Home() {
                 {isProcessing ? (
                   <>
                     <RefreshCw className="w-5 h-5 animate-spin" />
-                    Processing Pipeline...
+                    Processing ({elapsedTime.toFixed(1)}s)...
                   </>
                 ) : (
                   <>
@@ -348,10 +380,16 @@ export default function Home() {
             {/* Pipeline Status Checklist */}
             {isProcessing || steps.some(s => s.status !== "idle") ? (
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
-                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                  <RefreshCw className={`w-5 h-5 text-purple-400 ${isProcessing ? "animate-spin" : ""}`} />
-                  Pipeline Status
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <RefreshCw className={`w-5 h-5 text-purple-400 ${isProcessing ? "animate-spin" : ""}`} />
+                    Pipeline Status
+                  </h2>
+                  <div className="text-xs text-zinc-400 flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-zinc-850 bg-zinc-950/60 font-mono">
+                    <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                    {elapsedTime.toFixed(1)}s
+                  </div>
+                </div>
 
                 <div className="flex flex-col gap-4">
                   {steps.map((step, idx) => {
@@ -365,7 +403,7 @@ export default function Home() {
                         key={step.id} 
                         className={`flex gap-4 p-3 rounded-xl border transition-all ${
                           isRunning 
-                            ? "border-purple-500/40 bg-purple-500/5" 
+                            ? "border-purple-500/40 bg-purple-500/5 shadow-[0_0_15px_rgba(168,85,247,0.05)]" 
                             : isSuccess 
                             ? "border-emerald-500/10 bg-emerald-500/5 opacity-80" 
                             : isError 
@@ -387,16 +425,24 @@ export default function Home() {
                           </div>
                           {idx < steps.length - 1 && (
                             <div className={`w-[2px] flex-1 mt-2 -mb-5 ${
-                              isSuccess ? "bg-emerald-500/30" : isRunning ? "bg-purple-500/20 animate-pulse" : "bg-zinc-800"
+                              isSuccess ? "bg-emerald-500/30" : isRunning ? "bg-purple-500/20" : "bg-zinc-800"
                             }`} />
                           )}
                         </div>
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <h3 className={`font-semibold text-sm ${isRunning ? "text-purple-400" : isSuccess ? "text-emerald-400" : "text-zinc-200"}`}>
                             {step.label}
-                            {isRunning && <span className="ml-2 text-xs font-normal text-zinc-500 animate-pulse">(Processing...)</span>}
                           </h3>
-                          <p className="text-xs text-zinc-400 mt-0.5">{step.description}</p>
+                          
+                          {/* Live Sub-status messages */}
+                          {isRunning && activeStepMessage ? (
+                            <div className="flex items-center gap-1.5 mt-1.5 text-xs text-purple-300 font-medium animate-pulse bg-purple-950/20 border border-purple-900/30 px-2 py-1 rounded-md">
+                              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
+                              <span className="truncate">{activeStepMessage}</span>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-zinc-550 mt-0.5 truncate">{step.description}</p>
+                          )}
                         </div>
                       </div>
                     );
@@ -456,7 +502,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="mt-16 text-center text-xs text-zinc-600 border-t border-zinc-900 pt-8 pb-4">
-          <p>© {new Date().getFullYear()} TCG Art Studio. Powered by Google Gemini 3.5 Flash & Imagen 3.</p>
+          <p>© {new Date().getFullYear()} TCG Art Studio. Powered by Google Gemini & Imagen 3.</p>
         </footer>
 
       </main>

@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   retries = 3,
-  delay = 2000
+  delay = 2000,
+  onRetry?: (message: string) => void
 ): Promise<T> {
   try {
     return await fn();
@@ -38,19 +39,27 @@ async function retryWithBackoff<T>(
 
     if (!isRetryable) throw error;
 
-    console.warn(`API call failed (503/429), retrying in ${delay}ms... (${retries} retries left). Error: ${errMsg}`);
+    const retryMsg = `Google API busy. Retrying in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
+    console.warn(`${retryMsg} Error: ${errMsg}`);
+    if (onRetry) {
+      onRetry(retryMsg);
+    }
+    
     await new Promise((resolve) => setTimeout(resolve, delay));
-    return retryWithBackoff(fn, retries - 1, delay * 2);
+    return retryWithBackoff(fn, retries - 1, delay * 2, onRetry);
   }
 }
 
 // Helper to query Gemini with fallbacks (3.5 -> 2.5 -> 1.5)
-async function generateContentWithFallback(ai: any, contents: any[], config: any): Promise<string> {
+async function generateContentWithFallback(ai: any, contents: any[], config: any, onStatus?: (msg: string) => void): Promise<string> {
   const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
   let lastError;
 
   for (const model of models) {
     try {
+      if (onStatus) {
+        onStatus(`Analyzing card layout using ${model}...`);
+      }
       console.log(`[Gemini] Attempting generateContent with model: ${model}`);
       const response = await ai.models.generateContent({
         model,
@@ -141,9 +150,10 @@ export async function POST(request: Request) {
                 },
                 required: ["x1", "y1", "x2", "y2"]
               }
-            }
+            },
+            (msg) => sendStep("LAYOUT", msg)
           );
-        });
+        }, 3, 1500, (msg) => sendStep("LAYOUT", msg));
 
         let coords;
         try {
@@ -164,7 +174,7 @@ export async function POST(request: Request) {
         const cropHeight = y2 - y1;
 
         // STEP 2: Crop Inner Artwork
-        sendStep("CROP", `Extracting card artwork at [${x1}, ${y1}] to [${x2}, ${y2}]...`);
+        sendStep("CROP", `Extracting artwork at [${x1}, ${y1}] to [${x2}, ${y2}]...`);
 
         const croppedBuffer = await sharp(originalImageBuffer)
           .extract({ left: x1, top: y1, width: cropWidth, height: cropHeight })
@@ -172,7 +182,7 @@ export async function POST(request: Request) {
           .toBuffer();
 
         // STEP 3: Outpainting (Gemini description + Imagen 3)
-        sendStep("OUTPAINT", "Analyzing art style and outpainting background...");
+        sendStep("OUTPAINT", "Analyzing style and generating description with Gemini...");
 
         const croppedBase64 = croppedBuffer.toString("base64");
 
@@ -188,9 +198,10 @@ export async function POST(request: Request) {
               },
               "Describe the visual content, artistic style (e.g. anime, oil painting, watercolor), key color palette, character details, and backdrop elements of this trading card illustration. This description will be used as a prompt for Imagen 3 to expand the image. Do not mention card borders, text, or the card itself. Return only the description."
             ],
-            undefined
+            undefined,
+            (msg) => sendStep("OUTPAINT", msg)
           );
-        });
+        }, 3, 1500, (msg) => sendStep("OUTPAINT", msg));
 
         // Filter and sanitize description to prevent safety triggers in Imagen
         let sanitizedDescription = description
@@ -200,11 +211,11 @@ export async function POST(request: Request) {
         const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
 
         console.log(`[Imagen] Generated Prompt for outpainting: "${outpaintPrompt}"`);
+        sendStep("OUTPAINT", "Expanding background with Imagen 3 (this takes 8-15s)...");
 
         // Generate outpainted background using the primary supported model
         const generatedImageBytes = await retryWithBackoff(async () => {
           try {
-            console.log("[Imagen] Running imagen-3.0-generate-002...");
             const imagenResponse = await ai.models.generateImages({
               model: "imagen-3.0-generate-002",
               prompt: outpaintPrompt,
@@ -227,7 +238,7 @@ export async function POST(request: Request) {
             }
             throw e;
           }
-        });
+        }, 3, 2000, (msg) => sendStep("OUTPAINT", msg));
 
         if (!generatedImageBytes) {
           throw new Error("Imagen image generation failed or returned no image bytes.");
@@ -236,7 +247,7 @@ export async function POST(request: Request) {
         const backgroundBuffer = Buffer.from(generatedImageBytes, "base64");
 
         // STEP 4: Merging with Shadow
-        sendStep("MERGE", "Compositing original card over expanded background with drop shadow...");
+        sendStep("MERGE", "Compositing original card over background with drop shadow...");
 
         const bgMetadata = await sharp(backgroundBuffer).metadata();
         const bgWidth = bgMetadata.width || 1024;
