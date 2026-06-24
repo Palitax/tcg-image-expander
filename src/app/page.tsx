@@ -113,6 +113,15 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   throw new Error(errorMessage);
 };
 
+const getErrorMessage = (err: unknown): string => {
+  if (!err) return "";
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && "message" in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return String(err);
+};
+
 // SavedArtwork interface is imported from @/utils/db
 
 export default function Home() {
@@ -157,6 +166,9 @@ export default function Home() {
   const [isCaseProcessing, setIsCaseProcessing] = useState<boolean>(false);
   const [caseErrorMessage, setCaseErrorMessage] = useState<string | null>(null);
 
+  // Lightbox larger view state
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; title: string } | null>(null);
+
   // Upload base64 image data URL to Supabase Storage
   const uploadBase64ToSupabase = async (base64Data: string, path: string): Promise<string> => {
     const matches = base64Data.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
@@ -189,6 +201,17 @@ export default function Home() {
 
     return publicUrl;
   };
+
+  // Handle ESC key to close lightbox
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setLightboxImage(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // Load saved session on mount and load artworks
   useEffect(() => {
@@ -312,7 +335,7 @@ export default function Home() {
         setLoginStep("create");
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       setLoginError(message || "Failed to check space availability.");
     } finally {
       setIsLoginLoading(false);
@@ -369,7 +392,7 @@ export default function Home() {
         setLoginError("Incorrect 4-digit passcode.");
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       setLoginError(message || "An error occurred during login.");
     } finally {
       setIsLoginLoading(false);
@@ -406,7 +429,7 @@ export default function Home() {
         setLoginStep("name");
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       setLoginError(message || "Failed to create space.");
     } finally {
       setIsLoginLoading(false);
@@ -469,7 +492,7 @@ export default function Home() {
 
         if (error) throw error;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = getErrorMessage(err);
         alert("Failed to save artwork to database: " + message);
         setIsLoginLoading(false);
         return;
@@ -490,7 +513,7 @@ export default function Home() {
       try {
         await saveArtwork(localArtwork);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = getErrorMessage(err);
         alert("Failed to save artwork locally: " + message);
         return;
       }
@@ -536,7 +559,7 @@ export default function Home() {
         const updated = savedArtworks.filter(art => art.id !== id);
         setSavedArtworks(updated);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = getErrorMessage(err);
         alert("Failed to delete artwork from database: " + message);
       }
     } else {
@@ -545,7 +568,7 @@ export default function Home() {
         const updated = savedArtworks.filter(art => art.id !== id);
         setSavedArtworks(updated);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = getErrorMessage(err);
         alert("Failed to delete artwork locally: " + message);
       }
     }
@@ -590,7 +613,7 @@ export default function Home() {
       );
       setCaseResultUrl(resultImageUrl);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error("Case generation error:", err);
       setCaseErrorMessage(message || "An unexpected error occurred during case rendering.");
     } finally {
@@ -801,7 +824,7 @@ export default function Home() {
       setActiveStepMessage("Completed!");
 
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = getErrorMessage(error);
       console.error("Pipeline error:", error);
       setErrorMessage(message || "An unexpected error occurred during processing.");
       
@@ -861,7 +884,7 @@ export default function Home() {
             </div>
 
             <h2 className="text-2xl font-extrabold text-white mb-2 text-center">
-              Welcome to TCG Art Studio
+              Welcome to New World Legacy – Bilder generieren
             </h2>
             <p className="text-sm text-zinc-400 mb-6 text-center">
               {loginStep === "name" 
@@ -982,7 +1005,7 @@ export default function Home() {
             AI-Powered TCG Showcases
           </div>
           <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-white via-zinc-300 to-purple-400 bg-clip-text text-transparent">
-            TCG Art Studio
+            New World Legacy – Bilder generieren
           </h1>
           <p className="mt-3 text-lg text-zinc-400 max-w-2xl">
             Expand card illustrations into immersive backgrounds. Display cards in stunning layouts optimized for web shops and social media sharing.
@@ -1752,7 +1775,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="mt-16 text-center text-xs text-zinc-650 border-t border-zinc-900 pt-8 pb-4">
-          <p>© {new Date().getFullYear()} TCG Art Studio. Powered by Google Gemini & Imagen 3.</p>
+          <p>© {new Date().getFullYear()} New World Legacy – Bilder generieren. Powered by Google Gemini & Imagen 3.</p>
         </footer>
         {/* Save Modal Popup */}
         {isSaveModalOpen && (
@@ -1801,6 +1824,53 @@ export default function Home() {
                 >
                   Save Artwork
                 </button>
+              </div>
+        )}
+
+        {/* Lightbox Modal */}
+        {lightboxImage && (
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl transition-all duration-300"
+            onClick={() => setLightboxImage(null)}
+          >
+            {/* Close button */}
+            <button
+              type="button"
+              className="absolute top-6 right-6 p-3 rounded-full bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-white transition-all z-50 cursor-pointer shadow-lg"
+              onClick={() => setLightboxImage(null)}
+              title="Schließen (ESC)"
+            >
+              <X className="w-6 h-6" />
+            </button>
+
+            {/* Lightbox content */}
+            <div 
+              className="relative max-w-4xl w-full flex flex-col items-center justify-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* The image */}
+              <div className="relative rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl bg-zinc-950 max-h-[80vh] max-w-full flex items-center justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={lightboxImage.url}
+                  alt={lightboxImage.title}
+                  className="max-h-[75vh] max-w-full object-contain"
+                />
+              </div>
+              
+              {/* Title / Info / Actions */}
+              <div className="mt-4 flex flex-col items-center gap-2 text-center">
+                <h3 className="text-lg font-bold text-white tracking-wide">
+                  {lightboxImage.title}
+                </h3>
+                <a
+                  href={lightboxImage.url}
+                  download={`TCG_${lightboxImage.title.replace(/\s+/g, "_")}.png`}
+                  className="mt-1 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-purple-500/20 hover:shadow-purple-500/40 transition-all"
+                >
+                  <Download className="w-4 h-4" />
+                  Bild herunterladen
+                </a>
               </div>
             </div>
           </div>
