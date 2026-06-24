@@ -27,6 +27,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to read original image dimensions." }, { status: 400 });
     }
 
+    // Try to auto-trim uniform borders (like white/black margins) from the original card image
+    let trimmedCardBuffer: any = originalImageBuffer;
+    let cardWidth = width;
+    let cardHeight = height;
+
+    try {
+      const trimmed = await sharp(originalImageBuffer)
+        .trim()
+        .toBuffer({ resolveWithObject: true });
+      
+      const tWidth = trimmed.info.width || width;
+      const tHeight = trimmed.info.height || height;
+      
+      if (tWidth >= width * 0.4 && tHeight >= height * 0.4) {
+        trimmedCardBuffer = trimmed.data;
+        cardWidth = tWidth;
+        cardHeight = tHeight;
+        console.log(`[Merge API] Trimmed original card borders: ${width}x${height} -> ${cardWidth}x${cardHeight}`);
+      }
+    } catch (e: any) {
+      console.log("[Merge API] Skip original card trimming:", e.message);
+    }
+
     // Get background image metadata
     const bgMetadata = await sharp(backgroundBuffer).metadata();
     const bgWidth = bgMetadata.width || 1024;
@@ -43,7 +66,7 @@ export async function POST(request: Request) {
     maxCardWidth = Math.max(100, maxCardWidth);
     maxCardHeight = Math.max(100, maxCardHeight);
 
-    const cardRatio = width / height;
+    const cardRatio = cardWidth / cardHeight;
     let targetCardHeight = maxCardHeight;
     let targetCardWidth = Math.round(targetCardHeight * cardRatio);
 
@@ -67,7 +90,7 @@ export async function POST(request: Request) {
       shadowHeight = targetCardHeight + shadowPadding * 2;
     }
 
-    const resizedCard = await sharp(originalImageBuffer)
+    const resizedCard = await sharp(trimmedCardBuffer)
       .resize(targetCardWidth, targetCardHeight)
       .png() // Force to PNG format
       .toBuffer();
