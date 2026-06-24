@@ -103,13 +103,20 @@ export async function POST(request: Request) {
                 mimeType: file.type || "image/png"
               }
             },
-            `The dimensions of the uploaded trading card image are ${width}x${height} pixels. Please identify:
-1. "card": Bounding box coordinates (x1, y1, x2, y2) of the entire card itself (excluding outer backgrounds/margins/holder cases).
+            `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
+1. "card": Bounding box coordinates (x1, y1, x2, y2) of the physical trading card itself.
+   Rules for locating the card bounds:
+   - Identify the actual card frame or borders (which contain name text, rarity codes, cost symbols, copyright).
+   - Ignore any external mount boards, white sheets/margins, card sleeves, holder cases, scanner borders, or background scenery.
+   - For full-art, borderless, or extended-art cards: the artwork might overflow/bleed beyond the card borders, or characters (like hands, weapons, or effects) might protrude out. Do NOT extend the card bounding box to include outer background decorations. Focus on the core card layout itself.
+   - Trading cards are strictly vertical rectangles with an aspect ratio of approximately 2.5:3.5 (width-to-height ratio of ~0.71). Ensure the detected bounding box matches this shape, avoiding square or wide/tall distortions.
 2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card.
+   Rules for illustration:
+   - Locate the main artwork area. Differentiate it from bottom gameplay rules text, character banners, and borders.
 3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.`
           ],
           config: {
-            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the bounding box of the entire card, 2) a clean rectangular illustration area inside the card, and 3) whether a 'SAMPLE' text watermark is overlaid on the card. Return ONLY a JSON object containing 'card', 'illustration', and 'hasSampleWatermark' properties matching the requested schema.",
+            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the precise bounding box of the physical trading card (ignoring white mounting borders, holder frames, sleeves, or background scenery), 2) a clean rectangular illustration area inside the card, and 3) whether a 'SAMPLE' watermark exists. Note that standard trading cards have a strict aspect ratio of ~0.71 (width-to-height). Return ONLY a JSON object matching the requested schema.",
             responseMimeType: "application/json",
             responseSchema: {
               type: "object",
@@ -298,6 +305,31 @@ export async function POST(request: Request) {
         }
       } catch (cleanError: any) {
         console.warn("[Crop API] Error during watermark cleaning block:", cleanError.message);
+      }
+    }
+
+    // Enforce standard trading card aspect ratio (~0.715) on detected card coordinates
+    const TARGET_RATIO = 0.715;
+    const cardW = cardCoords.x2 - cardCoords.x1;
+    const cardH = cardCoords.y2 - cardCoords.y1;
+    if (cardW > 0 && cardH > 0) {
+      const currentRatio = cardW / cardH;
+      const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+      const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
+
+      // Adjust dimensions to match TARGET_RATIO of 0.715
+      if (currentRatio > TARGET_RATIO) {
+        // Too wide (contains white space on sides) - shrink width centered
+        const newW = cardH * TARGET_RATIO;
+        cardCoords.x1 = centerX - newW / 2;
+        cardCoords.x2 = centerX + newW / 2;
+        console.log(`[Crop API] Adjusted card width to match 0.715 aspect ratio: ${cardW.toFixed(1)} -> ${newW.toFixed(1)}`);
+      } else if (currentRatio < TARGET_RATIO) {
+        // Too tall/narrow - shrink height centered
+        const newH = cardW / TARGET_RATIO;
+        cardCoords.y1 = centerY - newH / 2;
+        cardCoords.y2 = centerY + newH / 2;
+        console.log(`[Crop API] Adjusted card height to match 0.715 aspect ratio: ${cardH.toFixed(1)} -> ${newH.toFixed(1)}`);
       }
     }
 
