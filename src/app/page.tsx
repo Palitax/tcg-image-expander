@@ -459,8 +459,14 @@ export default function Home() {
     const artId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
 
     let imageUrl = targetUrl;
-    let originalCardUrl = saveTarget === "generate" ? (trimmedCard || undefined) : undefined;
-    let backgroundUrl = saveTarget === "generate" ? (backgroundImageUrl || undefined) : undefined;
+    let originalCardUrl = 
+      saveTarget === "generate" ? (trimmedCard || undefined) : 
+      saveTarget === "case" ? (caseCardImage || undefined) : 
+      undefined;
+    let backgroundUrl = 
+      saveTarget === "generate" ? (backgroundImageUrl || undefined) : 
+      saveTarget === "case" ? (caseBgImage || undefined) : 
+      undefined;
 
     const timestamp = Date.now();
 
@@ -1311,15 +1317,23 @@ export default function Home() {
                 {resultImageUrl ? (
                   <div className="w-full flex flex-col items-center">
                     <div 
-                      className={`relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px]`}
+                      className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
                       style={{ aspectRatio: aspectRatio.replace(":", "/") }}
+                      onClick={() => setLightboxImage({ url: resultImageUrl, title: file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Expanded Card" })}
+                      title="Größere Ansicht (Klicken)"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={resultImageUrl}
                         alt="Final expanded trading card display"
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
                       />
+                      {/* Click to zoom overlay */}
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                        <div className="p-3 rounded-full bg-black/60 border border-zinc-850 text-white backdrop-blur-md scale-90 group-hover:scale-100 transition-all duration-300">
+                          <Maximize2 className="w-5 h-5" />
+                        </div>
+                      </div>
                     </div>
 
                     {/* Fallback information badge */}
@@ -1572,14 +1586,27 @@ export default function Home() {
                   ) : caseResultUrl ? (
                     <div className="w-full flex flex-col items-center">
                       <div 
-                        className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] aspect-[3/4]"
+                        className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] aspect-[3/4] cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
+                        onClick={() => {
+                          const artName = selectedArtworkId 
+                            ? savedArtworks.find(a => a.id === selectedArtworkId)?.name 
+                            : file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Slab Showcase";
+                          setLightboxImage({ url: caseResultUrl, title: `${artName} Slab` });
+                        }}
+                        title="Größere Ansicht (Klicken)"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={caseResultUrl}
                           alt="Final slab showcase"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
                         />
+                        {/* Click to zoom overlay */}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                          <div className="p-3 rounded-full bg-black/60 border border-zinc-855 text-white backdrop-blur-md scale-90 group-hover:scale-100 transition-all duration-300">
+                            <Maximize2 className="w-5 h-5" />
+                          </div>
+                        </div>
                       </div>
                       
                       <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
@@ -1695,18 +1722,26 @@ export default function Home() {
                   >
                     {/* Image container */}
                     <div
-                      className="relative rounded-lg overflow-hidden border border-zinc-850 bg-zinc-950 w-full mb-4 shadow-md aspect-[3/4]"
+                      className="relative rounded-lg overflow-hidden border border-zinc-850 bg-zinc-950 w-full mb-4 shadow-md aspect-[3/4] cursor-pointer group/img transition-all duration-300 hover:border-purple-500/40"
                       style={{ aspectRatio: art.aspectRatio ? art.aspectRatio.replace(":", "/") : "3/4" }}
+                      onClick={() => setLightboxImage({ url: art.imageUrl, title: art.name })}
+                      title="Größere Ansicht (Klicken)"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={art.imageUrl}
                         alt={art.name}
-                        className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-500"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
                       />
+                      {/* Click to zoom overlay */}
+                      <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-all duration-300">
+                        <div className="p-2.5 rounded-full bg-black/60 border border-zinc-850 text-white backdrop-blur-md scale-90 group-hover/img:scale-100 transition-all duration-300">
+                          <Maximize2 className="w-4 h-4" />
+                        </div>
+                      </div>
                       
                       {/* Ratio Badge */}
-                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/60 border border-zinc-850 text-[10px] text-zinc-355 font-bold">
+                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/60 border border-zinc-850 text-[10px] text-zinc-355 font-bold z-10">
                         {art.aspectRatio || "3:4"}
                       </span>
                     </div>
@@ -1825,6 +1860,8 @@ export default function Home() {
                   Save Artwork
                 </button>
               </div>
+            </div>
+          </div>
         )}
 
         {/* Lightbox Modal */}

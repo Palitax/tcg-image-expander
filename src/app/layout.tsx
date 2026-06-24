@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TCG Art Studio | Premium Card Expander & Product Showcase",
+  title: "New World Legacy – Bilder generieren | Premium Card Expander & Product Showcase",
   description: "Transform your trading card game illustrations into seamless, immersive portrait or square art assets. Perfect for web shops and collections. Powered by Gemini 3.5 Flash and Imagen 3.",
 };
 
