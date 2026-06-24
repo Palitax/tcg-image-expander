@@ -96,12 +96,12 @@ export async function POST(request: Request) {
 
     // Create drop shadow for the case (case has rounded corners, radius ~ 4.5% of width)
     const caseCornerRadius = Math.round(targetCaseWidth * 0.045);
-    const shadowPadding = Math.round(35 * scale); // Responsive shadow padding
+    const shadowPadding = Math.round(80 * scale); // Responsive shadow padding (increased to prevent canvas edge cutoff)
     const shadowWidth = targetCaseWidth + shadowPadding * 2;
     const shadowHeight = targetCaseHeight + shadowPadding * 2;
 
     const caseShadowSvg = Buffer.from(
-      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.35"/></svg>`
+      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.22"/></svg>`
     );
 
     const caseShadow = await sharp({
@@ -119,7 +119,7 @@ export async function POST(request: Request) {
         left: shadowPadding
       }
     ])
-    .blur(Math.max(5, Math.round(18 * scale))) // Responsive blur radius
+    .blur(Math.max(3, Math.round(15 * scale))) // Responsive blur radius
     .png()
     .toBuffer();
 
