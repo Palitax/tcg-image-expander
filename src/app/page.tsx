@@ -1960,7 +1960,7 @@ export default function Home() {
                 Rename Artwork
               </h3>
               <p className="text-sm text-zinc-400 mb-4">
-                Enter a new name for "{renamingArtwork.name}".
+                Enter a new name for &quot;{renamingArtwork.name}&quot;.
               </p>
 
               <input

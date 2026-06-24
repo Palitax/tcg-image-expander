@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const { cardImage, backgroundImage, aspectRatio } = await request.json();
+    const { cardImage, backgroundImage } = await request.json();
 
     if (!cardImage) {
       return NextResponse.json(
@@ -16,14 +16,36 @@ export async function POST(request: Request) {
       );
     }
 
-    // Extract raw base64 data
-    const cardBase64 = cardImage.includes(",") ? cardImage.split(",")[1] : cardImage;
-    const cardBuffer = Buffer.from(cardBase64, "base64");
+    let cardBuffer: Buffer;
+    if (cardImage.startsWith("http://") || cardImage.startsWith("https://")) {
+      const res = await fetch(cardImage);
+      if (!res.ok) {
+        return NextResponse.json(
+          { error: `Failed to fetch cardImage from storage: ${res.statusText}` },
+          { status: 500 }
+        );
+      }
+      cardBuffer = Buffer.from(await res.arrayBuffer());
+    } else {
+      const cardBase64 = cardImage.includes(",") ? cardImage.split(",")[1] : cardImage;
+      cardBuffer = Buffer.from(cardBase64, "base64");
+    }
 
     let backgroundBuffer: Buffer;
     if (backgroundImage) {
-      const backgroundBase64 = backgroundImage.includes(",") ? backgroundImage.split(",")[1] : backgroundImage;
-      backgroundBuffer = Buffer.from(backgroundBase64, "base64");
+      if (backgroundImage.startsWith("http://") || backgroundImage.startsWith("https://")) {
+        const res = await fetch(backgroundImage);
+        if (!res.ok) {
+          return NextResponse.json(
+            { error: `Failed to fetch backgroundImage from storage: ${res.statusText}` },
+            { status: 500 }
+          );
+        }
+        backgroundBuffer = Buffer.from(await res.arrayBuffer());
+      } else {
+        const backgroundBase64 = backgroundImage.includes(",") ? backgroundImage.split(",")[1] : backgroundImage;
+        backgroundBuffer = Buffer.from(backgroundBase64, "base64");
+      }
     } else {
       // Generate a blurred background from the card itself (ambient background)
       backgroundBuffer = await sharp(cardBuffer)
@@ -125,10 +147,11 @@ export async function POST(request: Request) {
       resultImageUrl: `data:image/png;base64,${finalBase64}`
     });
 
-  } catch (error: any) {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     console.error("Error in Case compositing API:", error);
     return NextResponse.json(
-      { error: error.message || "Internal server error during case rendering." },
+      { error: message || "Internal server error during case rendering." },
       { status: 500 }
     );
   }
