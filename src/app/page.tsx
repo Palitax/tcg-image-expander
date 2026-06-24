@@ -793,6 +793,36 @@ export default function Home() {
     noClick: true
   });
 
+  // Listen for paste event to allow pasting images directly from clipboard (Ctrl+V / Cmd+V)
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const pastedFile = items[i].getAsFile();
+          if (pastedFile) {
+            e.preventDefault();
+            if (activeTab === "generate") {
+              if (!isProcessing) {
+                onDrop([pastedFile]);
+              }
+            } else if (activeTab === "library") {
+              onLibraryDrop([pastedFile]);
+            }
+          }
+          break;
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [activeTab, isProcessing, onDrop, onLibraryDrop]);
+
   const updateStepStatus = (stepId: string, status: "running" | "success" | "error") => {
     setSteps(prev => 
       prev.map(step => {
