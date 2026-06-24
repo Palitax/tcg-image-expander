@@ -61,6 +61,32 @@ const fetchWithRetry = async (
   }
 };
 
+// Helper to safely parse JSON from response or extract plain text/statusText on failure
+const parseResponseData = async (response: Response, defaultErrorMsg: string): Promise<any> => {
+  if (response.ok) {
+    try {
+      return await response.json();
+    } catch {
+      throw new Error("Invalid response format received from server.");
+    }
+  }
+
+  // Handle error status
+  let errorMessage = defaultErrorMsg;
+  try {
+    const errorData = await response.json();
+    errorMessage = errorData.error || errorMessage;
+  } catch {
+    try {
+      const text = await response.text();
+      errorMessage = text || response.statusText || errorMessage;
+    } catch {
+      errorMessage = response.statusText || errorMessage;
+    }
+  }
+  throw new Error(errorMessage);
+};
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -150,10 +176,6 @@ export default function Home() {
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
 
     try {
-      // 0. Convert original file to Base64 for the final merge step
-      setActiveStepMessage("Converting card image...");
-      const originalBase64 = await fileToDataUrl(file);
-
       // STEP 1 & 2: Bounding Box Detection & Crop
       updateStepStatus("LAYOUT", "running");
       setActiveStepMessage("Locating artwork bounding box...");
@@ -166,12 +188,10 @@ export default function Home() {
         body: cropFormData
       });
 
-      if (!cropResponse.ok) {
-        const errData = await cropResponse.json();
-        throw new Error(errData.error || "Failed to analyze and crop card artwork.");
-      }
-
-      const { croppedImage, trimmedCard: cropTrimmedCard, usedFallback: cropFallback } = await cropResponse.json();
+      const { croppedImage, trimmedCard: cropTrimmedCard, usedFallback: cropFallback } = await parseResponseData(
+        cropResponse,
+        "Failed to analyze and crop card artwork."
+      );
       setUsedCropFallback(cropFallback || false);
       setTrimmedCard(cropTrimmedCard || null);
       updateStepStatus("LAYOUT", "success");
@@ -193,12 +213,10 @@ export default function Home() {
         (msg) => setActiveStepMessage(msg)
       );
 
-      if (!outpaintResponse.ok) {
-        const errData = await outpaintResponse.json();
-        throw new Error(errData.error || "Failed to outpaint and extend background.");
-      }
-
-      const { backgroundImage, usedFallback, fallbackReason } = await outpaintResponse.json();
+      const { backgroundImage, usedFallback, fallbackReason } = await parseResponseData(
+        outpaintResponse,
+        "Failed to outpaint and extend background."
+      );
       setUsedAmbientFallback(usedFallback || false);
       setAmbientFallbackReason(fallbackReason || "");
       updateStepStatus("OUTPAINT", "success");
@@ -211,18 +229,16 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          originalImage: cropTrimmedCard || trimmedCard || originalBase64, 
+          originalImage: cropTrimmedCard || trimmedCard, 
           backgroundImage,
           isTrimmed: !!(cropTrimmedCard || trimmedCard)
         })
       });
 
-      if (!mergeResponse.ok) {
-        const errData = await mergeResponse.json();
-        throw new Error(errData.error || "Failed to merge card and background.");
-      }
-
-      const { resultImageUrl } = await mergeResponse.json();
+      const { resultImageUrl } = await parseResponseData(
+        mergeResponse,
+        "Failed to merge card and background."
+      );
       updateStepStatus("MERGE", "success");
       setResultImageUrl(resultImageUrl);
       setActiveStepMessage("Completed!");

@@ -244,14 +244,14 @@ export async function POST(request: Request) {
       cropHeight = iy2 - iy1;
     }
 
-    // Crop the card itself, downscaling it to a reasonable maximum height (1024px) for performance
-    let cardResizeHeight = Math.min(1024, cardHeight);
+    // Crop the card itself, downscaling it to a reasonable maximum height (800px) for performance
+    let cardResizeHeight = Math.min(800, cardHeight);
     let cardResizeWidth = Math.round((cardWidth / cardHeight) * cardResizeHeight);
 
     const cardBuffer = await sharp(originalImageBuffer)
       .extract({ left: cx1, top: cy1, width: cardWidth, height: cardHeight })
       .resize(cardResizeWidth, cardResizeHeight)
-      .png({ compressionLevel: 8 })
+      .png({ compressionLevel: 7 })
       .toBuffer();
 
     // Round the corners of the card using SVG mask
@@ -265,7 +265,7 @@ export async function POST(request: Request) {
         input: roundedCornersMask,
         blend: 'dest-in'
       }])
-      .png({ compressionLevel: 9 })
+      .webp({ quality: 85 })
       .toBuffer();
 
     const trimmedCardBase64 = roundedCardBuffer.toString("base64");
@@ -281,7 +281,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       croppedImage: `data:image/png;base64,${croppedBase64}`,
-      trimmedCard: `data:image/png;base64,${trimmedCardBase64}`,
+      trimmedCard: `data:image/webp;base64,${trimmedCardBase64}`,
       coords: { ix1, iy1, ix2, iy2 },
       usedFallback
     });

@@ -194,14 +194,16 @@ export async function POST(request: Request) {
         .resize(bgWidth, bgHeight, { fit: "cover" })
         .blur(45) // Beautiful soft Gaussian blur
         .modulate({ brightness: 0.55, saturation: 0.85 }) // Darken and desaturate to let foreground card stand out
-        .png()
+        .webp({ quality: 80 })
         .toBuffer();
 
       backgroundImageBase64 = blurredBgBuffer.toString("base64");
     }
 
+    const mimeType = usedFallback ? "image/webp" : "image/jpeg";
+
     return NextResponse.json({
-      backgroundImage: `data:image/png;base64,${backgroundImageBase64}`,
+      backgroundImage: `data:${mimeType};base64,${backgroundImageBase64}`,
       usedFallback,
       fallbackReason
     });
