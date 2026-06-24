@@ -26,6 +26,20 @@ import {
   migrateFromLocalStorage,
   type SavedArtwork
 } from "@/utils/db";
+import { supabase } from "@/utils/supabaseClient";
+
+const isLocalMode = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+interface DbArtwork {
+  id: string;
+  space_id: string;
+  name: string;
+  image_url: string;
+  original_card_url: string | null;
+  background_url: string | null;
+  aspect_ratio: string;
+  timestamp: string | number;
+}
 
 interface ProgressStep {
   id: string;
@@ -61,7 +75,7 @@ const fetchWithRetry = async (
 ): Promise<Response> => {
   try {
     return await fetch(url, options);
-  } catch (e: any) {
+  } catch (e) {
     if (retries > 0) {
       const msg = `Retrying connection in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
       if (onRetry) onRetry(msg);
@@ -73,6 +87,7 @@ const fetchWithRetry = async (
 };
 
 // Helper to safely parse JSON from response or extract plain text/statusText on failure
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parseResponseData = async (response: Response, defaultErrorMsg: string): Promise<any> => {
   if (response.ok) {
     try {
@@ -124,6 +139,16 @@ export default function Home() {
   const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Space authentication states
+  const [currentSpace, setCurrentSpace] = useState<{ id: string; name: string } | null>(null);
+  const [loginSpaceName, setLoginSpaceName] = useState<string>("");
+  const [loginPasscode, setLoginPasscode] = useState<string>("");
+  const [isKeepLoggedIn, setIsKeepLoggedIn] = useState<boolean>(true);
+  const [loginStep, setLoginStep] = useState<"name" | "code" | "create">("name");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoginLoading, setIsLoginLoading] = useState<boolean>(false);
+  const [isSpaceSyncing, setIsSpaceSyncing] = useState<boolean>(false);
+
   // Case Maker states
   const [selectedArtworkId, setSelectedArtworkId] = useState<string | null>(null);
   const [caseCardImage, setCaseCardImage] = useState<string | null>(null);
@@ -132,30 +157,267 @@ export default function Home() {
   const [isCaseProcessing, setIsCaseProcessing] = useState<boolean>(false);
   const [caseErrorMessage, setCaseErrorMessage] = useState<string | null>(null);
 
-  // Load saved artworks on mount
+  // Upload base64 image data URL to Supabase Storage
+  const uploadBase64ToSupabase = async (base64Data: string, path: string): Promise<string> => {
+    const matches = base64Data.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
+    if (!matches || matches.length !== 3) {
+      throw new Error("Invalid base64 string format");
+    }
+    const mimeType = matches[1];
+    const rawBase64 = matches[2];
+
+    const binaryStr = window.atob(rawBase64);
+    const len = binaryStr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: mimeType });
+
+    const { error } = await supabase.storage
+      .from("tcg-artworks")
+      .upload(path, blob, {
+        contentType: mimeType,
+        upsert: true
+      });
+
+    if (error) throw error;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from("tcg-artworks")
+      .getPublicUrl(path);
+
+    return publicUrl;
+  };
+
+  // Load saved session on mount and load artworks
   useEffect(() => {
-    const loadArtworks = async () => {
-      const legacyData = localStorage.getItem("tcg_art_library");
-      if (legacyData) {
-        try {
-          const migrated = await migrateFromLocalStorage();
-          setSavedArtworks(migrated);
-          return;
-        } catch (e) {
-          console.error("Failed to migrate legacy localStorage artworks:", e);
+    const loadSessionAndArtworks = async () => {
+      if (isLocalMode) {
+        // Local mode: load from IndexedDB
+        const legacyData = localStorage.getItem("tcg_art_library");
+        if (legacyData) {
+          try {
+            const migrated = await migrateFromLocalStorage();
+            setSavedArtworks(migrated);
+            return;
+          } catch (e) {
+            console.error("Failed to migrate legacy localStorage artworks:", e);
+          }
         }
+        try {
+          const artworks = await getSavedArtworks();
+          setSavedArtworks(artworks);
+        } catch (e) {
+          console.error("Failed to load artworks from IndexedDB:", e);
+        }
+        return;
       }
 
-      try {
-        const artworks = await getSavedArtworks();
-        setSavedArtworks(artworks);
-      } catch (e) {
-        console.error("Failed to load artworks from IndexedDB:", e);
+      // Supabase mode: check session
+      const savedSpace = localStorage.getItem("tcg_current_space");
+      if (savedSpace) {
+        try {
+          const space = JSON.parse(savedSpace);
+          setCurrentSpace(space);
+          
+          setIsSpaceSyncing(true);
+
+          // If legacy data exists, migrate it to the current space in Supabase!
+          const legacyData = localStorage.getItem("tcg_art_library");
+          if (legacyData) {
+            try {
+              const artworks = JSON.parse(legacyData);
+              for (const art of artworks) {
+                let imageUrl = art.imageUrl;
+                let originalCardUrl = art.originalCardUrl;
+                let backgroundUrl = art.backgroundUrl;
+                
+                if (imageUrl.startsWith("data:image/")) {
+                  imageUrl = await uploadBase64ToSupabase(imageUrl, `spaces/${space.id}/${art.id}/final.png`);
+                }
+                if (originalCardUrl && originalCardUrl.startsWith("data:image/")) {
+                  originalCardUrl = await uploadBase64ToSupabase(originalCardUrl, `spaces/${space.id}/${art.id}/card.png`);
+                }
+                if (backgroundUrl && backgroundUrl.startsWith("data:image/")) {
+                  backgroundUrl = await uploadBase64ToSupabase(backgroundUrl, `spaces/${space.id}/${art.id}/bg.png`);
+                }
+                
+                await supabase.from("artworks").insert({
+                  id: art.id,
+                  space_id: space.id,
+                  name: art.name,
+                  image_url: imageUrl,
+                  original_card_url: originalCardUrl || null,
+                  background_url: backgroundUrl || null,
+                  aspect_ratio: art.aspectRatio,
+                  timestamp: art.timestamp
+                });
+              }
+              localStorage.removeItem("tcg_art_library");
+              console.log(`Successfully migrated ${artworks.length} items from localStorage to Supabase.`);
+            } catch (migErr) {
+              console.error("Failed to migrate legacy localStorage to Supabase:", migErr);
+            }
+          }
+          
+          // Fetch artworks
+          const { data, error } = await supabase
+            .from("artworks")
+            .select("*")
+            .eq("space_id", space.id)
+            .order("timestamp", { ascending: false });
+
+          if (error) throw error;
+
+          const formatted: SavedArtwork[] = ((data as DbArtwork[]) || []).map((row) => ({
+            id: row.id,
+            name: row.name,
+            imageUrl: row.image_url,
+            originalCardUrl: row.original_card_url || undefined,
+            backgroundUrl: row.background_url || undefined,
+            aspectRatio: row.aspect_ratio,
+            timestamp: Number(row.timestamp)
+          }));
+          setSavedArtworks(formatted);
+        } catch (e) {
+          console.error("Failed to restore session or fetch artworks:", e);
+          localStorage.removeItem("tcg_current_space");
+        } finally {
+          setIsSpaceSyncing(false);
+        }
       }
     };
 
-    loadArtworks();
+    loadSessionAndArtworks();
   }, []);
+
+  const checkSpaceExists = async () => {
+    if (!loginSpaceName.trim()) return;
+    setLoginError(null);
+    setIsLoginLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("spaces")
+        .select("id")
+        .ilike("name", loginSpaceName.trim())
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (data) {
+        setLoginStep("code");
+      } else {
+        setLoginStep("create");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoginError(message || "Failed to check space availability.");
+    } finally {
+      setIsLoginLoading(false);
+    }
+  };
+
+  const handleSpaceLogin = async () => {
+    if (!loginSpaceName.trim() || loginPasscode.length !== 4) return;
+    setLoginError(null);
+    setIsLoginLoading(true);
+
+    try {
+      const { data, error } = await supabase.rpc("verify_space", {
+        space_name: loginSpaceName.trim(),
+        space_passcode: loginPasscode
+      });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const loggedInSpace = { id: data[0].id, name: data[0].name };
+        setCurrentSpace(loggedInSpace);
+        
+        if (isKeepLoggedIn) {
+          localStorage.setItem("tcg_current_space", JSON.stringify(loggedInSpace));
+        }
+
+        setIsSpaceSyncing(true);
+
+        // Fetch artworks
+        const { data: arts, error: artsError } = await supabase
+          .from("artworks")
+          .select("*")
+          .eq("space_id", loggedInSpace.id)
+          .order("timestamp", { ascending: false });
+
+        if (artsError) throw artsError;
+
+        const formatted: SavedArtwork[] = ((arts as DbArtwork[]) || []).map((row) => ({
+          id: row.id,
+          name: row.name,
+          imageUrl: row.image_url,
+          originalCardUrl: row.original_card_url || undefined,
+          backgroundUrl: row.background_url || undefined,
+          aspectRatio: row.aspect_ratio,
+          timestamp: Number(row.timestamp)
+        }));
+        setSavedArtworks(formatted);
+        
+        setLoginSpaceName("");
+        setLoginPasscode("");
+        setLoginStep("name");
+      } else {
+        setLoginError("Incorrect 4-digit passcode.");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoginError(message || "An error occurred during login.");
+    } finally {
+      setIsLoginLoading(false);
+      setIsSpaceSyncing(false);
+    }
+  };
+
+  const handleCreateSpace = async () => {
+    if (!loginSpaceName.trim() || loginPasscode.length !== 4) return;
+    setLoginError(null);
+    setIsLoginLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("spaces")
+        .insert({
+          name: loginSpaceName.trim(),
+          passcode: loginPasscode
+        })
+        .select("id, name")
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setCurrentSpace(data);
+        if (isKeepLoggedIn) {
+          localStorage.setItem("tcg_current_space", JSON.stringify(data));
+        }
+        setSavedArtworks([]);
+        
+        setLoginSpaceName("");
+        setLoginPasscode("");
+        setLoginStep("name");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoginError(message || "Failed to create space.");
+    } finally {
+      setIsLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentSpace(null);
+    setSavedArtworks([]);
+    localStorage.removeItem("tcg_current_space");
+  };
 
   const closeSaveModal = () => {
     setIsSaveModalOpen(false);
@@ -171,35 +433,121 @@ export default function Home() {
 
     if (!targetUrl || !newArtworkName.trim()) return;
 
-    const newArtwork: SavedArtwork = {
-      id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
+    const artId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
+
+    let imageUrl = targetUrl;
+    let originalCardUrl = saveTarget === "generate" ? (trimmedCard || undefined) : undefined;
+    let backgroundUrl = saveTarget === "generate" ? (backgroundImageUrl || undefined) : undefined;
+
+    const timestamp = Date.now();
+
+    if (!isLocalMode && currentSpace) {
+      setIsLoginLoading(true);
+      try {
+        if (imageUrl.startsWith("data:image/")) {
+          imageUrl = await uploadBase64ToSupabase(imageUrl, `spaces/${currentSpace.id}/${artId}/final.png`);
+        }
+        if (originalCardUrl && originalCardUrl.startsWith("data:image/")) {
+          originalCardUrl = await uploadBase64ToSupabase(originalCardUrl, `spaces/${currentSpace.id}/${artId}/card.png`);
+        }
+        if (backgroundUrl && backgroundUrl.startsWith("data:image/")) {
+          backgroundUrl = await uploadBase64ToSupabase(backgroundUrl, `spaces/${currentSpace.id}/${artId}/bg.png`);
+        }
+
+        const { error } = await supabase
+          .from("artworks")
+          .insert({
+            id: artId,
+            space_id: currentSpace.id,
+            name: newArtworkName.trim(),
+            image_url: imageUrl,
+            original_card_url: originalCardUrl || null,
+            background_url: backgroundUrl || null,
+            aspect_ratio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
+            timestamp: timestamp
+          });
+
+        if (error) throw error;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        alert("Failed to save artwork to database: " + message);
+        setIsLoginLoading(false);
+        return;
+      } finally {
+        setIsLoginLoading(false);
+      }
+    } else {
+      const localArtwork: SavedArtwork = {
+        id: artId,
+        name: newArtworkName.trim(),
+        imageUrl: imageUrl,
+        originalCardUrl: originalCardUrl,
+        backgroundUrl: backgroundUrl,
+        aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
+        timestamp: timestamp
+      };
+
+      try {
+        await saveArtwork(localArtwork);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        alert("Failed to save artwork locally: " + message);
+        return;
+      }
+    }
+
+    const newArtworkRecord: SavedArtwork = {
+      id: artId,
       name: newArtworkName.trim(),
-      imageUrl: targetUrl,
-      originalCardUrl: saveTarget === "generate" ? (trimmedCard || undefined) : undefined,
-      backgroundUrl: saveTarget === "generate" ? (backgroundImageUrl || undefined) : undefined,
+      imageUrl: imageUrl,
+      originalCardUrl: originalCardUrl,
+      backgroundUrl: backgroundUrl,
       aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
-      timestamp: Date.now()
+      timestamp: timestamp
     };
 
-    try {
-      await saveArtwork(newArtwork);
-      const updated = [newArtwork, ...savedArtworks];
-      setSavedArtworks(updated);
-      closeSaveModal();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      alert("Failed to save artwork: " + message);
-    }
+    const updated = [newArtworkRecord, ...savedArtworks];
+    setSavedArtworks(updated);
+    closeSaveModal();
   };
 
   const handleDeleteArtwork = async (id: string) => {
-    try {
-      await deleteArtwork(id);
-      const updated = savedArtworks.filter(art => art.id !== id);
-      setSavedArtworks(updated);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      alert("Failed to delete artwork: " + message);
+    if (!isLocalMode && currentSpace) {
+      try {
+        const { error: dbError } = await supabase
+          .from("artworks")
+          .delete()
+          .eq("id", id);
+
+        if (dbError) throw dbError;
+
+        try {
+          await supabase.storage
+            .from("tcg-artworks")
+            .remove([
+              `spaces/${currentSpace.id}/${id}/final.png`,
+              `spaces/${currentSpace.id}/${id}/card.png`,
+              `spaces/${currentSpace.id}/${id}/bg.png`
+            ]);
+        } catch (storageErr) {
+          console.warn("Storage cleanup failed:", storageErr);
+        }
+
+        const updated = savedArtworks.filter(art => art.id !== id);
+        setSavedArtworks(updated);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        alert("Failed to delete artwork from database: " + message);
+      }
+    } else {
+      try {
+        await deleteArtwork(id);
+        const updated = savedArtworks.filter(art => art.id !== id);
+        setSavedArtworks(updated);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        alert("Failed to delete artwork locally: " + message);
+      }
     }
   };
 
@@ -241,9 +589,10 @@ export default function Home() {
         "Failed to generate case showcase."
       );
       setCaseResultUrl(resultImageUrl);
-    } catch (err: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error("Case generation error:", err);
-      setCaseErrorMessage(err.message || "An unexpected error occurred during case rendering.");
+      setCaseErrorMessage(message || "An unexpected error occurred during case rendering.");
     } finally {
       setIsCaseProcessing(false);
     }
@@ -451,9 +800,10 @@ export default function Home() {
       setResultImageUrl(resultImageUrl);
       setActiveStepMessage("Completed!");
 
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error("Pipeline error:", error);
-      setErrorMessage(error.message || "An unexpected error occurred during processing.");
+      setErrorMessage(message || "An unexpected error occurred during processing.");
       
       // Mark current running step as error
       setSteps(prev => {
@@ -501,6 +851,127 @@ export default function Home() {
       <div className="absolute top-0 right-1/4 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/4 w-[400px] h-[400px] bg-indigo-600/10 rounded-full blur-[100px] pointer-events-none" />
 
+      {/* Space Login Overlay */}
+      {!isLocalMode && !currentSpace && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/80 backdrop-blur-md">
+          <div className="relative w-full max-w-md bg-zinc-905 border border-zinc-800 rounded-3xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col items-center">
+            {/* Logo/Icon */}
+            <div className="w-16 h-16 rounded-2xl border border-purple-500/20 bg-purple-500/5 flex items-center justify-center mb-6">
+              <Layers className="w-8 h-8 text-purple-400" />
+            </div>
+
+            <h2 className="text-2xl font-extrabold text-white mb-2 text-center">
+              Welcome to TCG Art Studio
+            </h2>
+            <p className="text-sm text-zinc-400 mb-6 text-center">
+              {loginStep === "name" 
+                ? "Enter a Space name to access your library or create a new sharing Space."
+                : loginStep === "code"
+                ? `Enter the 4-digit passcode for Space "${loginSpaceName}".`
+                : `Space "${loginSpaceName}" does not exist. Create it by setting a 4-digit passcode.`}
+            </p>
+
+            {loginError && (
+              <div className="w-full mb-4 px-4 py-2.5 rounded-xl border border-red-500/20 bg-red-500/5 text-red-400 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            {loginStep === "name" && (
+              <form 
+                onSubmit={(e) => { e.preventDefault(); checkSpaceExists(); }}
+                className="w-full flex flex-col gap-4"
+              >
+                <input
+                  type="text"
+                  placeholder="Space Name (e.g. pikachu-fans)"
+                  value={loginSpaceName}
+                  onChange={(e) => setLoginSpaceName(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ""))}
+                  className="w-full px-4 py-3 rounded-xl bg-zinc-955 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm"
+                  autoFocus
+                  required
+                />
+                
+                <label className="flex items-center gap-2 text-xs text-zinc-400 select-none cursor-pointer mt-1">
+                  <input
+                    type="checkbox"
+                    checked={isKeepLoggedIn}
+                    onChange={(e) => setIsKeepLoggedIn(e.target.checked)}
+                    className="rounded border-zinc-800 bg-zinc-955 text-purple-600 focus:ring-0 focus:ring-offset-0"
+                  />
+                  Remember me on this device
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={isLoginLoading || !loginSpaceName.trim()}
+                  className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white font-semibold text-sm transition-all flex items-center justify-center gap-2"
+                >
+                  {isLoginLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Continue"}
+                </button>
+              </form>
+            )}
+
+            {(loginStep === "code" || loginStep === "create") && (
+              <div className="w-full flex flex-col items-center">
+                <div className="flex gap-2 mb-6">
+                  <input
+                    type="password"
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="••••"
+                    value={loginPasscode}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9]/g, "");
+                      setLoginPasscode(val);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && loginPasscode.length === 4) {
+                        if (loginStep === "code") handleSpaceLogin();
+                        else handleCreateSpace();
+                      }
+                    }}
+                    className="tracking-[0.5em] text-center text-2xl w-36 px-4 py-3 rounded-xl bg-zinc-955 border border-zinc-800 text-white placeholder-zinc-700 focus:border-purple-500 focus:outline-none transition-colors"
+                    autoFocus
+                    required
+                  />
+                </div>
+
+                <div className="flex gap-3 w-full">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginStep("name");
+                      setLoginPasscode("");
+                      setLoginError(null);
+                    }}
+                    className="flex-1 py-3 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-955 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={loginStep === "code" ? handleSpaceLogin : handleCreateSpace}
+                    disabled={isLoginLoading || loginPasscode.length !== 4}
+                    className="flex-1 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white font-semibold text-sm transition-all flex items-center justify-center gap-2"
+                  >
+                    {isLoginLoading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : loginStep === "code" ? (
+                      "Unlock Space"
+                    ) : (
+                      "Create Space"
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Main container */}
       <main className="flex-1 flex flex-col max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-10 relative z-10">
         
@@ -519,7 +990,7 @@ export default function Home() {
         </header>
 
         {/* Tab selection bar */}
-        <div className="flex justify-center mb-8 border-b border-zinc-800 pb-1">
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-8 border-b border-zinc-800 pb-4">
           <div className="flex gap-4">
             <button
               type="button"
@@ -558,6 +1029,23 @@ export default function Home() {
               My Library ({savedArtworks.length})
             </button>
           </div>
+
+          {/* Space indicator / Logout */}
+          {!isLocalMode && currentSpace && (
+            <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/20 text-xs font-semibold text-zinc-400">
+              <Layers className="w-3.5 h-3.5 text-purple-400" />
+              <span>Space: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
+              {isSpaceSyncing && <RefreshCw className="w-3 h-3 text-purple-400 animate-spin" />}
+              <span className="w-px h-3.5 bg-zinc-800 mx-1" />
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                Logout
+              </button>
+            </div>
+          )}
         </div>
 
         {activeTab === "generate" ? (
@@ -732,7 +1220,6 @@ export default function Home() {
 
                 <div className="flex flex-col gap-4">
                   {steps.map((step, idx) => {
-                    const isIdle = step.status === "idle";
                     const isRunning = step.status === "running";
                     const isSuccess = step.status === "success";
                     const isError = step.status === "error";
