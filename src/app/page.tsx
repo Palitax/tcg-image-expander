@@ -13,7 +13,11 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
-  Info
+  Info,
+  Bookmark,
+  Search,
+  Trash2,
+  X
 } from "lucide-react";
 
 interface ProgressStep {
@@ -87,6 +91,14 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   throw new Error(errorMessage);
 };
 
+interface SavedArtwork {
+  id: string;
+  name: string;
+  imageUrl: string;
+  aspectRatio: string;
+  timestamp: number;
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -100,6 +112,57 @@ export default function Home() {
   const [usedCropFallback, setUsedCropFallback] = useState<boolean>(false);
   const [trimmedCard, setTrimmedCard] = useState<string | null>(null);
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("backdrop");
+
+  const [activeTab, setActiveTab] = useState<"generate" | "library">("generate");
+  const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
+  const [newArtworkName, setNewArtworkName] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Load saved artworks on mount
+  useEffect(() => {
+    const stored = localStorage.getItem("tcg_art_library");
+    if (stored) {
+      try {
+        setSavedArtworks(JSON.parse(stored));
+      } catch (e) {
+        console.error("Failed to parse saved artworks from localStorage", e);
+      }
+    }
+  }, []);
+
+  const handleSaveArtwork = () => {
+    if (!resultImageUrl || !newArtworkName.trim()) return;
+
+    const newArtwork: SavedArtwork = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
+      name: newArtworkName.trim(),
+      imageUrl: resultImageUrl,
+      aspectRatio,
+      timestamp: Date.now()
+    };
+
+    const updated = [newArtwork, ...savedArtworks];
+
+    try {
+      localStorage.setItem("tcg_art_library", JSON.stringify(updated));
+      setSavedArtworks(updated);
+      setIsSaveModalOpen(false);
+      setNewArtworkName("");
+    } catch (err: any) {
+      if (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+        alert("Your library is full! Please delete some old artworks to free up space.");
+      } else {
+        alert("Failed to save artwork: " + err.message);
+      }
+    }
+  };
+
+  const handleDeleteArtwork = (id: string) => {
+    const updated = savedArtworks.filter(art => art.id !== id);
+    localStorage.setItem("tcg_art_library", JSON.stringify(updated));
+    setSavedArtworks(updated);
+  };
   
   // Timer & active messages
   const [elapsedTime, setElapsedTime] = useState<number>(0);
@@ -275,6 +338,10 @@ export default function Home() {
     setActiveStepMessage("");
   };
 
+  const filteredArtworks = savedArtworks.filter(art =>
+    art.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div className="flex-1 w-full min-h-screen flex flex-col relative overflow-hidden bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-950/20 via-zinc-950 to-black">
       {/* Visual background accents */}
@@ -298,8 +365,38 @@ export default function Home() {
           </p>
         </header>
 
-        {/* Content grid */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Tab selection bar */}
+        <div className="flex justify-center mb-8 border-b border-zinc-800 pb-1">
+          <div className="flex gap-4">
+            <button
+              type="button"
+              onClick={() => setActiveTab("generate")}
+              className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
+                activeTab === "generate"
+                  ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
+                  : "border border-transparent text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Sparkles className="w-4 h-4" />
+              Studio
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("library")}
+              className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
+                activeTab === "library"
+                  ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
+                  : "border border-transparent text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Bookmark className="w-4 h-4" />
+              My Library ({savedArtworks.length})
+            </button>
+          </div>
+        </div>
+
+        {activeTab === "generate" ? (
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
           {/* Left panel - Controls & Source */}
           <section className="lg:col-span-7 flex flex-col gap-6">
@@ -606,14 +703,27 @@ export default function Home() {
                       </div>
                     )}
                     
-                    <a
-                      href={resultImageUrl}
-                      download={`TCG_${file?.name || "expanded"}`}
-                      className="mt-6 px-6 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
-                    >
-                      <Download className="w-4 h-4" />
-                      Download Expanded Image
-                    </a>
+                    <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
+                      <a
+                        href={resultImageUrl}
+                        download={`TCG_${file?.name || "expanded"}`}
+                        className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewArtworkName(file?.name ? file.name.replace(/\.[^/.]+$/, "") : "");
+                          setIsSaveModalOpen(true);
+                        }}
+                        className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
+                      >
+                        <Bookmark className="w-4 h-4" />
+                        Save to Library
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center text-zinc-550 p-8 flex flex-col items-center">
@@ -632,11 +742,180 @@ export default function Home() {
           </section>
 
         </div>
+        ) : (
+          /* Library Tab */
+          <div className="flex-1 flex flex-col gap-6">
+            {/* Search Bar / Stats */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl">
+              <div className="relative w-full sm:max-w-md">
+                <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                  <Search className="h-4 w-4 text-zinc-500" />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search saved cards by name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-8 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-550 hover:text-zinc-350"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="text-sm text-zinc-400 font-medium">
+                Showing {filteredArtworks.length} of {savedArtworks.length} saved artworks
+              </div>
+            </div>
+
+            {/* Artworks Grid */}
+            {filteredArtworks.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                {filteredArtworks.map((art) => (
+                  <div
+                    key={art.id}
+                    className="group relative rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4 transition-all duration-300 hover:border-purple-500/50 hover:bg-zinc-900/40 hover:shadow-[0_0_30px_rgba(168,85,247,0.1)] flex flex-col"
+                  >
+                    {/* Image container */}
+                    <div
+                      className="relative rounded-lg overflow-hidden border border-zinc-850 bg-zinc-950 w-full mb-4 shadow-md aspect-[3/4]"
+                      style={{ aspectRatio: art.aspectRatio ? art.aspectRatio.replace(":", "/") : "3/4" }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={art.imageUrl}
+                        alt={art.name}
+                        className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-500"
+                      />
+                      
+                      {/* Ratio Badge */}
+                      <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/60 border border-zinc-850 text-[10px] text-zinc-355 font-bold">
+                        {art.aspectRatio || "3:4"}
+                      </span>
+                    </div>
+
+                    <h3 className="font-bold text-white text-base truncate mb-1" title={art.name}>
+                      {art.name}
+                    </h3>
+                    <p className="text-[10px] text-zinc-550 mb-4">
+                      Saved {new Date(art.timestamp).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })}
+                    </p>
+
+                    <div className="flex gap-2 mt-auto pt-2 border-t border-zinc-850/50">
+                      <a
+                        href={art.imageUrl}
+                        download={`TCG_${art.name}`}
+                        className="flex-1 py-2 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Download
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteArtwork(art.id)}
+                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
+                        title="Delete from Library"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* Empty state */
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/10 p-12 text-center flex flex-col items-center justify-center min-h-[400px]">
+                <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4 text-zinc-500">
+                  <Bookmark className="w-8 h-8 text-zinc-650" />
+                </div>
+                <h3 className="text-lg font-semibold text-white">
+                  {searchQuery ? "No matching artworks found" : "Your library is empty"}
+                </h3>
+                <p className="text-sm text-zinc-500 mt-2 max-w-sm">
+                  {searchQuery
+                    ? "Try checking for spelling errors or search for a different card name."
+                    : "Go to the Studio tab, expand your favorite trading cards, and save them to build your personal library."}
+                </p>
+                {!searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("generate")}
+                    className="mt-6 px-5 py-2.5 rounded-xl bg-purple-600/15 border border-purple-500/30 hover:bg-purple-600/25 text-purple-400 font-semibold text-sm transition-all"
+                  >
+                    Open Generate Studio
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
         <footer className="mt-16 text-center text-xs text-zinc-650 border-t border-zinc-900 pt-8 pb-4">
           <p>© {new Date().getFullYear()} TCG Art Studio. Powered by Google Gemini & Imagen 3.</p>
         </footer>
+
+        {/* Save Modal Popup */}
+        {isSaveModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl">
+              <button
+                onClick={() => setIsSaveModalOpen(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                <Bookmark className="w-5 h-5 text-purple-400" />
+                Save to Library
+              </h3>
+              <p className="text-sm text-zinc-400 mb-4">
+                Enter a name for this expanded trading card artwork to save it to your library.
+              </p>
+
+              <input
+                type="text"
+                placeholder="e.g. Charizard Alt Art"
+                value={newArtworkName}
+                onChange={(e) => setNewArtworkName(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm mb-6"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newArtworkName.trim()) handleSaveArtwork();
+                }}
+              />
+
+              <div className="flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsSaveModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveArtwork}
+                  disabled={!newArtworkName.trim()}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white text-sm font-semibold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)]"
+                >
+                  Save Artwork
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </main>
     </div>
