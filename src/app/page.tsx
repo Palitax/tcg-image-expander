@@ -118,8 +118,10 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"generate" | "case" | "library">("generate");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
-  const [saveTarget, setSaveTarget] = useState<"generate" | "case">("generate");
+  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload">("generate");
   const [newArtworkName, setNewArtworkName] = useState<string>("");
+  const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
+  const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Case Maker states
@@ -155,8 +157,18 @@ export default function Home() {
     loadArtworks();
   }, []);
 
+  const closeSaveModal = () => {
+    setIsSaveModalOpen(false);
+    setNewArtworkName("");
+    setLibraryUploadDataUrl(null);
+  };
+
   const handleSaveArtwork = async () => {
-    const targetUrl = saveTarget === "case" ? caseResultUrl : resultImageUrl;
+    const targetUrl = 
+      saveTarget === "case" ? caseResultUrl : 
+      saveTarget === "upload" ? libraryUploadDataUrl : 
+      resultImageUrl;
+
     if (!targetUrl || !newArtworkName.trim()) return;
 
     const newArtwork: SavedArtwork = {
@@ -165,7 +177,7 @@ export default function Home() {
       imageUrl: targetUrl,
       originalCardUrl: saveTarget === "generate" ? (trimmedCard || undefined) : undefined,
       backgroundUrl: saveTarget === "generate" ? (backgroundImageUrl || undefined) : undefined,
-      aspectRatio,
+      aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
       timestamp: Date.now()
     };
 
@@ -173,8 +185,7 @@ export default function Home() {
       await saveArtwork(newArtwork);
       const updated = [newArtwork, ...savedArtworks];
       setSavedArtworks(updated);
-      setIsSaveModalOpen(false);
-      setNewArtworkName("");
+      closeSaveModal();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       alert("Failed to save artwork: " + message);
@@ -284,6 +295,65 @@ export default function Home() {
     },
     maxFiles: 1,
     disabled: isProcessing
+  });
+
+  const onLibraryDrop = useCallback(async (acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      const selectedFile = acceptedFiles[0];
+      try {
+        const dataUrl = await fileToDataUrl(selectedFile);
+        
+        let detectedRatio = "3:4";
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise((resolve) => {
+          img.onload = () => {
+            const ratio = img.width / img.height;
+            let ratioStr = `${img.width}:${img.height}`;
+            const rounded = Math.round(ratio * 100) / 100;
+            if (Math.abs(rounded - 0.75) < 0.05) ratioStr = "3:4";
+            else if (Math.abs(rounded - 1.0) < 0.05) ratioStr = "1:1";
+            else if (Math.abs(rounded - 0.56) < 0.05) ratioStr = "9:16";
+            else if (Math.abs(rounded - 1.78) < 0.05) ratioStr = "16:9";
+            else {
+              const gcd = (a: number, b: number): number => b ? gcd(b, a % b) : a;
+              const divisor = gcd(img.width, img.height);
+              ratioStr = `${img.width / divisor}:${img.height / divisor}`;
+              if (ratioStr.length > 7) {
+                ratioStr = rounded.toString();
+              }
+            }
+            detectedRatio = ratioStr;
+            resolve(true);
+          };
+          img.onerror = () => {
+            resolve(false);
+          };
+        });
+
+        setLibraryUploadDataUrl(dataUrl);
+        setLibraryUploadAspectRatio(detectedRatio);
+        setSaveTarget("upload");
+        setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+        setIsSaveModalOpen(true);
+      } catch (err) {
+        console.error("Failed to read dropped file:", err);
+        alert("Failed to read image file.");
+      }
+    }
+  }, []);
+
+  const {
+    getRootProps: getLibraryRootProps,
+    getInputProps: getLibraryInputProps,
+    isDragActive: isLibraryDragActive
+  } = useDropzone({
+    onDrop: onLibraryDrop,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 1,
+    noClick: true
   });
 
   const updateStepStatus = (stepId: string, status: "running" | "success" | "error") => {
@@ -1046,7 +1116,23 @@ export default function Home() {
           </div>
         ) : (
           /* Library Tab */
-          <div className="flex-1 flex flex-col gap-6">
+          <div 
+            {...getLibraryRootProps()}
+            className="flex-1 flex flex-col gap-6 relative min-h-[400px]"
+          >
+            <input {...getLibraryInputProps({ id: "library-file-input" })} />
+
+            {/* Drag Overlay */}
+            {isLibraryDragActive && (
+              <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-purple-950/85 backdrop-blur-md border-2 border-dashed border-purple-500 rounded-3xl animate-[pulse_2s_infinite]">
+                <div className="w-16 h-16 rounded-full border border-purple-500/30 bg-purple-900/40 flex items-center justify-center mb-4">
+                  <Upload className="w-8 h-8 text-purple-400" />
+                </div>
+                <p className="text-lg font-bold text-white">Drop image to save to Library</p>
+                <p className="text-xs text-purple-300 mt-2 font-medium">Supports PNG, JPG, WEBP</p>
+              </div>
+            )}
+
             {/* Search Bar / Stats */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl">
               <div className="relative w-full sm:max-w-md">
@@ -1069,8 +1155,23 @@ export default function Home() {
                   </button>
                 )}
               </div>
-              <div className="text-sm text-zinc-400 font-medium">
-                Showing {filteredArtworks.length} of {savedArtworks.length} saved artworks
+              <div className="flex w-full sm:w-auto items-center justify-between sm:justify-end gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const inputEl = document.getElementById("library-file-input");
+                    if (inputEl) {
+                      inputEl.click();
+                    }
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-purple-600/10 hover:bg-purple-600/20 border border-purple-500/30 hover:border-purple-500/50 text-purple-400 font-semibold text-xs flex items-center gap-2 transition-all"
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload Card
+                </button>
+                <div className="text-sm text-zinc-400 font-medium whitespace-nowrap">
+                  Showing {filteredArtworks.length} of {savedArtworks.length} saved artworks
+                </div>
               </div>
             </div>
 
@@ -1166,13 +1267,12 @@ export default function Home() {
         <footer className="mt-16 text-center text-xs text-zinc-650 border-t border-zinc-900 pt-8 pb-4">
           <p>© {new Date().getFullYear()} TCG Art Studio. Powered by Google Gemini & Imagen 3.</p>
         </footer>
-
         {/* Save Modal Popup */}
         {isSaveModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-            <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl">
+            <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-850 rounded-2xl p-6 shadow-2xl">
               <button
-                onClick={() => setIsSaveModalOpen(false)}
+                onClick={closeSaveModal}
                 className="absolute top-4 right-4 p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors"
               >
                 <X className="w-4 h-4" />
@@ -1201,7 +1301,7 @@ export default function Home() {
               <div className="flex gap-3 justify-end">
                 <button
                   type="button"
-                  onClick={() => setIsSaveModalOpen(false)}
+                  onClick={closeSaveModal}
                   className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
                 >
                   Cancel
