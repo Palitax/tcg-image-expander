@@ -454,12 +454,16 @@ export default function Home() {
     if (!isLocalMode && currentSpace) {
       setIsLoginLoading(true);
       try {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("artworks")
           .update({ name: renameValue.trim() })
-          .eq("id", renamingArtwork.id);
+          .eq("id", renamingArtwork.id)
+          .select("id");
 
         if (error) throw error;
+        if (!data || data.length === 0) {
+          throw new Error("No rows were updated. Make sure you executed the UPDATE RLS policy in Supabase.");
+        }
       } catch (err) {
         const message = getErrorMessage(err);
         alert("Failed to rename artwork in database: " + message);
@@ -593,12 +597,16 @@ export default function Home() {
 
     if (!isLocalMode && currentSpace) {
       try {
-        const { error: dbError } = await supabase
+        const { data, error: dbError } = await supabase
           .from("artworks")
           .delete()
-          .eq("id", id);
+          .eq("id", id)
+          .select("id");
 
         if (dbError) throw dbError;
+        if (!data || data.length === 0) {
+          throw new Error("No rows were deleted. Make sure you executed the DELETE RLS policy in Supabase.");
+        }
 
         try {
           await supabase.storage
