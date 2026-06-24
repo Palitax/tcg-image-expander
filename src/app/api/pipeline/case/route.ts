@@ -9,19 +9,29 @@ export async function POST(request: Request) {
   try {
     const { cardImage, backgroundImage, aspectRatio } = await request.json();
 
-    if (!cardImage || !backgroundImage) {
+    if (!cardImage) {
       return NextResponse.json(
-        { error: "Missing cardImage or backgroundImage base64 data." },
+        { error: "Missing cardImage base64 data." },
         { status: 400 }
       );
     }
 
     // Extract raw base64 data
     const cardBase64 = cardImage.includes(",") ? cardImage.split(",")[1] : cardImage;
-    const backgroundBase64 = backgroundImage.includes(",") ? backgroundImage.split(",")[1] : backgroundImage;
-
     const cardBuffer = Buffer.from(cardBase64, "base64");
-    const backgroundBuffer = Buffer.from(backgroundBase64, "base64");
+
+    let backgroundBuffer: Buffer;
+    if (backgroundImage) {
+      const backgroundBase64 = backgroundImage.includes(",") ? backgroundImage.split(",")[1] : backgroundImage;
+      backgroundBuffer = Buffer.from(backgroundBase64, "base64");
+    } else {
+      // Generate a blurred background from the card itself (ambient background)
+      backgroundBuffer = await sharp(cardBuffer)
+        .resize(1024, 1024, { fit: "cover" })
+        .blur(40)
+        .png()
+        .toBuffer();
+    }
 
     // Load transparent case template from public directory
     const casePath = path.join(process.cwd(), "public", "card-case-transparent.png");

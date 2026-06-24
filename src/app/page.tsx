@@ -642,8 +642,9 @@ export default function Home() {
       setCaseCardImage(art.originalCardUrl);
       setCaseBgImage(art.backgroundUrl);
     } else {
-      setCaseCardImage(null);
-      setCaseBgImage(null);
+      // Use the final composite / uploaded image as the card, and use an ambient background
+      setCaseCardImage(art.imageUrl);
+      setCaseBgImage("ambient");
     }
   };
 
@@ -659,7 +660,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cardImage: caseCardImage,
-          backgroundImage: caseBgImage
+          backgroundImage: caseBgImage === "ambient" ? null : caseBgImage
         })
       });
 
@@ -1515,40 +1516,43 @@ export default function Home() {
                           )}
                           {savedArtworks.map(art => (
                             <option key={art.id} value={art.id}>
-                              {art.name} ({art.aspectRatio}){!art.originalCardUrl ? " [Legacy - No Case Support]" : ""}
+                              {art.name} ({art.aspectRatio}){!art.originalCardUrl ? " [Will generate ambient background]" : ""}
                             </option>
                           ))}
                         </select>
                         
                         {/* Selected info card */}
                         {caseCardImage && caseBgImage ? (
-                          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 flex items-center gap-4">
-                            <div className="w-16 h-20 relative rounded overflow-hidden border border-zinc-800 bg-zinc-900 flex-shrink-0">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={caseCardImage}
-                                alt="Card snippet"
-                                className="w-full h-full object-cover"
-                              />
+                          <div className="flex flex-col gap-3">
+                            <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 flex items-center gap-4">
+                              <div className="w-16 h-20 relative rounded overflow-hidden border border-zinc-800 bg-zinc-900 flex-shrink-0">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={caseCardImage}
+                                  alt="Card snippet"
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold text-zinc-200">
+                                  {selectedArtworkId 
+                                    ? savedArtworks.find(a => a.id === selectedArtworkId)?.name 
+                                    : "Current Session Card"}
+                                </p>
+                                <p className="text-xs text-purple-400 font-medium">
+                                  {caseBgImage === "ambient" 
+                                    ? "Ready to insert into case (with ambient blurred background)" 
+                                    : "Ready to insert into case (with expanded background)"}
+                                </p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="text-sm font-semibold text-zinc-200">
-                                {selectedArtworkId 
-                                  ? savedArtworks.find(a => a.id === selectedArtworkId)?.name 
-                                  : "Current Session Card"}
-                              </p>
-                              <p className="text-xs text-purple-400 font-medium">Ready to insert into case</p>
-                            </div>
-                          </div>
-                        ) : selectedArtworkId && (!caseCardImage || !caseBgImage) ? (
-                          <div className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-400 flex gap-2">
-                            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="text-sm font-semibold text-white">Legacy Artwork Selected</p>
-                              <p className="text-xs text-zinc-400 mt-1">
-                                This artwork was saved in a previous version of the app and does not store separated card/background layers. Please generate a new artwork in the Studio tab.
-                              </p>
-                            </div>
+                            
+                            {caseBgImage === "ambient" && (
+                              <div className="px-4 py-3 rounded-xl border border-purple-500/10 bg-purple-500/5 text-purple-400 flex gap-2 items-center text-xs">
+                                <Info className="w-4 h-4 shrink-0" />
+                                <span>No background layer was found. An ambient blurred background will be generated.</span>
+                              </div>
+                            )}
                           </div>
                         ) : null}
                       </div>
@@ -1829,6 +1833,17 @@ export default function Home() {
                         title="Rename Card"
                       >
                         <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleSelectArtworkForCase(art.id);
+                          setActiveTab("case");
+                        }}
+                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
+                        title="Create Case Showroom"
+                      >
+                        <Layers className="w-3.5 h-3.5" />
                       </button>
                       <button
                         type="button"
