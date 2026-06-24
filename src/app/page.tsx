@@ -1252,15 +1252,28 @@ export default function Home() {
                       <p className="text-sm font-semibold text-zinc-200 truncate">{file.name}</p>
                       <p className="text-xs text-zinc-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                     </div>
-                    <button
-                      type="button"
-                      disabled={isProcessing}
-                      onClick={handleReset}
-                      className="px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      Remove
-                    </button>
+                    <div className="flex gap-2">
+                      {resultImageUrl && (
+                        <button
+                          type="button"
+                          disabled={isProcessing}
+                          onClick={handleProcessImage}
+                          className="px-3 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                          Retry
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={handleReset}
+                        className="px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Remove
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
