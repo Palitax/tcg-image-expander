@@ -19,6 +19,13 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import { 
+  getSavedArtworks, 
+  saveArtwork, 
+  deleteArtwork, 
+  migrateFromLocalStorage,
+  type SavedArtwork
+} from "@/utils/db";
 
 interface ProgressStep {
   id: string;
@@ -91,13 +98,7 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   throw new Error(errorMessage);
 };
 
-interface SavedArtwork {
-  id: string;
-  name: string;
-  imageUrl: string;
-  aspectRatio: string;
-  timestamp: number;
-}
+// SavedArtwork interface is imported from @/utils/db
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
@@ -111,57 +112,130 @@ export default function Home() {
   const [ambientFallbackReason, setAmbientFallbackReason] = useState<string>("");
   const [usedCropFallback, setUsedCropFallback] = useState<boolean>(false);
   const [trimmedCard, setTrimmedCard] = useState<string | null>(null);
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState<string | null>(null);
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("outpaint");
 
-  const [activeTab, setActiveTab] = useState<"generate" | "library">("generate");
+  const [activeTab, setActiveTab] = useState<"generate" | "case" | "library">("generate");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
+  const [saveTarget, setSaveTarget] = useState<"generate" | "case">("generate");
   const [newArtworkName, setNewArtworkName] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Case Maker states
+  const [selectedArtworkId, setSelectedArtworkId] = useState<string | null>(null);
+  const [caseCardImage, setCaseCardImage] = useState<string | null>(null);
+  const [caseBgImage, setCaseBgImage] = useState<string | null>(null);
+  const [caseResultUrl, setCaseResultUrl] = useState<string | null>(null);
+  const [isCaseProcessing, setIsCaseProcessing] = useState<boolean>(false);
+  const [caseErrorMessage, setCaseErrorMessage] = useState<string | null>(null);
+
   // Load saved artworks on mount
   useEffect(() => {
-    const stored = localStorage.getItem("tcg_art_library");
-    if (stored) {
-      try {
-        setSavedArtworks(JSON.parse(stored));
-      } catch (e) {
-        console.error("Failed to parse saved artworks from localStorage", e);
+    const loadArtworks = async () => {
+      const legacyData = localStorage.getItem("tcg_art_library");
+      if (legacyData) {
+        try {
+          const migrated = await migrateFromLocalStorage();
+          setSavedArtworks(migrated);
+          return;
+        } catch (e) {
+          console.error("Failed to migrate legacy localStorage artworks:", e);
+        }
       }
-    }
+
+      try {
+        const artworks = await getSavedArtworks();
+        setSavedArtworks(artworks);
+      } catch (e) {
+        console.error("Failed to load artworks from IndexedDB:", e);
+      }
+    };
+
+    loadArtworks();
   }, []);
 
-  const handleSaveArtwork = () => {
-    if (!resultImageUrl || !newArtworkName.trim()) return;
+  const handleSaveArtwork = async () => {
+    const targetUrl = saveTarget === "case" ? caseResultUrl : resultImageUrl;
+    if (!targetUrl || !newArtworkName.trim()) return;
 
     const newArtwork: SavedArtwork = {
       id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
       name: newArtworkName.trim(),
-      imageUrl: resultImageUrl,
+      imageUrl: targetUrl,
+      originalCardUrl: saveTarget === "generate" ? (trimmedCard || undefined) : undefined,
+      backgroundUrl: saveTarget === "generate" ? (backgroundImageUrl || undefined) : undefined,
       aspectRatio,
       timestamp: Date.now()
     };
 
-    const updated = [newArtwork, ...savedArtworks];
-
     try {
-      localStorage.setItem("tcg_art_library", JSON.stringify(updated));
+      await saveArtwork(newArtwork);
+      const updated = [newArtwork, ...savedArtworks];
       setSavedArtworks(updated);
       setIsSaveModalOpen(false);
       setNewArtworkName("");
-    } catch (err: any) {
-      if (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-        alert("Your library is full! Please delete some old artworks to free up space.");
-      } else {
-        alert("Failed to save artwork: " + err.message);
-      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      alert("Failed to save artwork: " + message);
     }
   };
 
-  const handleDeleteArtwork = (id: string) => {
-    const updated = savedArtworks.filter(art => art.id !== id);
-    localStorage.setItem("tcg_art_library", JSON.stringify(updated));
-    setSavedArtworks(updated);
+  const handleDeleteArtwork = async (id: string) => {
+    try {
+      await deleteArtwork(id);
+      const updated = savedArtworks.filter(art => art.id !== id);
+      setSavedArtworks(updated);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      alert("Failed to delete artwork: " + message);
+    }
+  };
+
+  const handleSelectArtworkForCase = (id: string) => {
+    const art = savedArtworks.find(a => a.id === id);
+    if (!art) return;
+    
+    setSelectedArtworkId(id);
+    setCaseResultUrl(null);
+    setCaseErrorMessage(null);
+    
+    if (art.originalCardUrl && art.backgroundUrl) {
+      setCaseCardImage(art.originalCardUrl);
+      setCaseBgImage(art.backgroundUrl);
+    } else {
+      setCaseCardImage(null);
+      setCaseBgImage(null);
+    }
+  };
+
+  const handleProcessCaseImage = async () => {
+    if (!caseCardImage || !caseBgImage) return;
+    setIsCaseProcessing(true);
+    setCaseErrorMessage(null);
+    setCaseResultUrl(null);
+
+    try {
+      const response = await fetch("/api/pipeline/case", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cardImage: caseCardImage,
+          backgroundImage: caseBgImage
+        })
+      });
+
+      const { resultImageUrl } = await parseResponseData(
+        response,
+        "Failed to generate case showcase."
+      );
+      setCaseResultUrl(resultImageUrl);
+    } catch (err: any) {
+      console.error("Case generation error:", err);
+      setCaseErrorMessage(err.message || "An unexpected error occurred during case rendering.");
+    } finally {
+      setIsCaseProcessing(false);
+    }
   };
   
   // Timer & active messages
@@ -280,6 +354,7 @@ export default function Home() {
         outpaintResponse,
         "Failed to outpaint and extend background."
       );
+      setBackgroundImageUrl(backgroundImage);
       setUsedAmbientFallback(usedFallback || false);
       setAmbientFallbackReason(fallbackReason || "");
       updateStepStatus("OUTPAINT", "success");
@@ -327,6 +402,7 @@ export default function Home() {
     setFile(null);
     setPreviewUrl(null);
     setResultImageUrl(null);
+    setBackgroundImageUrl(null);
     setErrorMessage(null);
     setUsedAmbientFallback(false);
     setAmbientFallbackReason("");
@@ -336,6 +412,13 @@ export default function Home() {
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
     setElapsedTime(0);
     setActiveStepMessage("");
+    
+    // Reset Case Maker states
+    setSelectedArtworkId(null);
+    setCaseCardImage(null);
+    setCaseBgImage(null);
+    setCaseResultUrl(null);
+    setCaseErrorMessage(null);
   };
 
   const filteredArtworks = savedArtworks.filter(art =>
@@ -379,6 +462,18 @@ export default function Home() {
             >
               <Sparkles className="w-4 h-4" />
               Studio
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("case")}
+              className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
+                activeTab === "case"
+                  ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
+                  : "border border-transparent text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              Case Maker
             </button>
             <button
               type="button"
@@ -670,25 +765,43 @@ export default function Home() {
                       </div>
                     )}
                     
-                    <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
-                      <a
-                        href={resultImageUrl}
-                        download={`TCG_${file?.name || "expanded"}`}
-                        className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
-                      >
-                        <Download className="w-4 h-4" />
-                        Download
-                      </a>
+                    <div className="mt-6 flex flex-col gap-3 w-full max-w-[340px]">
+                      <div className="flex flex-col sm:flex-row gap-3 w-full">
+                        <a
+                          href={resultImageUrl}
+                          download={`TCG_${file?.name || "expanded"}`}
+                          className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
+                        >
+                          <Download className="w-4 h-4" />
+                          Download
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSaveTarget("generate");
+                            setNewArtworkName(file?.name ? file.name.replace(/\.[^/.]+$/, "") : "");
+                            setIsSaveModalOpen(true);
+                          }}
+                          className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
+                        >
+                          <Bookmark className="w-4 h-4" />
+                          Save to Library
+                        </button>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
-                          setNewArtworkName(file?.name ? file.name.replace(/\.[^/.]+$/, "") : "");
-                          setIsSaveModalOpen(true);
+                          setCaseCardImage(trimmedCard);
+                          setCaseBgImage(backgroundImageUrl);
+                          setSelectedArtworkId(null);
+                          setCaseResultUrl(null);
+                          setCaseErrorMessage(null);
+                          setActiveTab("case");
                         }}
-                        className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
+                        className="w-full py-3 rounded-xl bg-purple-600/15 border border-purple-500/30 hover:bg-purple-600/25 text-purple-400 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(168,85,247,0.05)]"
                       >
-                        <Bookmark className="w-4 h-4" />
-                        Save to Library
+                        <Layers className="w-4 h-4" />
+                        Create Case Showcase
                       </button>
                     </div>
                   </div>
@@ -709,6 +822,228 @@ export default function Home() {
           </section>
 
         </div>
+        ) : activeTab === "case" ? (
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* Left panel - Case configuration & library selection */}
+            <section className="lg:col-span-7 flex flex-col gap-6">
+              {/* Select from Library */}
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-purple-400" />
+                  TCG Case Configuration
+                </h2>
+                
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-300 mb-2">Select Expanded Card</label>
+                    {savedArtworks.length === 0 && !caseCardImage ? (
+                      <div className="p-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center">
+                        <p className="text-sm text-zinc-500">Your library is empty.</p>
+                        <p className="text-xs text-zinc-650 mt-1">Please expand a card in the Studio and save it first, or use the currently generated card.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        <select
+                          value={selectedArtworkId || (caseCardImage && !selectedArtworkId ? "current" : "")}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === "current") {
+                              setSelectedArtworkId(null);
+                              setCaseCardImage(trimmedCard);
+                              setCaseBgImage(backgroundImageUrl);
+                              setCaseResultUrl(null);
+                              setCaseErrorMessage(null);
+                            } else if (val === "") {
+                              setSelectedArtworkId(null);
+                              setCaseCardImage(null);
+                              setCaseBgImage(null);
+                              setCaseResultUrl(null);
+                              setCaseErrorMessage(null);
+                            } else {
+                              handleSelectArtworkForCase(val);
+                            }
+                          }}
+                          className="w-full px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm"
+                        >
+                          <option value="">-- Choose a card --</option>
+                          {caseCardImage && !selectedArtworkId && (
+                            <option value="current">Current Session Card (Studio)</option>
+                          )}
+                          {savedArtworks.map(art => (
+                            <option key={art.id} value={art.id}>
+                              {art.name} ({art.aspectRatio}){!art.originalCardUrl ? " [Legacy - No Case Support]" : ""}
+                            </option>
+                          ))}
+                        </select>
+                        
+                        {/* Selected info card */}
+                        {caseCardImage && caseBgImage ? (
+                          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 flex items-center gap-4">
+                            <div className="w-16 h-20 relative rounded overflow-hidden border border-zinc-800 bg-zinc-900 flex-shrink-0">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={caseCardImage}
+                                alt="Card snippet"
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-zinc-200">
+                                {selectedArtworkId 
+                                  ? savedArtworks.find(a => a.id === selectedArtworkId)?.name 
+                                  : "Current Session Card"}
+                              </p>
+                              <p className="text-xs text-purple-400 font-medium">Ready to insert into case</p>
+                            </div>
+                          </div>
+                        ) : selectedArtworkId && (!caseCardImage || !caseBgImage) ? (
+                          <div className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-400 flex gap-2">
+                            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-sm font-semibold text-white">Legacy Artwork Selected</p>
+                              <p className="text-xs text-zinc-400 mt-1">
+                                This artwork was saved in a previous version of the app and does not store separated card/background layers. Please generate a new artwork in the Studio tab.
+                              </p>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Generate Case Button */}
+              {caseCardImage && caseBgImage && !caseResultUrl && !caseErrorMessage && (
+                <button
+                  type="button"
+                  disabled={isCaseProcessing}
+                  onClick={handleProcessCaseImage}
+                  className="w-full py-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-md flex items-center justify-center gap-2 shadow-[0_0_30px_rgba(147,51,234,0.3)] hover:shadow-[0_0_30px_rgba(147,51,234,0.5)] transition-all disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {isCaseProcessing ? (
+                    <>
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                      Creating Case Image...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5" />
+                      Create Case Image
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Error Display */}
+              {caseErrorMessage && (
+                <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-5 text-red-400 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
+                    <div>
+                      <h3 className="font-semibold text-white">Case Generation Failed</h3>
+                      <p className="text-sm text-zinc-400 mt-1">{caseErrorMessage}</p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCaseCardImage(null);
+                        setCaseBgImage(null);
+                        setSelectedArtworkId(null);
+                        setCaseErrorMessage(null);
+                      }}
+                      className="px-3.5 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-400 hover:text-zinc-200 text-xs font-semibold transition-colors"
+                    >
+                      Clear Selection
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleProcessCaseImage}
+                      className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* Right panel - Case Showcase Preview */}
+            <section className="lg:col-span-5 flex flex-col gap-6">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex-1 flex flex-col">
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Maximize2 className="w-5 h-5 text-purple-400" />
+                  Case Showcase Preview
+                </h2>
+
+                <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950/80 rounded-xl border border-zinc-850 p-4 relative min-h-[350px]">
+                  {isCaseProcessing ? (
+                    <div className="text-center text-zinc-550 p-8 flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
+                        <RefreshCw className="w-8 h-8 text-purple-400 animate-spin" />
+                      </div>
+                      <p className="text-sm font-semibold text-zinc-400">Rendering case showcase...</p>
+                      <p className="text-xs text-zinc-650 mt-2 max-w-[200px]">
+                        Compositing card layers inside the transparent plastic slab template.
+                      </p>
+                    </div>
+                  ) : caseResultUrl ? (
+                    <div className="w-full flex flex-col items-center">
+                      <div 
+                        className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] aspect-[3/4]"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={caseResultUrl}
+                          alt="Final slab showcase"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      
+                      <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
+                        <a
+                          href={caseResultUrl}
+                          download={`Slab_${selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase"}.png`}
+                          className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
+                        >
+                          <Download className="w-4 h-4" />
+                          Download
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSaveTarget("case");
+                            setNewArtworkName(
+                              selectedArtworkId 
+                                ? `${savedArtworks.find(a => a.id === selectedArtworkId)?.name} Slab`
+                                : file?.name ? `${file.name.replace(/\.[^/.]+$/, "")} Slab` : "My Slab Showcase"
+                            );
+                            setIsSaveModalOpen(true);
+                          }}
+                          className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
+                        >
+                          <Bookmark className="w-4 h-4" />
+                          Save to Library
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center text-zinc-550 p-8 flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
+                        <Layers className="w-8 h-8 text-zinc-650" />
+                      </div>
+                      <p className="text-sm font-semibold text-zinc-400">No case showcase generated yet</p>
+                      <p className="text-xs text-zinc-600 mt-2 max-w-[240px]">
+                        Select an expanded card from the config list and hit the button to generate the final TCG slab showcase.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
         ) : (
           /* Library Tab */
           <div className="flex-1 flex flex-col gap-6">
