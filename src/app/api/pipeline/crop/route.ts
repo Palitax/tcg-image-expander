@@ -244,16 +244,20 @@ export async function POST(request: Request) {
       cropHeight = iy2 - iy1;
     }
 
-    // Crop the clean card itself
+    // Crop the card itself, downscaling it to a reasonable maximum height (1024px) for performance
+    let cardResizeHeight = Math.min(1024, cardHeight);
+    let cardResizeWidth = Math.round((cardWidth / cardHeight) * cardResizeHeight);
+
     const cardBuffer = await sharp(originalImageBuffer)
       .extract({ left: cx1, top: cy1, width: cardWidth, height: cardHeight })
-      .png()
+      .resize(cardResizeWidth, cardResizeHeight)
+      .png({ compressionLevel: 8 })
       .toBuffer();
 
-    // Round the corners of the card
-    const cornerRadius = Math.round(cardWidth * 0.035); // 3.5% corner radius for trading cards
+    // Round the corners of the card using SVG mask
+    const cornerRadius = Math.round(cardResizeWidth * 0.035); // 3.5% corner radius for trading cards
     const roundedCornersMask = Buffer.from(
-      `<svg width="${cardWidth}" height="${cardHeight}"><rect x="0" y="0" width="${cardWidth}" height="${cardHeight}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
+      `<svg width="${cardResizeWidth}" height="${cardResizeHeight}"><rect x="0" y="0" width="${cardResizeWidth}" height="${cardResizeHeight}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
     );
 
     const roundedCardBuffer = await sharp(cardBuffer)
@@ -261,15 +265,16 @@ export async function POST(request: Request) {
         input: roundedCornersMask,
         blend: 'dest-in'
       }])
-      .png()
+      .png({ compressionLevel: 9 })
       .toBuffer();
 
     const trimmedCardBase64 = roundedCardBuffer.toString("base64");
 
-    // Crop the inner illustration (for outpainting input)
+    // Crop the inner illustration (for outpainting input), resizing to max 512px and compressing as JPEG
     const croppedBuffer = await sharp(originalImageBuffer)
       .extract({ left: ix1, top: iy1, width: cropWidth, height: cropHeight })
-      .png()
+      .resize(512, 512, { fit: "inside" })
+      .jpeg({ quality: 85 })
       .toBuffer();
 
     const croppedBase64 = croppedBuffer.toString("base64");
