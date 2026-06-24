@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const { croppedImage, aspectRatio } = await request.json();
+    const { croppedImage, aspectRatio, mode = "backdrop" } = await request.json();
 
     if (!croppedImage) {
       return NextResponse.json({ error: "Missing croppedImage base64 data." }, { status: 400 });
@@ -76,9 +76,13 @@ export async function POST(request: Request) {
       let description = "";
       let lastError;
 
+      const describePrompt = mode === "backdrop"
+        ? "Analyze this trading card illustration. Write a detailed prompt to generate a matching background scenery/backdrop. Your description MUST focus ONLY on the environment, scenery, backdrop elements, artistic style (e.g. anime sketch, watercolor, oil painting), color palette, lighting, brushstrokes, and general aesthetic. You MUST completely ignore and exclude any characters, figures, or humans in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery."
+        : "Describe the visual content, artistic style (e.g. anime, oil painting, watercolor), key color palette, character details, and backdrop elements of this trading card illustration. This description will be used as a prompt for Imagen 3 to expand the image. Do not mention card borders, text, or the card itself. Return only the description.";
+
       for (const model of models) {
         try {
-          console.log(`[Outpaint API] Describing style with model ${model}`);
+          console.log(`[Outpaint API] Describing style with model ${model} (mode: ${mode})`);
           const styleResponse = await generateContentWithRetry(ai, {
             model,
             contents: [
@@ -88,7 +92,7 @@ export async function POST(request: Request) {
                   mimeType: "image/png"
                 }
               },
-              "Describe the visual content, artistic style (e.g. anime, oil painting, watercolor), key color palette, character details, and backdrop elements of this trading card illustration. This description will be used as a prompt for Imagen 3 to expand the image. Do not mention card borders, text, or the card itself. Return only the description."
+              describePrompt
             ]
           });
           if (styleResponse.text) {
@@ -113,7 +117,12 @@ export async function POST(request: Request) {
         .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy element")
         .trim();
 
-      const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
+      let outpaintPrompt = "";
+      if (mode === "backdrop") {
+        outpaintPrompt = `A beautiful, high-quality scenery backdrop: ${sanitizedDescription}. High quality, detailed, continuous landscape in the same aesthetic and art style. Exclude any characters or text.`;
+      } else {
+        outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
+      }
 
       // STEP 3B: Generate background with image models fallback chain
       const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
@@ -122,10 +131,15 @@ export async function POST(request: Request) {
 
       for (const imgModel of imageModels) {
         try {
-          console.log(`[Outpaint API] Attempting Gemini Image Generation with model ${imgModel}`);
-          const imagenResponse = await generateContentWithRetry(ai, {
-            model: imgModel,
-            contents: [
+          console.log(`[Outpaint API] Attempting Gemini Image Generation with model ${imgModel} (mode: ${mode})`);
+          
+          let contentsArray: any[] = [];
+          if (mode === "backdrop") {
+            // Text-to-Image mode: do not pass the reference image to prevent character replication in background
+            contentsArray = [outpaintPrompt];
+          } else {
+            // Outpaint/Image-to-Image mode: pass the reference image to extend it
+            contentsArray = [
               {
                 inlineData: {
                   data: base64Data,
@@ -133,7 +147,12 @@ export async function POST(request: Request) {
                 }
               },
               outpaintPrompt
-            ],
+            ];
+          }
+
+          const imagenResponse = await generateContentWithRetry(ai, {
+            model: imgModel,
+            contents: contentsArray,
             config: {
               responseModalities: ["IMAGE"],
               imageConfig: {

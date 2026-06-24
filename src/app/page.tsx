@@ -73,6 +73,7 @@ export default function Home() {
   const [ambientFallbackReason, setAmbientFallbackReason] = useState<string>("");
   const [usedCropFallback, setUsedCropFallback] = useState<boolean>(false);
   const [trimmedCard, setTrimmedCard] = useState<string | null>(null);
+  const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("backdrop");
   
   // Timer & active messages
   const [elapsedTime, setElapsedTime] = useState<number>(0);
@@ -185,7 +186,7 @@ export default function Home() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ croppedImage, aspectRatio })
+          body: JSON.stringify({ croppedImage, aspectRatio, mode: bgMode })
         },
         2,
         1500,
@@ -252,6 +253,7 @@ export default function Home() {
     setAmbientFallbackReason("");
     setUsedCropFallback(false);
     setTrimmedCard(null);
+    setBgMode("backdrop");
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
     setElapsedTime(0);
     setActiveStepMessage("");
@@ -316,6 +318,39 @@ export default function Home() {
                       >
                         <span className="font-semibold text-sm">{ratio.label}</span>
                         <span className="text-[10px] text-zinc-500 mt-1">{ratio.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-4 border-t border-zinc-800/80">
+                  <label className="block text-sm font-medium text-zinc-300 mb-2">Background Style Mode</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { 
+                        value: "backdrop", 
+                        label: "Style Backdrop", 
+                        desc: "Analyze the card's art style, ignore characters/figures, and generate pure scenery in that style." 
+                      },
+                      { 
+                        value: "outpaint", 
+                        label: "Artwork Expansion", 
+                        desc: "Expand the card illustration directly (may extend characters/elements to the background)." 
+                      }
+                    ].map((mode) => (
+                      <button
+                        key={mode.value}
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => setBgMode(mode.value as "backdrop" | "outpaint")}
+                        className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
+                          bgMode === mode.value
+                            ? "border-purple-500 bg-purple-500/10 text-white shadow-[0_0_15px_rgba(168,85,247,0.15)]"
+                            : "border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                        } disabled:opacity-50 disabled:pointer-events-none`}
+                      >
+                        <span className="font-semibold text-sm">{mode.label}</span>
+                        <span className="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">{mode.desc}</span>
                       </button>
                     ))}
                   </div>
