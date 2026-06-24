@@ -17,6 +17,7 @@ import {
   Bookmark,
   Search,
   Trash2,
+  Pencil,
   X
 } from "lucide-react";
 import { 
@@ -147,6 +148,11 @@ export default function Home() {
   const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
   const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
   const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Card renaming states
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState<boolean>(false);
+  const [renamingArtwork, setRenamingArtwork] = useState<SavedArtwork | null>(null);
+  const [renameValue, setRenameValue] = useState<string>("");
 
   // Space authentication states
   const [currentSpace, setCurrentSpace] = useState<{ id: string; name: string } | null>(null);
@@ -442,6 +448,44 @@ export default function Home() {
     localStorage.removeItem("tcg_current_space");
   };
 
+  const handleRenameArtwork = async () => {
+    if (!renamingArtwork || !renameValue.trim()) return;
+
+    if (!isLocalMode && currentSpace) {
+      setIsLoginLoading(true);
+      try {
+        const { error } = await supabase
+          .from("artworks")
+          .update({ name: renameValue.trim() })
+          .eq("id", renamingArtwork.id);
+
+        if (error) throw error;
+      } catch (err) {
+        const message = getErrorMessage(err);
+        alert("Failed to rename artwork in database: " + message);
+        setIsLoginLoading(false);
+        return;
+      } finally {
+        setIsLoginLoading(false);
+      }
+    } else {
+      try {
+        const updatedArt = { ...renamingArtwork, name: renameValue.trim() };
+        await saveArtwork(updatedArt);
+      } catch (err) {
+        const message = getErrorMessage(err);
+        alert("Failed to rename artwork locally: " + message);
+        return;
+      }
+    }
+
+    setSavedArtworks(prev =>
+      prev.map(art => (art.id === renamingArtwork.id ? { ...art, name: renameValue.trim() } : art))
+    );
+    setIsRenameModalOpen(false);
+    setRenamingArtwork(null);
+  };
+
   const closeSaveModal = () => {
     setIsSaveModalOpen(false);
     setNewArtworkName("");
@@ -541,6 +585,12 @@ export default function Home() {
   };
 
   const handleDeleteArtwork = async (id: string) => {
+    const art = savedArtworks.find(a => a.id === id);
+    const artName = art ? art.name : "this artwork";
+    if (!confirm(`Are you sure you want to delete "${artName}"?`)) {
+      return;
+    }
+
     if (!isLocalMode && currentSpace) {
       try {
         const { error: dbError } = await supabase
@@ -1770,8 +1820,20 @@ export default function Home() {
                       </a>
                       <button
                         type="button"
+                        onClick={() => {
+                          setRenamingArtwork(art);
+                          setRenameValue(art.name);
+                          setIsRenameModalOpen(true);
+                        }}
+                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
+                        title="Rename Card"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleDeleteArtwork(art.id)}
-                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
+                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-955 text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
                         title="Delete from Library"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1858,6 +1920,64 @@ export default function Home() {
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white text-sm font-semibold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)]"
                 >
                   Save Artwork
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Rename Modal Popup */}
+        {isRenameModalOpen && renamingArtwork && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-850 rounded-2xl p-6 shadow-2xl">
+              <button
+                onClick={() => {
+                  setIsRenameModalOpen(false);
+                  setRenamingArtwork(null);
+                }}
+                className="absolute top-4 right-4 p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-purple-400" />
+                Rename Artwork
+              </h3>
+              <p className="text-sm text-zinc-400 mb-4">
+                Enter a new name for "{renamingArtwork.name}".
+              </p>
+
+              <input
+                type="text"
+                placeholder="e.g. Charizard Alt Art"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm mb-6"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && renameValue.trim()) handleRenameArtwork();
+                }}
+              />
+
+              <div className="flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRenameModalOpen(false);
+                    setRenamingArtwork(null);
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRenameArtwork}
+                  disabled={!renameValue.trim() || renameValue.trim() === renamingArtwork.name}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white text-sm font-semibold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)]"
+                >
+                  Rename
                 </button>
               </div>
             </div>
