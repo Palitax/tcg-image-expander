@@ -94,55 +94,14 @@ export async function POST(request: Request) {
     .png()
     .toBuffer();
 
-    // Create drop shadow for the case (case has rounded corners, radius ~ 4.5% of width)
-    const caseCornerRadius = Math.round(targetCaseWidth * 0.045);
-    const shadowPadding = Math.round(80 * scale); // Responsive shadow padding (increased to prevent canvas edge cutoff)
-    const shadowWidth = targetCaseWidth + shadowPadding * 2;
-    const shadowHeight = targetCaseHeight + shadowPadding * 2;
-
-    const caseShadowSvg = Buffer.from(
-      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.22"/></svg>`
-    );
-
-    const caseShadow = await sharp({
-      create: {
-        width: shadowWidth,
-        height: shadowHeight,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
-      }
-    })
-    .composite([
-      {
-        input: caseShadowSvg,
-        top: shadowPadding,
-        left: shadowPadding
-      }
-    ])
-    .blur(Math.max(3, Math.round(15 * scale))) // Responsive blur radius
-    .png()
-    .toBuffer();
-
-    // Composite case with card onto shadow
-    const caseWithShadowBuffer = await sharp(caseShadow)
-      .composite([
-        {
-          input: caseWithCardBuffer,
-          top: shadowPadding,
-          left: shadowPadding
-        }
-      ])
-      .png()
-      .toBuffer();
-
     // Center the final composite on the outpainted background
-    const finalTop = Math.round((bgHeight - shadowHeight) / 2);
-    const finalLeft = Math.round((bgWidth - shadowWidth) / 2);
+    const finalTop = Math.round((bgHeight - targetCaseHeight) / 2);
+    const finalLeft = Math.round((bgWidth - targetCaseWidth) / 2);
 
     const finalResultBuffer = await sharp(backgroundBuffer)
       .composite([
         {
-          input: caseWithShadowBuffer,
+          input: caseWithCardBuffer,
           top: finalTop,
           left: finalLeft
         }
