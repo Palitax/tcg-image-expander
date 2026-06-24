@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const { originalImage, backgroundImage } = await request.json();
+    const { originalImage, backgroundImage, isTrimmed } = await request.json();
 
     if (!originalImage || !backgroundImage) {
       return NextResponse.json({ error: "Missing originalImage or backgroundImage base64 data." }, { status: 400 });
@@ -27,27 +27,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to read original image dimensions." }, { status: 400 });
     }
 
-    // Try to auto-trim uniform borders (like white/black margins) from the original card image
+    // Try to auto-trim uniform borders (like white/black margins) from the original card image if not pre-trimmed
     let trimmedCardBuffer: any = originalImageBuffer;
     let cardWidth = width;
     let cardHeight = height;
 
-    try {
-      const trimmed = await sharp(originalImageBuffer)
-        .trim()
-        .toBuffer({ resolveWithObject: true });
-      
-      const tWidth = trimmed.info.width || width;
-      const tHeight = trimmed.info.height || height;
-      
-      if (tWidth >= width * 0.4 && tHeight >= height * 0.4) {
-        trimmedCardBuffer = trimmed.data;
-        cardWidth = tWidth;
-        cardHeight = tHeight;
-        console.log(`[Merge API] Trimmed original card borders: ${width}x${height} -> ${cardWidth}x${cardHeight}`);
+    if (!isTrimmed) {
+      try {
+        const trimmed = await sharp(originalImageBuffer)
+          .trim()
+          .toBuffer({ resolveWithObject: true });
+        
+        const tWidth = trimmed.info.width || width;
+        const tHeight = trimmed.info.height || height;
+        
+        if (tWidth >= width * 0.4 && tHeight >= height * 0.4) {
+          trimmedCardBuffer = trimmed.data;
+          cardWidth = tWidth;
+          cardHeight = tHeight;
+          console.log(`[Merge API] Trimmed original card borders: ${width}x${height} -> ${cardWidth}x${cardHeight}`);
+        }
+      } catch (e: any) {
+        console.log("[Merge API] Skip original card trimming:", e.message);
       }
-    } catch (e: any) {
-      console.log("[Merge API] Skip original card trimming:", e.message);
+    } else {
+      console.log(`[Merge API] Using pre-trimmed card of size ${width}x${height}`);
     }
 
     // Get background image metadata
@@ -95,6 +99,12 @@ export async function POST(request: Request) {
       .png() // Force to PNG format
       .toBuffer();
 
+    // Create shadow mask with rounded corners to match the card geometry
+    const targetCornerRadius = Math.round(targetCardWidth * 0.035);
+    const shadowMask = Buffer.from(
+      `<svg width="${targetCardWidth}" height="${targetCardHeight}"><rect x="0" y="0" width="${targetCardWidth}" height="${targetCardHeight}" rx="${targetCornerRadius}" ry="${targetCornerRadius}" fill="white"/></svg>`
+    );
+
     const innerShadowInput = await sharp({
       create: {
         width: targetCardWidth,
@@ -103,6 +113,10 @@ export async function POST(request: Request) {
         background: { r: 0, g: 0, b: 0, alpha: 0.5 } // soft dark shadow
       }
     })
+    .composite([{
+      input: shadowMask,
+      blend: 'dest-in'
+    }])
     .png() // Must output as PNG to be a valid input format in composite
     .toBuffer();
 

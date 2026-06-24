@@ -72,6 +72,7 @@ export default function Home() {
   const [usedAmbientFallback, setUsedAmbientFallback] = useState<boolean>(false);
   const [ambientFallbackReason, setAmbientFallbackReason] = useState<string>("");
   const [usedCropFallback, setUsedCropFallback] = useState<boolean>(false);
+  const [trimmedCard, setTrimmedCard] = useState<string | null>(null);
   
   // Timer & active messages
   const [elapsedTime, setElapsedTime] = useState<number>(0);
@@ -105,6 +106,7 @@ export default function Home() {
       setErrorMessage(null);
       setUsedAmbientFallback(false);
       setUsedCropFallback(false);
+      setTrimmedCard(null);
       setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
       setElapsedTime(0);
       setActiveStepMessage("");
@@ -142,6 +144,7 @@ export default function Home() {
     setResultImageUrl(null);
     setUsedAmbientFallback(false);
     setUsedCropFallback(false);
+    setTrimmedCard(null);
     setElapsedTime(0);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
 
@@ -167,8 +170,9 @@ export default function Home() {
         throw new Error(errData.error || "Failed to analyze and crop card artwork.");
       }
 
-      const { croppedImage, usedFallback: cropFallback } = await cropResponse.json();
+      const { croppedImage, trimmedCard: cropTrimmedCard, usedFallback: cropFallback } = await cropResponse.json();
       setUsedCropFallback(cropFallback || false);
+      setTrimmedCard(cropTrimmedCard || null);
       updateStepStatus("LAYOUT", "success");
       updateStepStatus("CROP", "success");
 
@@ -205,7 +209,11 @@ export default function Home() {
       const mergeResponse = await fetch("/api/pipeline/merge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ originalImage: originalBase64, backgroundImage })
+        body: JSON.stringify({ 
+          originalImage: cropTrimmedCard || trimmedCard || originalBase64, 
+          backgroundImage,
+          isTrimmed: !!(cropTrimmedCard || trimmedCard)
+        })
       });
 
       if (!mergeResponse.ok) {
@@ -243,6 +251,7 @@ export default function Home() {
     setUsedAmbientFallback(false);
     setAmbientFallbackReason("");
     setUsedCropFallback(false);
+    setTrimmedCard(null);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
     setElapsedTime(0);
     setActiveStepMessage("");
