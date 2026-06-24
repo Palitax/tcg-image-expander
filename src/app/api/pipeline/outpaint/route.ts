@@ -5,6 +5,28 @@ import sharp from "sharp";
 export const dynamic = "force-dynamic";
 export const preferredRegion = "iad1"; // Force US-East server to bypass EU IP blocks for Imagen 3
 
+// Helper to call generateContent with retry on transient errors (503, 429)
+async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (e: any) {
+      const errorStr = String(e.message || e);
+      const isUnavailable = errorStr.includes("503") || errorStr.toLowerCase().includes("demand") || errorStr.toLowerCase().includes("unavailable") || e.status === 503 || e.statusCode === 503;
+      const isRateLimit = errorStr.includes("429") || errorStr.toLowerCase().includes("rate limit") || errorStr.toLowerCase().includes("quota") || e.status === 429 || e.statusCode === 429;
+      
+      if ((isUnavailable || isRateLimit) && i < retries) {
+        const waitTime = delay * Math.pow(2, i);
+        console.warn(`[Gemini API] Transient error: "${errorStr}". Retrying in ${waitTime}ms (attempt ${i + 1}/${retries})...`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Failed to generate content after retries.");
+}
+
 // Map aspect ratio string to dimensions for the fallback blurred background
 const getDimensionsForRatio = (ratio: string): { width: number; height: number } => {
   switch (ratio) {
@@ -50,14 +72,14 @@ export async function POST(request: Request) {
 
     try {
       // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
-      const models = ["gemini-3.5-flash", "gemini-2.5-flash"];
+      const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
       let description = "";
       let lastError;
 
       for (const model of models) {
         try {
           console.log(`[Outpaint API] Describing style with model ${model}`);
-          const styleResponse = await ai.models.generateContent({
+          const styleResponse = await generateContentWithRetry(ai, {
             model,
             contents: [
               {
@@ -93,42 +115,54 @@ export async function POST(request: Request) {
 
       const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the artwork to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic of the original illustration. High quality, detailed, continuous landscape.`;
 
-      console.log(`[Outpaint API] Attempting Gemini 2.5 Flash Image with prompt: "${outpaintPrompt}"`);
-
-      // STEP 3B: Generate background with Gemini 2.5 Flash Image
-      const imagenResponse = await ai.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: [
-          {
-            inlineData: {
-              data: base64Data,
-              mimeType: "image/png"
-            }
-          },
-          outpaintPrompt
-        ],
-        config: {
-          responseModalities: ["IMAGE"],
-          imageConfig: {
-            aspectRatio: aspectRatio || "3:4"
-          }
-        }
-      });
-      
+      // STEP 3B: Generate background with image models fallback chain
+      const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
       let generatedBase64 = "";
-      const parts = imagenResponse.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          generatedBase64 = part.inlineData.data;
-          break;
+      let lastImageError;
+
+      for (const imgModel of imageModels) {
+        try {
+          console.log(`[Outpaint API] Attempting Gemini Image Generation with model ${imgModel}`);
+          const imagenResponse = await generateContentWithRetry(ai, {
+            model: imgModel,
+            contents: [
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType: "image/png"
+                }
+              },
+              outpaintPrompt
+            ],
+            config: {
+              responseModalities: ["IMAGE"],
+              imageConfig: {
+                aspectRatio: aspectRatio || "3:4"
+              }
+            }
+          });
+
+          const parts = imagenResponse.candidates?.[0]?.content?.parts || [];
+          for (const part of parts) {
+            if (part.inlineData?.data) {
+              generatedBase64 = part.inlineData.data;
+              break;
+            }
+          }
+          if (generatedBase64) {
+            console.log(`[Outpaint API] Image generated successfully with ${imgModel}`);
+            break;
+          }
+        } catch (e: any) {
+          console.warn(`[Outpaint API] Image generation with ${imgModel} failed: ${e.message}`);
+          lastImageError = e;
         }
       }
 
       if (generatedBase64) {
         backgroundImageBase64 = generatedBase64;
-        console.log("[Outpaint API] Gemini 2.5 Flash Image generated successfully.");
       } else {
-        throw new Error("No image bytes returned by Gemini 2.5 Flash Image.");
+        throw lastImageError || new Error("No image bytes returned by any Gemini Image model.");
       }
 
     } catch (e: any) {

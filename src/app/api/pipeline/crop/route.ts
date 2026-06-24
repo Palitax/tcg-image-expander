@@ -5,6 +5,28 @@ import sharp from "sharp";
 export const dynamic = "force-dynamic";
 export const preferredRegion = "iad1"; // Force US-East server
 
+// Helper to call generateContent with retry on transient errors (503, 429)
+async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (e: any) {
+      const errorStr = String(e.message || e);
+      const isUnavailable = errorStr.includes("503") || errorStr.toLowerCase().includes("demand") || errorStr.toLowerCase().includes("unavailable") || e.status === 503 || e.statusCode === 503;
+      const isRateLimit = errorStr.includes("429") || errorStr.toLowerCase().includes("rate limit") || errorStr.toLowerCase().includes("quota") || e.status === 429 || e.statusCode === 429;
+      
+      if ((isUnavailable || isRateLimit) && i < retries) {
+        const waitTime = delay * Math.pow(2, i);
+        console.warn(`[Gemini API] Transient error: "${errorStr}". Retrying in ${waitTime}ms (attempt ${i + 1}/${retries})...`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Failed to generate content after retries.");
+}
+
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -38,14 +60,14 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64");
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.5-flash", "gemini-2.5-flash"];
+    const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
     let layoutText = "";
     let lastError;
 
     for (const model of models) {
       try {
         console.log(`[Crop API] Trying model ${model}`);
-        const layoutResponse = await ai.models.generateContent({
+        const layoutResponse = await generateContentWithRetry(ai, {
           model,
           contents: [
             {
@@ -85,15 +107,31 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!layoutText) {
-      throw lastError || new Error("Failed to analyze layout with all Gemini models.");
-    }
-
     let coords;
-    try {
-      coords = JSON.parse(layoutText);
-    } catch (e) {
-      throw new Error(`Failed to parse layout JSON: ${layoutText}`);
+    let usedFallback = false;
+
+    if (!layoutText) {
+      console.warn("[Crop API] Failed to analyze layout with all Gemini models. Using default crop fallback.");
+      usedFallback = true;
+      coords = {
+        x1: Math.round(width * 0.10),
+        y1: Math.round(height * 0.10),
+        x2: Math.round(width * 0.90),
+        y2: Math.round(height * 0.58)
+      };
+    } else {
+      try {
+        coords = JSON.parse(layoutText);
+      } catch (e) {
+        console.warn(`[Crop API] Failed to parse layout JSON: "${layoutText}". Using default crop fallback.`);
+        usedFallback = true;
+        coords = {
+          x1: Math.round(width * 0.10),
+          y1: Math.round(height * 0.10),
+          x2: Math.round(width * 0.90),
+          y2: Math.round(height * 0.58)
+        };
+      }
     }
 
     let { x1, y1, x2, y2 } = coords;
@@ -102,8 +140,20 @@ export async function POST(request: Request) {
     x2 = Math.max(x1 + 1, Math.min(x2, width));
     y2 = Math.max(y1 + 1, Math.min(y2, height));
 
-    const cropWidth = x2 - x1;
-    const cropHeight = y2 - y1;
+    let cropWidth = x2 - x1;
+    let cropHeight = y2 - y1;
+
+    // Validate crop boundaries
+    if (cropWidth < 10 || cropHeight < 10) {
+      console.warn(`[Crop API] Crop area ${cropWidth}x${cropHeight} is too small. Using default crop fallback.`);
+      usedFallback = true;
+      x1 = Math.round(width * 0.10);
+      y1 = Math.round(height * 0.10);
+      x2 = Math.round(width * 0.90);
+      y2 = Math.round(height * 0.58);
+      cropWidth = x2 - x1;
+      cropHeight = y2 - y1;
+    }
 
     const croppedBuffer = await sharp(originalImageBuffer)
       .extract({ left: x1, top: y1, width: cropWidth, height: cropHeight })
@@ -114,7 +164,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       croppedImage: `data:image/png;base64,${croppedBase64}`,
-      coords: { x1, y1, x2, y2 }
+      coords: { x1, y1, x2, y2 },
+      usedFallback
     });
 
   } catch (error: any) {

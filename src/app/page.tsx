@@ -71,6 +71,7 @@ export default function Home() {
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
   const [usedAmbientFallback, setUsedAmbientFallback] = useState<boolean>(false);
   const [ambientFallbackReason, setAmbientFallbackReason] = useState<string>("");
+  const [usedCropFallback, setUsedCropFallback] = useState<boolean>(false);
   
   // Timer & active messages
   const [elapsedTime, setElapsedTime] = useState<number>(0);
@@ -103,6 +104,7 @@ export default function Home() {
       setResultImageUrl(null);
       setErrorMessage(null);
       setUsedAmbientFallback(false);
+      setUsedCropFallback(false);
       setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
       setElapsedTime(0);
       setActiveStepMessage("");
@@ -139,6 +141,7 @@ export default function Home() {
     setErrorMessage(null);
     setResultImageUrl(null);
     setUsedAmbientFallback(false);
+    setUsedCropFallback(false);
     setElapsedTime(0);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
 
@@ -164,7 +167,8 @@ export default function Home() {
         throw new Error(errData.error || "Failed to analyze and crop card artwork.");
       }
 
-      const { croppedImage } = await cropResponse.json();
+      const { croppedImage, usedFallback: cropFallback } = await cropResponse.json();
+      setUsedCropFallback(cropFallback || false);
       updateStepStatus("LAYOUT", "success");
       updateStepStatus("CROP", "success");
 
@@ -238,6 +242,7 @@ export default function Home() {
     setErrorMessage(null);
     setUsedAmbientFallback(false);
     setAmbientFallbackReason("");
+    setUsedCropFallback(false);
     setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
     setElapsedTime(0);
     setActiveStepMessage("");
@@ -519,13 +524,21 @@ export default function Home() {
                     </div>
 
                     {/* Fallback information badge */}
-                    {usedAmbientFallback && (
-                      <div className="mt-4 flex flex-col gap-1 px-3 py-2 rounded-lg border border-purple-500/20 bg-purple-500/5 text-purple-300 text-xs font-medium max-w-[320px]">
-                        <div className="flex items-center gap-2">
-                          <Info className="w-4 h-4 text-purple-400 shrink-0" />
-                          <span>Ambient Blur fallback used.</span>
-                        </div>
-                        {ambientFallbackReason && (
+                    {(usedAmbientFallback || usedCropFallback) && (
+                      <div className="mt-4 flex flex-col gap-1.5 px-3 py-2.5 rounded-lg border border-purple-500/20 bg-purple-500/5 text-purple-300 text-xs font-medium max-w-[320px]">
+                        {usedCropFallback && (
+                          <div className="flex items-center gap-2">
+                            <Info className="w-4 h-4 text-purple-400 shrink-0" />
+                            <span>Default layout boundaries used.</span>
+                          </div>
+                        )}
+                        {usedAmbientFallback && (
+                          <div className="flex items-center gap-2">
+                            <Info className="w-4 h-4 text-purple-400 shrink-0" />
+                            <span>Ambient Blur fallback used.</span>
+                          </div>
+                        )}
+                        {usedAmbientFallback && ambientFallbackReason && (
                           <span className="text-zinc-400 font-mono text-[10px] break-all mt-1 bg-black/40 p-1.5 rounded border border-zinc-800 max-h-[80px] overflow-y-auto w-full block">
                             {ambientFallbackReason}
                           </span>
