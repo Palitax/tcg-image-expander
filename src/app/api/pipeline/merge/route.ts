@@ -32,19 +32,45 @@ export async function POST(request: Request) {
     const bgWidth = bgMetadata.width || 1024;
     const bgHeight = bgMetadata.height || 1024;
 
-    // Scale original card to ~70% of background height for premium margins
-    const targetCardHeight = Math.round(bgHeight * 0.70);
-    const targetCardWidth = Math.round((width / height) * targetCardHeight);
+    const shadowPadding = 45;
+
+    // Scale original card to fit beautifully with margins
+    const maxScaleFactor = 0.75; // Card takes up at most 75% of background dimensions
+    let maxCardWidth = Math.round(bgWidth * maxScaleFactor) - shadowPadding * 2;
+    let maxCardHeight = Math.round(bgHeight * maxScaleFactor) - shadowPadding * 2;
+
+    // Ensure we don't end up with negative dimensions
+    maxCardWidth = Math.max(100, maxCardWidth);
+    maxCardHeight = Math.max(100, maxCardHeight);
+
+    const cardRatio = width / height;
+    let targetCardHeight = maxCardHeight;
+    let targetCardWidth = Math.round(targetCardHeight * cardRatio);
+
+    if (targetCardWidth > maxCardWidth) {
+      targetCardWidth = maxCardWidth;
+      targetCardHeight = Math.round(targetCardWidth / cardRatio);
+    }
+
+    let shadowWidth = targetCardWidth + shadowPadding * 2;
+    let shadowHeight = targetCardHeight + shadowPadding * 2;
+
+    // Hard constraint safety check: if shadow width/height is larger than background, scale down further
+    if (shadowWidth > bgWidth || shadowHeight > bgHeight) {
+      const scaleW = bgWidth / shadowWidth;
+      const scaleH = bgHeight / shadowHeight;
+      const scale = Math.min(scaleW, scaleH) * 0.95; // 5% extra safety margin
+
+      targetCardWidth = Math.max(50, Math.round(targetCardWidth * scale));
+      targetCardHeight = Math.max(50, Math.round(targetCardHeight * scale));
+      shadowWidth = targetCardWidth + shadowPadding * 2;
+      shadowHeight = targetCardHeight + shadowPadding * 2;
+    }
 
     const resizedCard = await sharp(originalImageBuffer)
       .resize(targetCardWidth, targetCardHeight)
       .png() // Force to PNG format
       .toBuffer();
-
-    // Create elegant drop shadow canvas
-    const shadowPadding = 45;
-    const shadowWidth = targetCardWidth + shadowPadding * 2;
-    const shadowHeight = targetCardHeight + shadowPadding * 2;
 
     const innerShadowInput = await sharp({
       create: {
