@@ -103,12 +103,13 @@ export async function POST(request: Request) {
                 mimeType: file.type || "image/png"
               }
             },
-            `The dimensions of the uploaded trading card image are ${width}x${height} pixels. Please identify two bounding boxes in these exact pixel coordinates:
+            `The dimensions of the uploaded trading card image are ${width}x${height} pixels. Please identify:
 1. "card": Bounding box coordinates (x1, y1, x2, y2) of the entire card itself (excluding outer backgrounds/margins/holder cases).
-2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card (excluding card frames, borders, text boxes, attribute symbols, play cost circles, and power numbers).`
+2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card.
+3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.`
           ],
           config: {
-            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the bounding box of the entire card itself, and 2) a clean rectangular illustration area inside the card that is completely free of text and numbers. Return ONLY a JSON object containing 'card' and 'illustration' properties matching the requested schema.",
+            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the bounding box of the entire card, 2) a clean rectangular illustration area inside the card, and 3) whether a 'SAMPLE' text watermark is overlaid on the card. Return ONLY a JSON object containing 'card', 'illustration', and 'hasSampleWatermark' properties matching the requested schema.",
             responseMimeType: "application/json",
             responseSchema: {
               type: "object",
@@ -132,9 +133,13 @@ export async function POST(request: Request) {
                     y2: { type: "integer", description: "Bottom-right Y coordinate of the clean illustration area" }
                   },
                   required: ["x1", "y1", "x2", "y2"]
+                },
+                hasSampleWatermark: {
+                  type: "boolean",
+                  description: "True if the large text watermark 'SAMPLE' is overlaid on the card illustration/layout, false otherwise"
                 }
               },
-              required: ["card", "illustration"]
+              required: ["card", "illustration", "hasSampleWatermark"]
             }
           }
         });
@@ -154,6 +159,7 @@ export async function POST(request: Request) {
 
     let cardCoords;
     let illustrationCoords;
+    let hasSampleWatermark = false;
     let usedFallback = false;
 
     if (layoutText) {
@@ -162,6 +168,7 @@ export async function POST(request: Request) {
         if (parsed.card && parsed.illustration) {
           cardCoords = parsed.card;
           illustrationCoords = parsed.illustration;
+          hasSampleWatermark = !!parsed.hasSampleWatermark;
           console.log("[Crop API] AI successfully detected layout:", parsed);
         } else {
           throw new Error("Missing card or illustration coordinates in model response.");
@@ -217,6 +224,83 @@ export async function POST(request: Request) {
       };
     }
 
+    let workingImageBuffer: any = originalImageBuffer;
+
+    if (hasSampleWatermark) {
+      console.log("[Crop API] Watermark 'SAMPLE' detected. Attempting to remove it...");
+      try {
+        const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
+        let cleanedBase64 = "";
+        let lastCleanError;
+
+        // Determine best aspect ratio for editing
+        let editAspectRatio = "3:4";
+        const ratio = width / height;
+        if (Math.abs(ratio - 1) < 0.15) {
+          editAspectRatio = "1:1";
+        } else if (Math.abs(ratio - (3/4)) < 0.15) {
+          editAspectRatio = "3:4";
+        } else if (Math.abs(ratio - (4/3)) < 0.15) {
+          editAspectRatio = "4:3";
+        } else if (Math.abs(ratio - (9/16)) < 0.15) {
+          editAspectRatio = "9:16";
+        } else if (Math.abs(ratio - (16/9)) < 0.15) {
+          editAspectRatio = "16:9";
+        }
+
+        for (const modelName of imageModels) {
+          try {
+            console.log(`[Crop API] Clean watermark using ${modelName}`);
+            const cleanResponse = await generateContentWithRetry(ai, {
+              model: modelName,
+              contents: [
+                {
+                  inlineData: {
+                    data: base64Image,
+                    mimeType: file.type || "image/png"
+                  }
+                },
+                "Please remove the large diagonal semi-transparent 'SAMPLE' watermark text from this card. Ensure that the card artwork, text, border, and numbers underneath are clean, fully visible, and seamlessly restored, with no watermark remaining."
+              ],
+              config: {
+                responseModalities: ["IMAGE"],
+                imageConfig: {
+                  aspectRatio: editAspectRatio
+                }
+              }
+            });
+
+            const parts = cleanResponse.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              if (part.inlineData?.data) {
+                cleanedBase64 = part.inlineData.data;
+                break;
+              }
+            }
+
+            if (cleanedBase64) {
+              const cleanedBuf = Buffer.from(cleanedBase64, "base64");
+              // Resize back to original image dimensions to maintain coordinate alignment
+              workingImageBuffer = await sharp(cleanedBuf)
+                .resize(width, height)
+                .toBuffer();
+              console.log(`[Crop API] Successfully removed watermark and resized back to original size (${width}x${height}) using ${modelName}`);
+              break;
+            }
+          } catch (e: any) {
+            console.warn(`[Crop API] Watermark removal failed with ${modelName}:`, e.message);
+            lastCleanError = e;
+          }
+        }
+
+        if (!cleanedBase64 && lastCleanError) {
+          console.warn("[Crop API] Watermark removal failed for all models. Falling back to original image.");
+        }
+      } catch (cleanError: any) {
+        console.warn("[Crop API] Error during watermark cleaning block:", cleanError.message);
+      }
+    }
+
     // Clamp coordinates relative to original image size
     let cx1 = Math.max(0, Math.min(Math.round(cardCoords.x1), width - 1));
     let cy1 = Math.max(0, Math.min(Math.round(cardCoords.y1), height - 1));
@@ -248,7 +332,7 @@ export async function POST(request: Request) {
     let cardResizeHeight = Math.min(800, cardHeight);
     let cardResizeWidth = Math.round((cardWidth / cardHeight) * cardResizeHeight);
 
-    const cardBuffer = await sharp(originalImageBuffer)
+    const cardBuffer = await sharp(workingImageBuffer)
       .extract({ left: cx1, top: cy1, width: cardWidth, height: cardHeight })
       .resize(cardResizeWidth, cardResizeHeight)
       .png({ compressionLevel: 7 })
@@ -271,7 +355,7 @@ export async function POST(request: Request) {
     const trimmedCardBase64 = roundedCardBuffer.toString("base64");
 
     // Crop the inner illustration (for outpainting input), resizing to max 512px and compressing as JPEG
-    const croppedBuffer = await sharp(originalImageBuffer)
+    const croppedBuffer = await sharp(workingImageBuffer)
       .extract({ left: ix1, top: iy1, width: cropWidth, height: cropHeight })
       .resize(512, 512, { fit: "inside" })
       .jpeg({ quality: 85 })
