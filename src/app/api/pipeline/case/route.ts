@@ -100,26 +100,9 @@ export async function POST(request: Request) {
     const shadowWidth = targetCaseWidth + shadowPadding * 2;
     const shadowHeight = targetCaseHeight + shadowPadding * 2;
 
-    const caseShadowMask = Buffer.from(
-      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}">
-         <rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="white"/>
-       </svg>`
+    const caseShadowSvg = Buffer.from(
+      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.35"/></svg>`
     );
-
-    const innerShadowInput = await sharp({
-      create: {
-        width: targetCaseWidth,
-        height: targetCaseHeight,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0.4 } // 40% shadow opacity
-      }
-    })
-    .composite([{
-      input: caseShadowMask,
-      blend: 'dest-in'
-    }])
-    .png()
-    .toBuffer();
 
     const caseShadow = await sharp({
       create: {
@@ -131,7 +114,7 @@ export async function POST(request: Request) {
     })
     .composite([
       {
-        input: innerShadowInput,
+        input: caseShadowSvg,
         top: shadowPadding,
         left: shadowPadding
       }
