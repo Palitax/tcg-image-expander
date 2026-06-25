@@ -10,6 +10,7 @@ export interface SavedArtwork {
   backgroundUrl?: string;
   aspectRatio: string;
   timestamp: number;
+  isCase?: boolean;
 }
 
 export function initDB(): Promise<IDBDatabase> {

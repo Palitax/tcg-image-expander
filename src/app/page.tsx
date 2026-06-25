@@ -218,6 +218,7 @@ export default function Home() {
   // Case components for split download
   const [caseWithCardUrl, setCaseWithCardUrl] = useState<string | null>(null);
   const [caseBgResultUrl, setCaseBgResultUrl] = useState<string | null>(null);
+  const [isCaseOverlayLoaded, setIsCaseOverlayLoaded] = useState<boolean>(false);
 
   // Dropdown states for downloads
   const [isGenDownloadOpen, setIsGenDownloadOpen] = useState<boolean>(false);
@@ -561,11 +562,11 @@ export default function Home() {
     let imageUrl = targetUrl;
     let originalCardUrl = 
       saveTarget === "generate" ? (trimmedCard || undefined) : 
-      saveTarget === "case" ? (caseCardImage || undefined) : 
+      saveTarget === "case" ? (caseWithCardUrl || caseCardImage || undefined) : 
       undefined;
     let backgroundUrl = 
       saveTarget === "generate" ? (backgroundImageUrl || undefined) : 
-      saveTarget === "case" ? (caseBgImage || undefined) : 
+      saveTarget === "case" ? (caseBgResultUrl || caseBgImage || undefined) : 
       undefined;
 
     const timestamp = Date.now();
@@ -577,7 +578,8 @@ export default function Home() {
           imageUrl = await uploadBase64ToSupabase(imageUrl, `spaces/${currentSpace.id}/${artId}/final.png`);
         }
         if (originalCardUrl && originalCardUrl.startsWith("data:image/")) {
-          originalCardUrl = await uploadBase64ToSupabase(originalCardUrl, `spaces/${currentSpace.id}/${artId}/card.png`);
+          const filename = saveTarget === "case" ? "case_with_card.png" : "card.png";
+          originalCardUrl = await uploadBase64ToSupabase(originalCardUrl, `spaces/${currentSpace.id}/${artId}/${filename}`);
         }
         if (backgroundUrl && backgroundUrl.startsWith("data:image/")) {
           backgroundUrl = await uploadBase64ToSupabase(backgroundUrl, `spaces/${currentSpace.id}/${artId}/bg.png`);
@@ -613,7 +615,8 @@ export default function Home() {
         originalCardUrl: originalCardUrl,
         backgroundUrl: backgroundUrl,
         aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
-        timestamp: timestamp
+        timestamp: timestamp,
+        isCase: saveTarget === "case"
       };
 
       try {
@@ -632,7 +635,8 @@ export default function Home() {
       originalCardUrl: originalCardUrl,
       backgroundUrl: backgroundUrl,
       aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
-      timestamp: timestamp
+      timestamp: timestamp,
+      isCase: saveTarget === "case"
     };
 
     const updated = [newArtworkRecord, ...savedArtworks];
@@ -695,18 +699,32 @@ export default function Home() {
     if (!art) return;
     
     setSelectedArtworkId(id);
-    setCaseResultUrl(null);
-    setCaseWithCardUrl(null);
-    setCaseBgResultUrl(null);
     setCaseErrorMessage(null);
     
-    if (art.originalCardUrl && art.backgroundUrl) {
-      setCaseCardImage(art.originalCardUrl);
-      setCaseBgImage(art.backgroundUrl);
+    // Check if this artwork is a saved Case showcase
+    const isSavedCase = art.isCase || !!(art.originalCardUrl && (art.originalCardUrl.includes("case_with_card") || art.originalCardUrl.includes("/case_with_card")));
+    
+    if (isSavedCase) {
+      setCaseResultUrl(art.imageUrl);
+      setCaseWithCardUrl(art.originalCardUrl || null);
+      setCaseBgResultUrl(art.backgroundUrl || null);
+      setCaseCardImage(art.originalCardUrl || null);
+      setCaseBgImage(art.backgroundUrl || null);
+      setIsCaseOverlayLoaded(true);
     } else {
-      // Use the final composite / uploaded image as the card, and use an ambient background
-      setCaseCardImage(art.imageUrl);
-      setCaseBgImage("ambient");
+      setCaseResultUrl(null);
+      setCaseWithCardUrl(null);
+      setCaseBgResultUrl(null);
+      setIsCaseOverlayLoaded(false);
+      
+      if (art.originalCardUrl && art.backgroundUrl) {
+        setCaseCardImage(art.originalCardUrl);
+        setCaseBgImage(art.backgroundUrl);
+      } else {
+        // Use the final composite / uploaded image as the card, and use an ambient background
+        setCaseCardImage(art.imageUrl);
+        setCaseBgImage("ambient");
+      }
     }
   };
 
@@ -724,7 +742,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cardImage: caseCardImage,
-          backgroundImage: caseBgImage === "ambient" ? null : caseBgImage
+          backgroundImage: caseBgImage === "ambient" ? null : caseBgImage,
+          isCaseOverlay: isCaseOverlayLoaded
         })
       });
 
@@ -1021,6 +1040,7 @@ export default function Home() {
     setCaseResultUrl(null);
     setCaseWithCardUrl(null);
     setCaseBgResultUrl(null);
+    setIsCaseOverlayLoaded(false);
     setCaseErrorMessage(null);
   };
 

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const { cardImage, backgroundImage } = await request.json();
+    const { cardImage, backgroundImage, isCaseOverlay } = await request.json();
 
     if (!cardImage) {
       return NextResponse.json(
@@ -61,16 +61,6 @@ export async function POST(request: Request) {
         .toBuffer();
     }
 
-    // Load transparent case template from public directory
-    const casePath = path.join(process.cwd(), "public", "card-case-transparent.png");
-    if (!fs.existsSync(casePath)) {
-      return NextResponse.json(
-        { error: "Transparent case asset not found on the server. Please run the generation script first." },
-        { status: 500 }
-      );
-    }
-    const caseTemplateBuffer = fs.readFileSync(casePath);
-
     // Get background dimensions
     const bgMetadata = await sharp(backgroundBuffer).metadata();
     const bgWidth = bgMetadata.width || 1024;
@@ -96,41 +86,62 @@ export async function POST(request: Request) {
     const targetSlotWidth = Math.round(411 * scale);
     const targetSlotHeight = Math.round(579 * scale);
 
-    // Resize case and card
-    const resizedCase = await sharp(caseTemplateBuffer)
-      .resize(targetCaseWidth, targetCaseHeight)
+    let caseWithCardBuffer: Buffer;
+
+    if (isCaseOverlay) {
+      // The input cardImage is already the transparent case-with-card overlay.
+      // We just resize it to fit the background size nicely.
+      caseWithCardBuffer = await sharp(cardBuffer)
+        .resize(targetCaseWidth, targetCaseHeight)
+        .png()
+        .toBuffer();
+    } else {
+      // Load transparent case template from public directory
+      const casePath = path.join(process.cwd(), "public", "card-case-transparent.png");
+      if (!fs.existsSync(casePath)) {
+        return NextResponse.json(
+          { error: "Transparent case asset not found on the server. Please run the generation script first." },
+          { status: 500 }
+        );
+      }
+      const caseTemplateBuffer = fs.readFileSync(casePath);
+
+      // Resize case and card
+      const resizedCase = await sharp(caseTemplateBuffer)
+        .resize(targetCaseWidth, targetCaseHeight)
+        .png()
+        .toBuffer();
+
+      const resizedCard = await sharp(cardBuffer)
+        .resize(targetSlotWidth, targetSlotHeight, { fit: "fill" })
+        .png()
+        .toBuffer();
+
+      // Composite card inside case
+      // Create transparent overlay canvas
+      caseWithCardBuffer = await sharp({
+        create: {
+          width: targetCaseWidth,
+          height: targetCaseHeight,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 }
+        }
+      })
+      .composite([
+        {
+          input: resizedCard,
+          top: targetSlotTop,
+          left: targetSlotLeft
+        },
+        {
+          input: resizedCase,
+          top: 0,
+          left: 0
+        }
+      ])
       .png()
       .toBuffer();
-
-    const resizedCard = await sharp(cardBuffer)
-      .resize(targetSlotWidth, targetSlotHeight, { fit: "fill" })
-      .png()
-      .toBuffer();
-
-    // Composite card inside case
-    // Create transparent overlay canvas
-    const caseWithCardBuffer = await sharp({
-      create: {
-        width: targetCaseWidth,
-        height: targetCaseHeight,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
-      }
-    })
-    .composite([
-      {
-        input: resizedCard,
-        top: targetSlotTop,
-        left: targetSlotLeft
-      },
-      {
-        input: resizedCase,
-        top: 0,
-        left: 0
-      }
-    ])
-    .png()
-    .toBuffer();
+    }
 
     // Center the final composite on the outpainted background
     const finalTop = Math.round((bgHeight - targetCaseHeight) / 2);
