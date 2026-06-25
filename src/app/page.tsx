@@ -2073,16 +2073,21 @@ export default function Home() {
                                     onClick={() => {
                                       setIsCaseDownloadOpen(false);
                                       const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
-                                      // 1. Download background
-                                      triggerDownload(caseBgResultUrl, `Slab_${nameBase}_background.png`);
-                                      // 2. Download case with card
-                                      setTimeout(() => {
-                                        triggerDownload(caseWithCardUrl, `Slab_${nameBase}_case_with_card.png`);
-                                      }, 250);
-                                      // 3. Download only card
-                                      setTimeout(() => {
-                                        triggerDownload(caseCardImage, `Slab_${nameBase}_card.png`);
-                                      }, 500);
+                                      const cardImg = caseCardImage;
+                                      const bgImg = caseBgResultUrl;
+                                      const caseImg = caseWithCardUrl;
+                                      if (cardImg && bgImg && caseImg) {
+                                        // 1. Download background
+                                        triggerDownload(bgImg, `Slab_${nameBase}_background.png`);
+                                        // 2. Download case with card
+                                        setTimeout(() => {
+                                          triggerDownload(caseImg, `Slab_${nameBase}_case_with_card.png`);
+                                        }, 250);
+                                        // 3. Download only card
+                                        setTimeout(() => {
+                                          triggerDownload(cardImg, `Slab_${nameBase}_card.png`);
+                                        }, 500);
+                                      }
                                     }}
                                     className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                   >
@@ -2327,20 +2332,22 @@ export default function Home() {
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
                                     const targetCardUrl = art.cardOnlyUrl || art.originalCardUrl;
-                                    // 1. Download background
-                                    triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
-                                    // 2. Download case with card
-                                    setTimeout(() => {
-                                      triggerDownload(art.originalCardUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_case_with_card.png`);
-                                    }, 250);
-                                    // 3. Download only card
-                                    setTimeout(() => {
-                                      triggerDownload(
-                                        targetCardUrl,
-                                        `TCG_${art.name.replace(/\s+/g, "_")}_card_only.png`,
-                                        art.originalCardUrl
-                                      );
-                                    }, 500);
+                                    if (targetCardUrl) {
+                                      // 1. Download background
+                                      triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
+                                      // 2. Download case with card
+                                      setTimeout(() => {
+                                        triggerDownload(art.originalCardUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_case_with_card.png`);
+                                      }, 250);
+                                      // 3. Download only card
+                                      setTimeout(() => {
+                                        triggerDownload(
+                                          targetCardUrl,
+                                          `TCG_${art.name.replace(/\s+/g, "_")}_card_only.png`,
+                                          art.originalCardUrl
+                                        );
+                                      }, 500);
+                                    }
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                 >
