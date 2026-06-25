@@ -79,8 +79,8 @@ export async function POST(request: Request) {
     const origCaseWidth = 681;
     const origCaseHeight = 1024;
 
-    // Scale case to fit beautifully in the background (max 85% of background height/width)
-    const paddingMultiplier = 0.85;
+    // Scale case to fit beautifully in the background (max 82% of background height/width to leave room for shadow)
+    const paddingMultiplier = 0.82;
     const maxCaseWidth = Math.round(bgWidth * paddingMultiplier);
     const maxCaseHeight = Math.round(bgHeight * paddingMultiplier);
 
@@ -131,14 +131,57 @@ export async function POST(request: Request) {
     .png()
     .toBuffer();
 
-    // Center the final composite on the outpainted background
-    const finalTop = Math.round((bgHeight - targetCaseHeight) / 2);
-    const finalLeft = Math.round((bgWidth - targetCaseWidth) / 2);
+    // Create a realistic contact shadow (ellipse centered at the bottom of the case)
+    const shadowPadding = 40; // padding to allow blur falloff at the bottom/sides
+    const shadowWidth = targetCaseWidth + shadowPadding * 2;
+    const shadowHeight = targetCaseHeight + shadowPadding * 2;
+
+    // The ellipse is centered horizontally, and sits right at the bottom edge of the case
+    // Horizontal center: shadowWidth / 2
+    // Vertical center: shadowPadding + targetCaseHeight (bottom of the card case)
+    const shadowSvg = Buffer.from(
+      `<svg width="${shadowWidth}" height="${shadowHeight}"><ellipse cx="${shadowWidth / 2}" cy="${shadowPadding + targetCaseHeight}" rx="${targetCaseWidth * 0.46}" ry="8" fill="black" fill-opacity="0.55"/></svg>`
+    );
+
+    const caseShadow = await sharp({
+      create: {
+        width: shadowWidth,
+        height: shadowHeight,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      }
+    })
+    .composite([
+      {
+        input: shadowSvg,
+        top: 0,
+        left: 0
+      }
+    ])
+    .blur(12) // soft Gaussian blur (12px) for realistic contact shadow dispersion
+    .png()
+    .toBuffer();
+
+    // Composite the case+card on top of the shadow
+    const caseWithShadow = await sharp(caseShadow)
+      .composite([
+        {
+          input: caseWithCardBuffer,
+          top: shadowPadding,
+          left: shadowPadding
+        }
+      ])
+      .png()
+      .toBuffer();
+
+    // Center the final composite with shadow on the outpainted background
+    const finalTop = Math.round((bgHeight - shadowHeight) / 2);
+    const finalLeft = Math.round((bgWidth - shadowWidth) / 2);
 
     const finalResultBuffer = await sharp(backgroundBuffer)
       .composite([
         {
-          input: caseWithCardBuffer,
+          input: caseWithShadow,
           top: finalTop,
           left: finalLeft
         }
