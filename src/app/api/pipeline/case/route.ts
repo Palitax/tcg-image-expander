@@ -50,6 +50,7 @@ export async function POST(request: Request) {
       // Apply a light blur (2px) to distinguish the foreground case/card from the background
       backgroundBuffer = await sharp(backgroundBuffer)
         .blur(2)
+        .png()
         .toBuffer();
     } else {
       // Generate a blurred background from the card itself (ambient background)
@@ -147,9 +148,13 @@ export async function POST(request: Request) {
       .toBuffer();
 
     const finalBase64 = finalResultBuffer.toString("base64");
+    const caseWithCardBase64 = caseWithCardBuffer.toString("base64");
+    const bgBase64 = backgroundBuffer.toString("base64");
 
     return NextResponse.json({
-      resultImageUrl: `data:image/png;base64,${finalBase64}`
+      resultImageUrl: `data:image/png;base64,${finalBase64}`,
+      caseWithCardUrl: `data:image/png;base64,${caseWithCardBase64}`,
+      backgroundImageUrl: `data:image/png;base64,${bgBase64}`
     });
 
   } catch (error) {

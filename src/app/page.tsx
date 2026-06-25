@@ -18,7 +18,8 @@ import {
   Search,
   Trash2,
   Pencil,
-  X
+  X,
+  ChevronDown
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -172,6 +173,15 @@ export default function Home() {
   const [caseResultUrl, setCaseResultUrl] = useState<string | null>(null);
   const [isCaseProcessing, setIsCaseProcessing] = useState<boolean>(false);
   const [caseErrorMessage, setCaseErrorMessage] = useState<string | null>(null);
+
+  // Case components for split download
+  const [caseWithCardUrl, setCaseWithCardUrl] = useState<string | null>(null);
+  const [caseBgResultUrl, setCaseBgResultUrl] = useState<string | null>(null);
+
+  // Dropdown states for downloads
+  const [isGenDownloadOpen, setIsGenDownloadOpen] = useState<boolean>(false);
+  const [isCaseDownloadOpen, setIsCaseDownloadOpen] = useState<boolean>(false);
+  const [openLibraryDownloadId, setOpenLibraryDownloadId] = useState<string | null>(null);
 
   // Lightbox larger view state
   const [lightboxImage, setLightboxImage] = useState<{ url: string; title: string } | null>(null);
@@ -645,6 +655,8 @@ export default function Home() {
     
     setSelectedArtworkId(id);
     setCaseResultUrl(null);
+    setCaseWithCardUrl(null);
+    setCaseBgResultUrl(null);
     setCaseErrorMessage(null);
     
     if (art.originalCardUrl && art.backgroundUrl) {
@@ -662,6 +674,8 @@ export default function Home() {
     setIsCaseProcessing(true);
     setCaseErrorMessage(null);
     setCaseResultUrl(null);
+    setCaseWithCardUrl(null);
+    setCaseBgResultUrl(null);
 
     try {
       const response = await fetch("/api/pipeline/case", {
@@ -673,11 +687,17 @@ export default function Home() {
         })
       });
 
-      const { resultImageUrl } = await parseResponseData(
+      const { 
+        resultImageUrl, 
+        caseWithCardUrl: newCaseWithCardUrl, 
+        backgroundImageUrl: newCaseBgResultUrl 
+      } = await parseResponseData(
         response,
         "Failed to generate case showcase."
       );
       setCaseResultUrl(resultImageUrl);
+      setCaseWithCardUrl(newCaseWithCardUrl || null);
+      setCaseBgResultUrl(newCaseBgResultUrl || null);
     } catch (err) {
       const message = getErrorMessage(err);
       console.error("Case generation error:", err);
@@ -958,6 +978,8 @@ export default function Home() {
     setCaseCardImage(null);
     setCaseBgImage(null);
     setCaseResultUrl(null);
+    setCaseWithCardUrl(null);
+    setCaseBgResultUrl(null);
     setCaseErrorMessage(null);
   };
 
@@ -1479,14 +1501,82 @@ export default function Home() {
                     
                     <div className="mt-6 flex flex-col gap-3 w-full max-w-[340px]">
                       <div className="flex flex-col sm:flex-row gap-3 w-full">
-                        <a
-                          href={resultImageUrl}
-                          download={`TCG_${file?.name || "expanded"}`}
-                          className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
-                        >
-                          <Download className="w-4 h-4" />
-                          Download
-                        </a>
+                        <div className="flex-1 relative">
+                          <div className="flex rounded-xl bg-zinc-900 border border-zinc-700 divide-x divide-zinc-800 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)] overflow-hidden">
+                            <a
+                              href={resultImageUrl}
+                              download={`TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`}
+                              className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
+                            >
+                              <Download className="w-4 h-4" />
+                              Download
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => setIsGenDownloadOpen(!isGenDownloadOpen)}
+                              className="px-3 hover:bg-zinc-800 text-white flex items-center justify-center transition-all"
+                              aria-haspopup="true"
+                              aria-expanded={isGenDownloadOpen}
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                          </div>
+                          
+                          {isGenDownloadOpen && (
+                            <>
+                              <div 
+                                className="fixed inset-0 z-20" 
+                                onClick={() => setIsGenDownloadOpen(false)} 
+                              />
+                              <div className="absolute right-0 bottom-full mb-2 w-56 rounded-xl border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1.5 shadow-2xl z-30 flex flex-col gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsGenDownloadOpen(false);
+                                    const link = document.createElement("a");
+                                    link.href = resultImageUrl;
+                                    link.download = `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`;
+                                    link.click();
+                                  }}
+                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
+                                >
+                                  <Layers className="w-4 h-4 text-purple-400" />
+                                  <span>Merged Card (Single Image)</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsGenDownloadOpen(false);
+                                    const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
+                                    // Download background
+                                    if (backgroundImageUrl) {
+                                      const link1 = document.createElement("a");
+                                      link1.href = backgroundImageUrl;
+                                      link1.download = `TCG_${nameBase}_background.png`;
+                                      link1.click();
+                                    }
+                                    // Download card
+                                    setTimeout(() => {
+                                      const cardUrl = trimmedCard || previewUrl;
+                                      if (cardUrl) {
+                                        const link2 = document.createElement("a");
+                                        link2.href = cardUrl;
+                                        link2.download = `TCG_${nameBase}_card.png`;
+                                        link2.click();
+                                      }
+                                    }, 250);
+                                  }}
+                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                >
+                                  <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                                    <span className="text-[10px] font-bold text-indigo-400">2x</span>
+                                  </div>
+                                  <span>Split Components (BG + Card)</span>
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => {
@@ -1731,14 +1821,81 @@ export default function Home() {
                       </div>
                       
                       <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
-                        <a
-                          href={caseResultUrl}
-                          download={`Slab_${selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase"}.png`}
-                          className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
-                        >
-                          <Download className="w-4 h-4" />
-                          Download
-                        </a>
+                        <div className="flex-1 relative">
+                          <div className="flex rounded-xl bg-zinc-900 border border-zinc-700 divide-x divide-zinc-800 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)] overflow-hidden">
+                            <a
+                              href={caseResultUrl}
+                              download={`Slab_${selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase"}.png`}
+                              className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
+                            >
+                              <Download className="w-4 h-4" />
+                              Download
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => setIsCaseDownloadOpen(!isCaseDownloadOpen)}
+                              className="px-3 hover:bg-zinc-800 text-white flex items-center justify-center transition-all"
+                              aria-haspopup="true"
+                              aria-expanded={isCaseDownloadOpen}
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                          </div>
+                          
+                          {isCaseDownloadOpen && (
+                            <>
+                              <div 
+                                className="fixed inset-0 z-20" 
+                                onClick={() => setIsCaseDownloadOpen(false)} 
+                              />
+                              <div className="absolute right-0 bottom-full mb-2 w-56 rounded-xl border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1.5 shadow-2xl z-30 flex flex-col gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsCaseDownloadOpen(false);
+                                    const link = document.createElement("a");
+                                    link.href = caseResultUrl;
+                                    link.download = `Slab_${selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase"}.png`;
+                                    link.click();
+                                  }}
+                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
+                                >
+                                  <Layers className="w-4 h-4 text-purple-400" />
+                                  <span>Merged Showcase (Single Image)</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsCaseDownloadOpen(false);
+                                    const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
+                                    // Download background
+                                    if (caseBgResultUrl) {
+                                      const link1 = document.createElement("a");
+                                      link1.href = caseBgResultUrl;
+                                      link1.download = `Slab_${nameBase}_background.png`;
+                                      link1.click();
+                                    }
+                                    // Download case with card
+                                    setTimeout(() => {
+                                      if (caseWithCardUrl) {
+                                        const link2 = document.createElement("a");
+                                        link2.href = caseWithCardUrl;
+                                        link2.download = `Slab_${nameBase}_case_with_card.png`;
+                                        link2.click();
+                                      }
+                                    }, 250);
+                                  }}
+                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                >
+                                  <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                                    <span className="text-[10px] font-bold text-indigo-400">2x</span>
+                                  </div>
+                                  <span>Split Components (BG + Case)</span>
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => {
@@ -1881,14 +2038,79 @@ export default function Home() {
                     </p>
 
                     <div className="flex gap-2 mt-auto pt-2 border-t border-zinc-850/50">
-                      <a
-                        href={art.imageUrl}
-                        download={`TCG_${art.name}`}
-                        className="flex-1 py-2 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Download
-                      </a>
+                      <div className="flex-1 relative">
+                        <div className="flex rounded-lg bg-zinc-800 border border-zinc-700 divide-x divide-zinc-750 transition-all overflow-hidden">
+                          <a
+                            href={art.imageUrl}
+                            download={`TCG_${art.name.replace(/\s+/g, "_")}.png`}
+                            className="flex-1 py-2 px-3 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => setOpenLibraryDownloadId(openLibraryDownloadId === art.id ? null : art.id)}
+                            className="px-2 hover:bg-zinc-700 text-white flex items-center justify-center transition-all"
+                            aria-haspopup="true"
+                            aria-expanded={openLibraryDownloadId === art.id}
+                          >
+                            <ChevronDown className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        {openLibraryDownloadId === art.id && (
+                          <>
+                            <div 
+                              className="fixed inset-0 z-20" 
+                              onClick={() => setOpenLibraryDownloadId(null)} 
+                            />
+                            <div className="absolute right-0 bottom-full mb-1.5 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenLibraryDownloadId(null);
+                                  const link = document.createElement("a");
+                                  link.href = art.imageUrl;
+                                  link.download = `TCG_${art.name.replace(/\s+/g, "_")}.png`;
+                                  link.click();
+                                }}
+                                className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
+                              >
+                                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                                <span>Merged Card</span>
+                              </button>
+                              {art.backgroundUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenLibraryDownloadId(null);
+                                    // Download background
+                                    const link1 = document.createElement("a");
+                                    link1.href = art.backgroundUrl!;
+                                    link1.download = `TCG_${art.name.replace(/\s+/g, "_")}_background.png`;
+                                    link1.click();
+                                    // Download card
+                                    setTimeout(() => {
+                                      const cardUrl = art.originalCardUrl || art.imageUrl;
+                                      const link2 = document.createElement("a");
+                                      link2.href = cardUrl;
+                                      link2.download = `TCG_${art.name.replace(/\s+/g, "_")}_card.png`;
+                                      link2.click();
+                                    }, 250);
+                                  }}
+                                  className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                >
+                                  <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
+                                    <span className="text-[9px] font-bold text-indigo-400">2x</span>
+                                  </div>
+                                  <span>Split BG & Card</span>
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
