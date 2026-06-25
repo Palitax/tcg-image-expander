@@ -124,13 +124,26 @@ const getErrorMessage = (err: unknown): string => {
   return String(err);
 };
 
-const triggerDownload = async (url: string, filename: string) => {
+const triggerDownload = async (url: string, filename: string, fallbackUrl?: string): Promise<void> => {
   try {
     // If it is already a base64 data URL, we can download it directly
     if (url.startsWith("data:")) {
+      const mimeMatch = url.match(/^data:([^;]+);/);
+      let adjustedFilename = filename;
+      if (mimeMatch) {
+        const mimeType = mimeMatch[1];
+        let ext = "";
+        if (mimeType === "image/webp") ext = "webp";
+        else if (mimeType === "image/png") ext = "png";
+        else if (mimeType === "image/jpeg" || mimeType === "image/jpg") ext = "jpg";
+        
+        if (ext) {
+          adjustedFilename = filename.replace(/\.[^/.]+$/, "") + "." + ext;
+        }
+      }
       const link = document.createElement("a");
       link.href = url;
-      link.download = filename;
+      link.download = adjustedFilename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -140,12 +153,26 @@ const triggerDownload = async (url: string, filename: string) => {
     // For external URLs (like Supabase storage), fetch the file as a Blob 
     // to bypass browser cross-origin download blocks and force standard saving
     const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
     const blob = await response.blob();
+    const mimeType = blob.type;
+    let adjustedFilename = filename;
+    let ext = "";
+    if (mimeType === "image/webp") ext = "webp";
+    else if (mimeType === "image/png") ext = "png";
+    else if (mimeType === "image/jpeg" || mimeType === "image/jpg") ext = "jpg";
+    
+    if (ext) {
+      adjustedFilename = filename.replace(/\.[^/.]+$/, "") + "." + ext;
+    }
+
     const objectUrl = URL.createObjectURL(blob);
 
     const link = document.createElement("a");
     link.href = objectUrl;
-    link.download = filename;
+    link.download = adjustedFilename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -154,6 +181,11 @@ const triggerDownload = async (url: string, filename: string) => {
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   } catch (error) {
     console.error("Failed to download file:", error);
+    if (fallbackUrl) {
+      console.log("Attempting download with fallback URL:", fallbackUrl);
+      return triggerDownload(fallbackUrl, filename);
+    }
+    
     // Fallback: open in new window if download block cannot be bypassed
     const link = document.createElement("a");
     link.href = url;
@@ -2230,7 +2262,11 @@ export default function Home() {
                                     const targetCardUrl = art.isCase ? (art.cardOnlyUrl || art.originalCardUrl) : art.originalCardUrl;
                                     if (targetCardUrl) {
                                       const suffix = art.isCase ? "card_only" : "card";
-                                      triggerDownload(targetCardUrl, `TCG_${art.name.replace(/\s+/g, "_")}_${suffix}.png`);
+                                      triggerDownload(
+                                        targetCardUrl, 
+                                        `TCG_${art.name.replace(/\s+/g, "_")}_${suffix}.png`,
+                                        art.isCase ? art.originalCardUrl : undefined
+                                      );
                                     }
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
