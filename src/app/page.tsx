@@ -124,6 +124,47 @@ const getErrorMessage = (err: unknown): string => {
   return String(err);
 };
 
+const triggerDownload = async (url: string, filename: string) => {
+  try {
+    // If it is already a base64 data URL, we can download it directly
+    if (url.startsWith("data:")) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
+    // For external URLs (like Supabase storage), fetch the file as a Blob 
+    // to bypass browser cross-origin download blocks and force standard saving
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Clean up local reference after download triggers
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    console.error("Failed to download file:", error);
+    // Fallback: open in new window if download block cannot be bypassed
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+};
+
 // SavedArtwork interface is imported from @/utils/db
 
 export default function Home() {
@@ -1503,14 +1544,21 @@ export default function Home() {
                       <div className="flex flex-col sm:flex-row gap-3 w-full">
                         <div className="flex-1 relative">
                           <div className="flex rounded-xl bg-zinc-900 border border-zinc-700 divide-x divide-zinc-800 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)] overflow-hidden">
-                            <a
-                              href={resultImageUrl}
-                              download={`TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (resultImageUrl) {
+                                  triggerDownload(
+                                    resultImageUrl,
+                                    `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
+                                  );
+                                }
+                              }}
                               className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
                             >
                               <Download className="w-4 h-4" />
                               Download
-                            </a>
+                            </button>
                             <button
                               type="button"
                               onClick={() => setIsGenDownloadOpen(!isGenDownloadOpen)}
@@ -1533,10 +1581,12 @@ export default function Home() {
                                   type="button"
                                   onClick={() => {
                                     setIsGenDownloadOpen(false);
-                                    const link = document.createElement("a");
-                                    link.href = resultImageUrl;
-                                    link.download = `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`;
-                                    link.click();
+                                    if (resultImageUrl) {
+                                      triggerDownload(
+                                        resultImageUrl,
+                                        `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
+                                      );
+                                    }
                                   }}
                                   className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                                 >
@@ -1550,19 +1600,13 @@ export default function Home() {
                                     const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
                                     // Download background
                                     if (backgroundImageUrl) {
-                                      const link1 = document.createElement("a");
-                                      link1.href = backgroundImageUrl;
-                                      link1.download = `TCG_${nameBase}_background.png`;
-                                      link1.click();
+                                      triggerDownload(backgroundImageUrl, `TCG_${nameBase}_background.png`);
                                     }
                                     // Download card
                                     setTimeout(() => {
                                       const cardUrl = trimmedCard || previewUrl;
                                       if (cardUrl) {
-                                        const link2 = document.createElement("a");
-                                        link2.href = cardUrl;
-                                        link2.download = `TCG_${nameBase}_card.png`;
-                                        link2.click();
+                                        triggerDownload(cardUrl, `TCG_${nameBase}_card.png`);
                                       }
                                     }, 250);
                                   }}
@@ -1823,14 +1867,19 @@ export default function Home() {
                       <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
                         <div className="flex-1 relative">
                           <div className="flex rounded-xl bg-zinc-900 border border-zinc-700 divide-x divide-zinc-800 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)] overflow-hidden">
-                            <a
-                              href={caseResultUrl}
-                              download={`Slab_${selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase"}.png`}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (caseResultUrl) {
+                                  const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
+                                  triggerDownload(caseResultUrl, `Slab_${nameBase}.png`);
+                                }
+                              }}
                               className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
                             >
                               <Download className="w-4 h-4" />
                               Download
-                            </a>
+                            </button>
                             <button
                               type="button"
                               onClick={() => setIsCaseDownloadOpen(!isCaseDownloadOpen)}
@@ -1853,10 +1902,10 @@ export default function Home() {
                                   type="button"
                                   onClick={() => {
                                     setIsCaseDownloadOpen(false);
-                                    const link = document.createElement("a");
-                                    link.href = caseResultUrl;
-                                    link.download = `Slab_${selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase"}.png`;
-                                    link.click();
+                                    if (caseResultUrl) {
+                                      const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
+                                      triggerDownload(caseResultUrl, `Slab_${nameBase}.png`);
+                                    }
                                   }}
                                   className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                                 >
@@ -1870,18 +1919,12 @@ export default function Home() {
                                     const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
                                     // Download background
                                     if (caseBgResultUrl) {
-                                      const link1 = document.createElement("a");
-                                      link1.href = caseBgResultUrl;
-                                      link1.download = `Slab_${nameBase}_background.png`;
-                                      link1.click();
+                                      triggerDownload(caseBgResultUrl, `Slab_${nameBase}_background.png`);
                                     }
                                     // Download case with card
                                     setTimeout(() => {
                                       if (caseWithCardUrl) {
-                                        const link2 = document.createElement("a");
-                                        link2.href = caseWithCardUrl;
-                                        link2.download = `Slab_${nameBase}_case_with_card.png`;
-                                        link2.click();
+                                        triggerDownload(caseWithCardUrl, `Slab_${nameBase}_case_with_card.png`);
                                       }
                                     }, 250);
                                   }}
@@ -2040,14 +2083,16 @@ export default function Home() {
                     <div className="flex gap-2 mt-auto pt-2 border-t border-zinc-850/50">
                       <div className="flex-1 relative">
                         <div className="flex rounded-lg bg-zinc-800 border border-zinc-700 divide-x divide-zinc-750 transition-all overflow-hidden">
-                          <a
-                            href={art.imageUrl}
-                            download={`TCG_${art.name.replace(/\s+/g, "_")}.png`}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
+                            }}
                             className="flex-1 py-2 px-3 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
                           >
                             <Download className="w-3.5 h-3.5" />
                             Download
-                          </a>
+                          </button>
                           <button
                             type="button"
                             onClick={() => setOpenLibraryDownloadId(openLibraryDownloadId === art.id ? null : art.id)}
@@ -2070,10 +2115,7 @@ export default function Home() {
                                 type="button"
                                 onClick={() => {
                                   setOpenLibraryDownloadId(null);
-                                  const link = document.createElement("a");
-                                  link.href = art.imageUrl;
-                                  link.download = `TCG_${art.name.replace(/\s+/g, "_")}.png`;
-                                  link.click();
+                                  triggerDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
                                 }}
                                 className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                               >
@@ -2086,17 +2128,11 @@ export default function Home() {
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
                                     // Download background
-                                    const link1 = document.createElement("a");
-                                    link1.href = art.backgroundUrl!;
-                                    link1.download = `TCG_${art.name.replace(/\s+/g, "_")}_background.png`;
-                                    link1.click();
+                                    triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
                                     // Download card
                                     setTimeout(() => {
                                       const cardUrl = art.originalCardUrl || art.imageUrl;
-                                      const link2 = document.createElement("a");
-                                      link2.href = cardUrl;
-                                      link2.download = `TCG_${art.name.replace(/\s+/g, "_")}_card.png`;
-                                      link2.click();
+                                      triggerDownload(cardUrl, `TCG_${art.name.replace(/\s+/g, "_")}_card.png`);
                                     }, 250);
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
