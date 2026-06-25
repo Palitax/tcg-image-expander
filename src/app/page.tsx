@@ -352,15 +352,27 @@ export default function Home() {
 
           if (error) throw error;
 
-          const formatted: SavedArtwork[] = ((data as DbArtwork[]) || []).map((row) => ({
-            id: row.id,
-            name: row.name,
-            imageUrl: row.image_url,
-            originalCardUrl: row.original_card_url || undefined,
-            backgroundUrl: row.background_url || undefined,
-            aspectRatio: row.aspect_ratio,
-            timestamp: Number(row.timestamp)
-          }));
+          const formatted: SavedArtwork[] = ((data as DbArtwork[]) || []).map((row) => {
+            const originalCardUrl = row.original_card_url || undefined;
+            const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
+            let cardOnlyUrl: string | undefined = undefined;
+            if (isCase && originalCardUrl) {
+              if (originalCardUrl.includes("case_with_card.png")) {
+                cardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
+              }
+            }
+            return {
+              id: row.id,
+              name: row.name,
+              imageUrl: row.image_url,
+              originalCardUrl: originalCardUrl,
+              backgroundUrl: row.background_url || undefined,
+              cardOnlyUrl: cardOnlyUrl,
+              aspectRatio: row.aspect_ratio,
+              timestamp: Number(row.timestamp),
+              isCase: isCase
+            };
+          });
           setSavedArtworks(formatted);
         } catch (e) {
           console.error("Failed to restore session or fetch artworks:", e);
@@ -433,15 +445,27 @@ export default function Home() {
 
         if (artsError) throw artsError;
 
-        const formatted: SavedArtwork[] = ((arts as DbArtwork[]) || []).map((row) => ({
-          id: row.id,
-          name: row.name,
-          imageUrl: row.image_url,
-          originalCardUrl: row.original_card_url || undefined,
-          backgroundUrl: row.background_url || undefined,
-          aspectRatio: row.aspect_ratio,
-          timestamp: Number(row.timestamp)
-        }));
+        const formatted: SavedArtwork[] = ((arts as DbArtwork[]) || []).map((row) => {
+          const originalCardUrl = row.original_card_url || undefined;
+          const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
+          let cardOnlyUrl: string | undefined = undefined;
+          if (isCase && originalCardUrl) {
+            if (originalCardUrl.includes("case_with_card.png")) {
+              cardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
+            }
+          }
+          return {
+            id: row.id,
+            name: row.name,
+            imageUrl: row.image_url,
+            originalCardUrl: originalCardUrl,
+            backgroundUrl: row.background_url || undefined,
+            cardOnlyUrl: cardOnlyUrl,
+            aspectRatio: row.aspect_ratio,
+            timestamp: Number(row.timestamp),
+            isCase: isCase
+          };
+        });
         setSavedArtworks(formatted);
         
         setLoginSpaceName("");
@@ -585,6 +609,15 @@ export default function Home() {
           backgroundUrl = await uploadBase64ToSupabase(backgroundUrl, `spaces/${currentSpace.id}/${artId}/bg.png`);
         }
 
+        let cardOnlyUrl: string | undefined = undefined;
+        if (saveTarget === "case" && caseCardImage) {
+          if (caseCardImage.startsWith("data:image/")) {
+            cardOnlyUrl = await uploadBase64ToSupabase(caseCardImage, `spaces/${currentSpace.id}/${artId}/card_only.png`);
+          } else {
+            cardOnlyUrl = caseCardImage;
+          }
+        }
+
         const { error } = await supabase
           .from("artworks")
           .insert({
@@ -614,6 +647,7 @@ export default function Home() {
         imageUrl: imageUrl,
         originalCardUrl: originalCardUrl,
         backgroundUrl: backgroundUrl,
+        cardOnlyUrl: saveTarget === "case" ? (caseCardImage || undefined) : undefined,
         aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
         timestamp: timestamp,
         isCase: saveTarget === "case"
@@ -628,12 +662,27 @@ export default function Home() {
       }
     }
 
+    // Reconstruct cardOnlyUrl in memory for the updated state (either local or supabase-predicted)
+    let finalCardOnlyUrl: string | undefined = undefined;
+    if (saveTarget === "case") {
+      if (!isLocalMode && currentSpace) {
+        if (originalCardUrl && originalCardUrl.includes("case_with_card.png")) {
+          finalCardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
+        } else {
+          finalCardOnlyUrl = caseCardImage || undefined;
+        }
+      } else {
+        finalCardOnlyUrl = caseCardImage || undefined;
+      }
+    }
+
     const newArtworkRecord: SavedArtwork = {
       id: artId,
       name: newArtworkName.trim(),
       imageUrl: imageUrl,
       originalCardUrl: originalCardUrl,
       backgroundUrl: backgroundUrl,
+      cardOnlyUrl: finalCardOnlyUrl,
       aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
       timestamp: timestamp,
       isCase: saveTarget === "case"
@@ -1613,6 +1662,23 @@ export default function Home() {
                                   <Layers className="w-4 h-4 text-purple-400" />
                                   <span>Merged Card (Single Image)</span>
                                 </button>
+                                {(trimmedCard || previewUrl) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsGenDownloadOpen(false);
+                                      const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
+                                      const cardUrl = trimmedCard || previewUrl;
+                                      if (cardUrl) {
+                                        triggerDownload(cardUrl, `TCG_${nameBase}_card.png`);
+                                      }
+                                    }}
+                                    className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                  >
+                                    <ImageIcon className="w-4 h-4 text-blue-400" />
+                                    <span>Card Only (No Background)</span>
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1930,8 +1996,22 @@ export default function Home() {
                                   className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                                 >
                                   <Layers className="w-4 h-4 text-purple-400" />
-                                  <span>Merged Showcase (Single Image)</span>
+                                  <span>Merged Showcase (Slab + BG)</span>
                                 </button>
+                                {caseCardImage && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsCaseDownloadOpen(false);
+                                      const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
+                                      triggerDownload(caseCardImage, `Slab_${nameBase}_card.png`);
+                                    }}
+                                    className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                  >
+                                    <ImageIcon className="w-4 h-4 text-blue-400" />
+                                    <span>Card Only (No Case/BG)</span>
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -2140,8 +2220,25 @@ export default function Home() {
                                 className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                               >
                                 <Layers className="w-3.5 h-3.5 text-purple-400" />
-                                <span>Merged Card</span>
+                                <span>{art.isCase ? "Merged Showcase" : "Merged Card"}</span>
                               </button>
+                              {(art.cardOnlyUrl || art.originalCardUrl) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenLibraryDownloadId(null);
+                                    const targetCardUrl = art.isCase ? (art.cardOnlyUrl || art.originalCardUrl) : art.originalCardUrl;
+                                    if (targetCardUrl) {
+                                      const suffix = art.isCase ? "card_only" : "card";
+                                      triggerDownload(targetCardUrl, `TCG_${art.name.replace(/\s+/g, "_")}_${suffix}.png`);
+                                    }
+                                  }}
+                                  className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                >
+                                  <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
+                                  <span>{art.isCase ? "Card Only (No Case/BG)" : "Card Only (No BG)"}</span>
+                                </button>
+                              )}
                               {art.backgroundUrl && (
                                 <button
                                   type="button"
@@ -2160,7 +2257,7 @@ export default function Home() {
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                     <span className="text-[9px] font-bold text-indigo-400">2x</span>
                                   </div>
-                                  <span>Split BG & Card</span>
+                                  <span>{art.isCase ? "Split BG & Case" : "Split BG & Card"}</span>
                                 </button>
                               )}
                             </div>

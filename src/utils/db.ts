@@ -8,6 +8,7 @@ export interface SavedArtwork {
   imageUrl: string;
   originalCardUrl?: string;
   backgroundUrl?: string;
+  cardOnlyUrl?: string;
   aspectRatio: string;
   timestamp: number;
   isCase?: boolean;
