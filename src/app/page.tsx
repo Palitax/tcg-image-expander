@@ -139,6 +139,7 @@ export default function Home() {
   const [trimmedCard, setTrimmedCard] = useState<string | null>(null);
   const [backgroundImageUrl, setBackgroundImageUrl] = useState<string | null>(null);
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("outpaint");
+  const [shouldCropCard, setShouldCropCard] = useState<boolean>(true);
 
   const [activeTab, setActiveTab] = useState<"generate" | "case" | "library">("generate");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
@@ -856,6 +857,7 @@ export default function Home() {
       
       const cropFormData = new FormData();
       cropFormData.append("cardImage", file);
+      cropFormData.append("skipCardCrop", String(!shouldCropCard));
 
       const cropResponse = await fetch("/api/pipeline/crop", {
         method: "POST",
@@ -1245,6 +1247,20 @@ export default function Home() {
                       alt="Uploaded card"
                       className="w-full h-full object-cover"
                     />
+                  </div>
+
+                  {/* Crop Option Toggle */}
+                  <div className="w-full flex items-center justify-between mt-3 px-1">
+                    <label className="text-xs font-medium text-zinc-300 select-none cursor-pointer flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={shouldCropCard}
+                        onChange={(e) => setShouldCropCard(e.target.checked)}
+                        disabled={isProcessing}
+                        className="rounded border-zinc-800 bg-zinc-955 text-purple-600 focus:ring-0 focus:ring-offset-0 disabled:opacity-50"
+                      />
+                      Auto-crop card edges (turn off if card is already clean/full-bleed)
+                    </label>
                   </div>
                   
                   <div className="w-full flex items-center justify-between mt-4 pt-4 border-t border-zinc-800/80">

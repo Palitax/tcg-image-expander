@@ -40,6 +40,7 @@ export async function POST(request: Request) {
     const ai = new GoogleGenAI({ apiKey });
     const formData = await request.formData();
     const file = formData.get("cardImage") as File | null;
+    const skipCardCrop = formData.get("skipCardCrop") === "true";
 
     if (!file) {
       return NextResponse.json({ error: "No image file uploaded." }, { status: 400 });
@@ -113,10 +114,11 @@ export async function POST(request: Request) {
 2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card.
    Rules for illustration:
    - Locate the main artwork area. Differentiate it from bottom gameplay rules text, character banners, and borders.
-3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.`
+3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.
+4. "isCleanCardImage": Set to true if the uploaded image contains ONLY the physical trading card itself, with NO outer mounting boards, cases, white margins, or background scenery surrounding it (the card edges extend all the way to the boundary of the image). Otherwise false.`
           ],
           config: {
-            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the precise bounding box of the physical trading card (ignoring white mounting borders, holder frames, sleeves, or background scenery), 2) a clean rectangular illustration area inside the card, and 3) whether a 'SAMPLE' watermark exists. Note that standard trading cards have a strict aspect ratio of ~0.71 (width-to-height). Return ONLY a JSON object matching the requested schema.",
+            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the precise bounding box of the physical trading card, 2) a clean rectangular illustration area inside the card, 3) whether a 'SAMPLE' watermark exists, and 4) whether the uploaded image contains ONLY the card itself with no margins or backgrounds (isCleanCardImage). Return ONLY a JSON object matching the requested schema.",
             responseMimeType: "application/json",
             responseSchema: {
               type: "object",
@@ -144,9 +146,13 @@ export async function POST(request: Request) {
                 hasSampleWatermark: {
                   type: "boolean",
                   description: "True if the large text watermark 'SAMPLE' is overlaid on the card illustration/layout, false otherwise"
+                },
+                isCleanCardImage: {
+                  type: "boolean",
+                  description: "True if the uploaded image contains only the physical trading card itself with no outer backing, case, mount, white space, or table backgrounds. False otherwise."
                 }
               },
-              required: ["card", "illustration", "hasSampleWatermark"]
+              required: ["card", "illustration", "hasSampleWatermark", "isCleanCardImage"]
             }
           }
         });
@@ -167,6 +173,7 @@ export async function POST(request: Request) {
     let cardCoords;
     let illustrationCoords;
     let hasSampleWatermark = false;
+    let isCleanCardImage = false;
     let usedFallback = false;
 
     if (layoutText) {
@@ -176,12 +183,27 @@ export async function POST(request: Request) {
           cardCoords = parsed.card;
           illustrationCoords = parsed.illustration;
           hasSampleWatermark = !!parsed.hasSampleWatermark;
+          isCleanCardImage = !!parsed.isCleanCardImage;
           console.log("[Crop API] AI successfully detected layout:", parsed);
         } else {
           throw new Error("Missing card or illustration coordinates in model response.");
         }
       } catch (e: any) {
         console.warn(`[Crop API] Failed to parse layout JSON: "${layoutText}". Error: ${e.message}`);
+      }
+    }
+
+    if (skipCardCrop || isCleanCardImage) {
+      console.log(`[Crop API] Using full image dimensions for card coordinates (skipCardCrop: ${skipCardCrop}, isCleanCardImage: ${isCleanCardImage}).`);
+      cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
+      // If we don't have illustration coords yet, calculate a safe default illustration area (e.g. 70% centered box)
+      if (!illustrationCoords) {
+        illustrationCoords = {
+          x1: Math.round(width * 0.15),
+          y1: Math.round(height * 0.18),
+          x2: Math.round(width * 0.85),
+          y2: Math.round(height * 0.58)
+        };
       }
     }
 
@@ -309,27 +331,30 @@ export async function POST(request: Request) {
     }
 
     // Enforce standard trading card aspect ratio (~0.715) on detected card coordinates
-    const TARGET_RATIO = 0.715;
-    const cardW = cardCoords.x2 - cardCoords.x1;
-    const cardH = cardCoords.y2 - cardCoords.y1;
-    if (cardW > 0 && cardH > 0) {
-      const currentRatio = cardW / cardH;
-      const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
-      const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
+    // Only apply if we are NOT skipping card crop and NOT using the full clean card image
+    if (!skipCardCrop && !isCleanCardImage) {
+      const TARGET_RATIO = 0.715;
+      const cardW = cardCoords.x2 - cardCoords.x1;
+      const cardH = cardCoords.y2 - cardCoords.y1;
+      if (cardW > 0 && cardH > 0) {
+        const currentRatio = cardW / cardH;
+        const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+        const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
 
-      // Adjust dimensions to match TARGET_RATIO of 0.715
-      if (currentRatio > TARGET_RATIO) {
-        // Too wide (contains white space on sides) - shrink width centered
-        const newW = cardH * TARGET_RATIO;
-        cardCoords.x1 = centerX - newW / 2;
-        cardCoords.x2 = centerX + newW / 2;
-        console.log(`[Crop API] Adjusted card width to match 0.715 aspect ratio: ${cardW.toFixed(1)} -> ${newW.toFixed(1)}`);
-      } else if (currentRatio < TARGET_RATIO) {
-        // Too tall/narrow - shrink height centered
-        const newH = cardW / TARGET_RATIO;
-        cardCoords.y1 = centerY - newH / 2;
-        cardCoords.y2 = centerY + newH / 2;
-        console.log(`[Crop API] Adjusted card height to match 0.715 aspect ratio: ${cardH.toFixed(1)} -> ${newH.toFixed(1)}`);
+        // Adjust dimensions to match TARGET_RATIO of 0.715
+        if (currentRatio > TARGET_RATIO) {
+          // Too wide (contains white space on sides) - shrink width centered
+          const newW = cardH * TARGET_RATIO;
+          cardCoords.x1 = centerX - newW / 2;
+          cardCoords.x2 = centerX + newW / 2;
+          console.log(`[Crop API] Adjusted card width to match 0.715 aspect ratio: ${cardW.toFixed(1)} -> ${newW.toFixed(1)}`);
+        } else if (currentRatio < TARGET_RATIO) {
+          // Too tall/narrow - shrink height centered
+          const newH = cardW / TARGET_RATIO;
+          cardCoords.y1 = centerY - newH / 2;
+          cardCoords.y2 = centerY + newH / 2;
+          console.log(`[Crop API] Adjusted card height to match 0.715 aspect ratio: ${cardH.toFixed(1)} -> ${newH.toFixed(1)}`);
+        }
       }
     }
 
