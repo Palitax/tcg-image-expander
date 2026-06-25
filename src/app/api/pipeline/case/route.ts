@@ -47,9 +47,9 @@ export async function POST(request: Request) {
         backgroundBuffer = Buffer.from(backgroundBase64, "base64");
       }
 
-      // Apply a light blur (10px) to distinguish the foreground case/card from the background
+      // Apply a light blur (5px) to distinguish the foreground case/card from the background
       backgroundBuffer = await sharp(backgroundBuffer)
-        .blur(10)
+        .blur(5)
         .toBuffer();
     } else {
       // Generate a blurred background from the card itself (ambient background)
@@ -133,26 +133,11 @@ export async function POST(request: Request) {
 
     // Create shadow mask with rounded corners to match the case geometry (approx 4.5% corner radius)
     const caseCornerRadius = Math.round(targetCaseWidth * 0.045);
-    const caseShadowMask = Buffer.from(
-      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="white"/></svg>`
+    const shadowPadding = 20; // small padding for tight shadow
+    const shadowSvg = Buffer.from(
+      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.35"/></svg>`
     );
 
-    const innerShadowInput = await sharp({
-      create: {
-        width: targetCaseWidth,
-        height: targetCaseHeight,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0.45 } // soft dark shadow
-      }
-    })
-    .composite([{
-      input: caseShadowMask,
-      blend: 'dest-in'
-    }])
-    .png()
-    .toBuffer();
-
-    const shadowPadding = 45;
     const shadowWidth = targetCaseWidth + shadowPadding * 2;
     const shadowHeight = targetCaseHeight + shadowPadding * 2;
 
@@ -166,12 +151,12 @@ export async function POST(request: Request) {
     })
     .composite([
       {
-        input: innerShadowInput,
-        top: shadowPadding,
-        left: shadowPadding
+        input: shadowSvg,
+        top: shadowPadding + 3, // slight offset down
+        left: shadowPadding + 3  // slight offset right
       }
     ])
-    .blur(22) // Gaussian blur for soft shadow
+    .blur(8) // Tight, small blur (reduced by 50%+ for crisp shadow)
     .png()
     .toBuffer();
 
