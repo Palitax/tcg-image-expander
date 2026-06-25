@@ -47,9 +47,9 @@ export async function POST(request: Request) {
         backgroundBuffer = Buffer.from(backgroundBase64, "base64");
       }
 
-      // Apply a light blur (5px) to distinguish the foreground case/card from the background
+      // Apply a light blur (3px) to distinguish the foreground case/card from the background
       backgroundBuffer = await sharp(backgroundBuffer)
-        .blur(5)
+        .blur(3)
         .toBuffer();
     } else {
       // Generate a blurred background from the card itself (ambient background)
@@ -135,7 +135,7 @@ export async function POST(request: Request) {
     const caseCornerRadius = Math.round(targetCaseWidth * 0.045);
     const shadowPadding = 20; // small padding for tight shadow
     const shadowSvg = Buffer.from(
-      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.35"/></svg>`
+      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.25"/></svg>`
     );
 
     const shadowWidth = targetCaseWidth + shadowPadding * 2;
@@ -152,11 +152,11 @@ export async function POST(request: Request) {
     .composite([
       {
         input: shadowSvg,
-        top: shadowPadding + 3, // slight offset down
-        left: shadowPadding + 3  // slight offset right
+        top: shadowPadding + 6, // directional offset down (light from top-left)
+        left: shadowPadding + 4  // directional offset right (light from top-left)
       }
     ])
-    .blur(8) // Tight, small blur (reduced by 50%+ for crisp shadow)
+    .blur(6) // Soft, tight blur (6px) to mimic physical card edge shadows
     .png()
     .toBuffer();
 
