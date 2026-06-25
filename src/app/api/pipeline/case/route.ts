@@ -140,7 +140,7 @@ export async function POST(request: Request) {
     // Horizontal center: shadowWidth / 2
     // Vertical center: shadowPadding + targetCaseHeight (bottom of the card case)
     const shadowSvg = Buffer.from(
-      `<svg width="${shadowWidth}" height="${shadowHeight}"><ellipse cx="${shadowWidth / 2}" cy="${shadowPadding + targetCaseHeight}" rx="${targetCaseWidth * 0.46}" ry="8" fill="black" fill-opacity="0.55"/></svg>`
+      `<svg width="${shadowWidth}" height="${shadowHeight}"><ellipse cx="${shadowWidth / 2}" cy="${shadowPadding + targetCaseHeight + 4}" rx="${targetCaseWidth * 0.46}" ry="20" fill="black" fill-opacity="0.85"/></svg>`
     );
 
     const caseShadow = await sharp({
@@ -158,7 +158,7 @@ export async function POST(request: Request) {
         left: 0
       }
     ])
-    .blur(12) // soft Gaussian blur (12px) for realistic contact shadow dispersion
+    .blur(10) // soft Gaussian blur (10px) for realistic contact shadow dispersion
     .png()
     .toBuffer();
 
