@@ -47,9 +47,9 @@ export async function POST(request: Request) {
         backgroundBuffer = Buffer.from(backgroundBase64, "base64");
       }
 
-      // Apply a light blur (3px) to distinguish the foreground case/card from the background
+      // Apply a light blur (2px) to distinguish the foreground case/card from the background
       backgroundBuffer = await sharp(backgroundBuffer)
-        .blur(3)
+        .blur(2)
         .toBuffer();
     } else {
       // Generate a blurred background from the card itself (ambient background)
@@ -133,11 +133,26 @@ export async function POST(request: Request) {
 
     // Create shadow mask with rounded corners to match the case geometry (approx 4.5% corner radius)
     const caseCornerRadius = Math.round(targetCaseWidth * 0.045);
-    const shadowPadding = 20; // small padding for tight shadow
-    const shadowSvg = Buffer.from(
-      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="black" fill-opacity="0.25"/></svg>`
+    const caseShadowMask = Buffer.from(
+      `<svg width="${targetCaseWidth}" height="${targetCaseHeight}"><rect x="0" y="0" width="${targetCaseWidth}" height="${targetCaseHeight}" rx="${caseCornerRadius}" ry="${caseCornerRadius}" fill="white"/></svg>`
     );
 
+    const innerShadowInput = await sharp({
+      create: {
+        width: targetCaseWidth,
+        height: targetCaseHeight,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0.30 } // soft dark shadow
+      }
+    })
+    .composite([{
+      input: caseShadowMask,
+      blend: 'dest-in'
+    }])
+    .png()
+    .toBuffer();
+
+    const shadowPadding = 30; // standard padding to allow blur falloff
     const shadowWidth = targetCaseWidth + shadowPadding * 2;
     const shadowHeight = targetCaseHeight + shadowPadding * 2;
 
@@ -146,17 +161,17 @@ export async function POST(request: Request) {
         width: shadowWidth,
         height: shadowHeight,
         channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
+        background: { r: 0, g: 0, b: 0, alpha: 0 } // transparent background
       }
     })
     .composite([
       {
-        input: shadowSvg,
-        top: shadowPadding + 6, // directional offset down (light from top-left)
-        left: shadowPadding + 4  // directional offset right (light from top-left)
+        input: innerShadowInput,
+        top: shadowPadding + 8, // offset down (creates bottom shadow)
+        left: shadowPadding      // centered horizontally
       }
     ])
-    .blur(6) // Soft, tight blur (6px) to mimic physical card edge shadows
+    .blur(10) // soft Gaussian blur (10px) for physical lift
     .png()
     .toBuffer();
 
