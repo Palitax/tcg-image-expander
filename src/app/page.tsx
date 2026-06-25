@@ -646,7 +646,25 @@ export default function Home() {
           if (caseCardImage.startsWith("data:image/")) {
             cardOnlyUrl = await uploadBase64ToSupabase(caseCardImage, `spaces/${currentSpace.id}/${artId}/card_only.png`);
           } else {
-            cardOnlyUrl = caseCardImage;
+            try {
+              const res = await fetch(caseCardImage);
+              if (res.ok) {
+                const blob = await res.blob();
+                const path = `spaces/${currentSpace.id}/${artId}/card_only.png`;
+                const { error: uploadError } = await supabase.storage
+                  .from("tcg-artworks")
+                  .upload(path, blob, { contentType: blob.type, upsert: true });
+                if (!uploadError) {
+                  const { data: { publicUrl } } = supabase.storage
+                    .from("tcg-artworks")
+                    .getPublicUrl(path);
+                  cardOnlyUrl = publicUrl;
+                }
+              }
+            } catch (e) {
+              console.error("Failed to copy card image to card_only.png:", e);
+              cardOnlyUrl = caseCardImage;
+            }
           }
         }
 
@@ -789,7 +807,7 @@ export default function Home() {
       setCaseResultUrl(art.imageUrl);
       setCaseWithCardUrl(art.originalCardUrl || null);
       setCaseBgResultUrl(art.backgroundUrl || null);
-      setCaseCardImage(art.originalCardUrl || null);
+      setCaseCardImage(art.cardOnlyUrl || art.originalCardUrl || null);
       setCaseBgImage(art.backgroundUrl || null);
       setIsCaseOverlayLoaded(true);
     } else {
