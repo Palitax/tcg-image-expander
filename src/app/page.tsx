@@ -385,14 +385,25 @@ export default function Home() {
           if (error) throw error;
 
           const formatted: SavedArtwork[] = ((data as DbArtwork[]) || []).map((row) => {
-            const originalCardUrl = row.original_card_url || undefined;
-            const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
+            const dbOriginalCardUrl = row.original_card_url || undefined;
+            let originalCardUrl = dbOriginalCardUrl;
             let cardOnlyUrl: string | undefined = undefined;
-            if (isCase && originalCardUrl && Number(row.timestamp) > 1782300000000) {
+
+            if (dbOriginalCardUrl && dbOriginalCardUrl.includes("?card_only=")) {
+              const parts = dbOriginalCardUrl.split("?card_only=");
+              originalCardUrl = parts[0];
+              cardOnlyUrl = decodeURIComponent(parts[1]);
+            }
+
+            const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
+            
+            // Fallback for new artworks where card_only.png is in storage but not in url query (e.g. from previous steps)
+            if (isCase && !cardOnlyUrl && originalCardUrl && Number(row.timestamp) > 1782300000000) {
               if (originalCardUrl.includes("case_with_card.png")) {
                 cardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
               }
             }
+
             return {
               id: row.id,
               name: row.name,
@@ -478,14 +489,25 @@ export default function Home() {
         if (artsError) throw artsError;
 
         const formatted: SavedArtwork[] = ((arts as DbArtwork[]) || []).map((row) => {
-          const originalCardUrl = row.original_card_url || undefined;
-          const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
+          const dbOriginalCardUrl = row.original_card_url || undefined;
+          let originalCardUrl = dbOriginalCardUrl;
           let cardOnlyUrl: string | undefined = undefined;
-          if (isCase && originalCardUrl && Number(row.timestamp) > 1782300000000) {
+
+          if (dbOriginalCardUrl && dbOriginalCardUrl.includes("?card_only=")) {
+            const parts = dbOriginalCardUrl.split("?card_only=");
+            originalCardUrl = parts[0];
+            cardOnlyUrl = decodeURIComponent(parts[1]);
+          }
+
+          const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
+          
+          // Fallback for new artworks where card_only.png is in storage but not in url query
+          if (isCase && !cardOnlyUrl && originalCardUrl && Number(row.timestamp) > 1782300000000) {
             if (originalCardUrl.includes("case_with_card.png")) {
               cardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
             }
           }
+
           return {
             id: row.id,
             name: row.name,
@@ -668,6 +690,10 @@ export default function Home() {
           }
         }
 
+        if (saveTarget === "case" && originalCardUrl && cardOnlyUrl) {
+          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}`;
+        }
+
         const { error } = await supabase
           .from("artworks")
           .insert({
@@ -714,9 +740,14 @@ export default function Home() {
 
     // Reconstruct cardOnlyUrl in memory for the updated state (either local or supabase-predicted)
     let finalCardOnlyUrl: string | undefined = undefined;
+    let finalOriginalCardUrl = originalCardUrl;
     if (saveTarget === "case") {
       if (!isLocalMode && currentSpace) {
-        if (originalCardUrl && originalCardUrl.includes("case_with_card.png")) {
+        if (originalCardUrl && originalCardUrl.includes("?card_only=")) {
+          const parts = originalCardUrl.split("?card_only=");
+          finalOriginalCardUrl = parts[0];
+          finalCardOnlyUrl = decodeURIComponent(parts[1]);
+        } else if (originalCardUrl && originalCardUrl.includes("case_with_card.png")) {
           finalCardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
         } else {
           finalCardOnlyUrl = caseCardImage || undefined;
@@ -730,7 +761,7 @@ export default function Home() {
       id: artId,
       name: newArtworkName.trim(),
       imageUrl: imageUrl,
-      originalCardUrl: originalCardUrl,
+      originalCardUrl: finalOriginalCardUrl,
       backgroundUrl: backgroundUrl,
       cardOnlyUrl: finalCardOnlyUrl,
       aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
