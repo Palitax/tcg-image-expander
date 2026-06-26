@@ -388,7 +388,7 @@ export default function Home() {
             const originalCardUrl = row.original_card_url || undefined;
             const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
             let cardOnlyUrl: string | undefined = undefined;
-            if (isCase && originalCardUrl) {
+            if (isCase && originalCardUrl && Number(row.timestamp) > 1782300000000) {
               if (originalCardUrl.includes("case_with_card.png")) {
                 cardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
               }
@@ -481,7 +481,7 @@ export default function Home() {
           const originalCardUrl = row.original_card_url || undefined;
           const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
           let cardOnlyUrl: string | undefined = undefined;
-          if (isCase && originalCardUrl) {
+          if (isCase && originalCardUrl && Number(row.timestamp) > 1782300000000) {
             if (originalCardUrl.includes("case_with_card.png")) {
               cardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
             }
@@ -2349,20 +2349,18 @@ export default function Home() {
                                   type="button"
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
-                                    const targetCardUrl = art.cardOnlyUrl || art.originalCardUrl;
-                                    if (targetCardUrl) {
-                                      // 1. Download background
-                                      triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
-                                      // 2. Download case with card
-                                      setTimeout(() => {
-                                        triggerDownload(art.originalCardUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_case_with_card.png`);
-                                      }, 250);
-                                      // 3. Download only card
+                                    // 1. Download background
+                                    triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
+                                    // 2. Download case with card
+                                    setTimeout(() => {
+                                      triggerDownload(art.originalCardUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_case_with_card.png`);
+                                    }, 250);
+                                    // 3. Download only card
+                                    if (art.cardOnlyUrl) {
                                       setTimeout(() => {
                                         triggerDownload(
-                                          targetCardUrl,
-                                          `TCG_${art.name.replace(/\s+/g, "_")}_card_only.png`,
-                                          art.originalCardUrl
+                                          art.cardOnlyUrl!,
+                                          `TCG_${art.name.replace(/\s+/g, "_")}_card_only.png`
                                         );
                                       }, 500);
                                     }
