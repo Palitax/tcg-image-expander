@@ -142,8 +142,17 @@ const triggerDownload = async (
       if (mimeMatch) {
         mimeType = mimeMatch[1];
       }
-      const response = await fetch(url);
-      blob = await response.blob();
+      
+      // Convert base64 data URL to Blob directly and synchronously
+      const parts = url.split(",");
+      const rawBase64 = parts[1];
+      const binaryStr = window.atob(rawBase64);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      blob = new Blob([bytes], { type: mimeType });
     } else {
       const response = await fetch(url);
       if (!response.ok) {
