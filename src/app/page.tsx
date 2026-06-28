@@ -19,7 +19,9 @@ import {
   Trash2,
   Pencil,
   X,
-  ChevronDown
+  ChevronDown,
+  Folder,
+  FolderOpen
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -124,40 +126,33 @@ const getErrorMessage = (err: unknown): string => {
   return String(err);
 };
 
-const triggerDownload = async (url: string, filename: string, fallbackUrl?: string): Promise<void> => {
+const triggerDownload = async (
+  url: string,
+  filename: string,
+  fallbackUrl?: string,
+  dirHandle?: any
+): Promise<void> => {
   try {
-    // If it is already a base64 data URL, we can download it directly
+    let blob: Blob;
+    let mimeType = "";
+
+    // Convert data URLs or fetch external URLs to blobs
     if (url.startsWith("data:")) {
       const mimeMatch = url.match(/^data:([^;]+);/);
-      let adjustedFilename = filename;
       if (mimeMatch) {
-        const mimeType = mimeMatch[1];
-        let ext = "";
-        if (mimeType === "image/webp") ext = "webp";
-        else if (mimeType === "image/png") ext = "png";
-        else if (mimeType === "image/jpeg" || mimeType === "image/jpg") ext = "jpg";
-        
-        if (ext) {
-          adjustedFilename = filename.replace(/\.[^/.]+$/, "") + "." + ext;
-        }
+        mimeType = mimeMatch[1];
       }
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = adjustedFilename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      return;
+      const response = await fetch(url);
+      blob = await response.blob();
+    } else {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      blob = await response.blob();
+      mimeType = blob.type;
     }
 
-    // For external URLs (like Supabase storage), fetch the file as a Blob 
-    // to bypass browser cross-origin download blocks and force standard saving
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const blob = await response.blob();
-    const mimeType = blob.type;
     let adjustedFilename = filename;
     let ext = "";
     if (mimeType === "image/webp") ext = "webp";
@@ -168,8 +163,16 @@ const triggerDownload = async (url: string, filename: string, fallbackUrl?: stri
       adjustedFilename = filename.replace(/\.[^/.]+$/, "") + "." + ext;
     }
 
-    const objectUrl = URL.createObjectURL(blob);
+    // Save directly to user-selected folder if provided
+    if (dirHandle) {
+      const fileHandle = await dirHandle.getFileHandle(adjustedFilename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    }
 
+    const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = objectUrl;
     link.download = adjustedFilename;
@@ -183,17 +186,21 @@ const triggerDownload = async (url: string, filename: string, fallbackUrl?: stri
     console.error("Failed to download file:", error);
     if (fallbackUrl) {
       console.log("Attempting download with fallback URL:", fallbackUrl);
-      return triggerDownload(fallbackUrl, filename);
+      return triggerDownload(fallbackUrl, filename, undefined, dirHandle);
     }
     
-    // Fallback: open in new window if download block cannot be bypassed
-    const link = document.createElement("a");
-    link.href = url;
-    link.target = "_blank";
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Fallback: open in new window if not using a directory handle
+    if (!dirHandle) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      throw error;
+    }
   }
 };
 
@@ -251,6 +258,29 @@ export default function Home() {
   const [caseWithCardUrl, setCaseWithCardUrl] = useState<string | null>(null);
   const [caseBgResultUrl, setCaseBgResultUrl] = useState<string | null>(null);
   const [isCaseOverlayLoaded, setIsCaseOverlayLoaded] = useState<boolean>(false);
+
+  // Local directory saving states
+  const directoryHandleRef = useRef<any | null>(null);
+  const [directoryName, setDirectoryName] = useState<string | null>(null);
+
+  const handleDownload = useCallback(async (url: string, filename: string, fallbackUrl?: string) => {
+    let dir = directoryHandleRef.current;
+    
+    // Check if browser supports File System Access API
+    const isSupported = typeof window !== "undefined" && "showDirectoryPicker" in window;
+    
+    if (isSupported && !dir) {
+      try {
+        dir = await (window as any).showDirectoryPicker();
+        directoryHandleRef.current = dir;
+        setDirectoryName(dir ? (dir as any).name : null);
+      } catch (err) {
+        console.log("Directory picker cancelled, falling back to standard download:", err);
+      }
+    }
+    
+    await triggerDownload(url, filename, fallbackUrl, dir);
+  }, []);
 
   // Dropdown states for downloads
   const [isGenDownloadOpen, setIsGenDownloadOpen] = useState<boolean>(false);
@@ -1363,22 +1393,68 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Space indicator / Logout */}
-          {!isLocalMode && currentSpace && (
-            <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/20 text-xs font-semibold text-zinc-400">
-              <Layers className="w-3.5 h-3.5 text-purple-400" />
-              <span>Space: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
-              {isSpaceSyncing && <RefreshCw className="w-3 h-3 text-purple-400 animate-spin" />}
-              <span className="w-px h-3.5 bg-zinc-800 mx-1" />
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 cursor-pointer"
-              >
-                Logout
-              </button>
-            </div>
-          )}
+          {/* Right actions: Space details & Local directory selection */}
+          <div className="flex flex-wrap items-center gap-3 justify-end">
+            {/* Local Save Folder Indicator */}
+            {typeof window !== "undefined" && "showDirectoryPicker" in window && (
+              <div className="flex items-center">
+                {directoryName ? (
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-xl border border-purple-500/20 bg-purple-500/5 text-xs font-semibold text-purple-400 animate-fade-in">
+                    <FolderOpen className="w-3.5 h-3.5 text-purple-400 shrink-0 animate-pulse" />
+                    <span className="truncate max-w-[150px]" title={`Saving to local folder: ${directoryName}`}>
+                      Folder: {directoryName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        directoryHandleRef.current = null;
+                        setDirectoryName(null);
+                      }}
+                      className="hover:text-purple-300 text-purple-500/70 transition-colors ml-1 cursor-pointer"
+                      title="Reset saving directory (falls back to standard browser downloads)"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const handle = await (window as any).showDirectoryPicker();
+                        directoryHandleRef.current = handle;
+                        setDirectoryName(handle ? handle.name : null);
+                      } catch (err) {
+                        console.log("Directory picker cancelled or failed:", err);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/30 text-xs font-semibold text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 hover:bg-zinc-900/50 transition-all cursor-pointer shadow-sm"
+                    title="Choose a specific local folder to save all downloaded images directly into it"
+                  >
+                    <Folder className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                    <span>Choose Save Folder</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Space indicator / Logout */}
+            {!isLocalMode && currentSpace && (
+              <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/20 text-xs font-semibold text-zinc-400">
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Space: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
+                {isSpaceSyncing && <RefreshCw className="w-3 h-3 text-purple-400 animate-spin" />}
+                <span className="w-px h-3.5 bg-zinc-800 mx-1" />
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {activeTab === "generate" ? (
@@ -1698,7 +1774,7 @@ export default function Home() {
                               type="button"
                               onClick={() => {
                                 if (resultImageUrl) {
-                                  triggerDownload(
+                                  handleDownload(
                                     resultImageUrl,
                                     `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
                                   );
@@ -1732,7 +1808,7 @@ export default function Home() {
                                   onClick={() => {
                                     setIsGenDownloadOpen(false);
                                     if (resultImageUrl) {
-                                      triggerDownload(
+                                      handleDownload(
                                         resultImageUrl,
                                         `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
                                       );
@@ -1751,10 +1827,10 @@ export default function Home() {
                                       const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
                                       const cardUrl = trimmedCard || previewUrl;
                                       if (cardUrl) {
-                                        triggerDownload(cardUrl, `TCG_${nameBase}_card.png`);
+                                        handleDownload(cardUrl, `TCG_${nameBase}_card.png`);
                                       }
                                     }}
-                                    className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                    className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-805/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                   >
                                     <ImageIcon className="w-4 h-4 text-blue-400" />
                                     <span>Card Only (No Background)</span>
@@ -1767,17 +1843,17 @@ export default function Home() {
                                     const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
                                     // Download background
                                     if (backgroundImageUrl) {
-                                      triggerDownload(backgroundImageUrl, `TCG_${nameBase}_background.png`);
+                                      handleDownload(backgroundImageUrl, `TCG_${nameBase}_background.png`);
                                     }
                                     // Download card
                                     setTimeout(() => {
                                       const cardUrl = trimmedCard || previewUrl;
                                       if (cardUrl) {
-                                        triggerDownload(cardUrl, `TCG_${nameBase}_card.png`);
+                                        handleDownload(cardUrl, `TCG_${nameBase}_card.png`);
                                       }
                                     }, 250);
                                   }}
-                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-850/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                 >
                                   <div className="w-4 h-4 flex items-center justify-center shrink-0">
                                     <span className="text-[10px] font-bold text-indigo-400">2x</span>
@@ -2039,7 +2115,7 @@ export default function Home() {
                               onClick={() => {
                                 if (caseResultUrl) {
                                   const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
-                                  triggerDownload(caseResultUrl, `Slab_${nameBase}.png`);
+                                  handleDownload(caseResultUrl, `Slab_${nameBase}.png`);
                                 }
                               }}
                               className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
@@ -2071,7 +2147,7 @@ export default function Home() {
                                     setIsCaseDownloadOpen(false);
                                     if (caseResultUrl) {
                                       const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
-                                      triggerDownload(caseResultUrl, `Slab_${nameBase}.png`);
+                                      handleDownload(caseResultUrl, `Slab_${nameBase}.png`);
                                     }
                                   }}
                                   className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
@@ -2085,7 +2161,7 @@ export default function Home() {
                                     onClick={() => {
                                       setIsCaseDownloadOpen(false);
                                       const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
-                                      triggerDownload(caseCardImage, `Slab_${nameBase}_card.png`);
+                                      handleDownload(caseCardImage, `Slab_${nameBase}_card.png`);
                                     }}
                                     className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                   >
@@ -2100,12 +2176,12 @@ export default function Home() {
                                     const nameBase = selectedArtworkId ? savedArtworks.find(a => a.id === selectedArtworkId)?.name : "Showcase";
                                     // Download background
                                     if (caseBgResultUrl) {
-                                      triggerDownload(caseBgResultUrl, `Slab_${nameBase}_background.png`);
+                                      handleDownload(caseBgResultUrl, `Slab_${nameBase}_background.png`);
                                     }
                                     // Download case with card
                                     setTimeout(() => {
                                       if (caseWithCardUrl) {
-                                        triggerDownload(caseWithCardUrl, `Slab_${nameBase}_case_with_card.png`);
+                                        handleDownload(caseWithCardUrl, `Slab_${nameBase}_case_with_card.png`);
                                       }
                                     }, 250);
                                   }}
@@ -2127,14 +2203,14 @@ export default function Home() {
                                       const caseImg = caseWithCardUrl;
                                       if (cardImg && bgImg && caseImg) {
                                         // 1. Download background
-                                        triggerDownload(bgImg, `Slab_${nameBase}_background.png`);
+                                        handleDownload(bgImg, `Slab_${nameBase}_background.png`);
                                         // 2. Download case with card
                                         setTimeout(() => {
-                                          triggerDownload(caseImg, `Slab_${nameBase}_case_with_card.png`);
+                                          handleDownload(caseImg, `Slab_${nameBase}_case_with_card.png`);
                                         }, 250);
                                         // 3. Download only card
                                         setTimeout(() => {
-                                          triggerDownload(cardImg, `Slab_${nameBase}_card.png`);
+                                          handleDownload(cardImg, `Slab_${nameBase}_card.png`);
                                         }, 500);
                                       }
                                     }}
@@ -2297,7 +2373,7 @@ export default function Home() {
                           <button
                             type="button"
                             onClick={() => {
-                              triggerDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
+                              handleDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
                             }}
                             className="flex-1 py-2 px-3 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
                           >
@@ -2326,7 +2402,7 @@ export default function Home() {
                                 type="button"
                                 onClick={() => {
                                   setOpenLibraryDownloadId(null);
-                                  triggerDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
+                                  handleDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
                                 }}
                                 className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                               >
@@ -2341,7 +2417,7 @@ export default function Home() {
                                     const targetCardUrl = art.isCase ? (art.cardOnlyUrl || art.originalCardUrl) : art.originalCardUrl;
                                     if (targetCardUrl) {
                                       const suffix = art.isCase ? "card_only" : "card";
-                                      triggerDownload(
+                                      handleDownload(
                                         targetCardUrl, 
                                         `TCG_${art.name.replace(/\s+/g, "_")}_${suffix}.png`,
                                         art.isCase ? art.originalCardUrl : undefined
@@ -2360,11 +2436,11 @@ export default function Home() {
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
                                     // Download background
-                                    triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
+                                    handleDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
                                     // Download card
                                     setTimeout(() => {
                                       const cardUrl = art.originalCardUrl || art.imageUrl;
-                                      triggerDownload(cardUrl, `TCG_${art.name.replace(/\s+/g, "_")}_card.png`);
+                                      handleDownload(cardUrl, `TCG_${art.name.replace(/\s+/g, "_")}_card.png`);
                                     }, 250);
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
@@ -2381,15 +2457,15 @@ export default function Home() {
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
                                     // 1. Download background
-                                    triggerDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
+                                    handleDownload(art.backgroundUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_background.png`);
                                     // 2. Download case with card
                                     setTimeout(() => {
-                                      triggerDownload(art.originalCardUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_case_with_card.png`);
+                                      handleDownload(art.originalCardUrl!, `TCG_${art.name.replace(/\s+/g, "_")}_case_with_card.png`);
                                     }, 250);
                                     // 3. Download only card
                                     if (art.cardOnlyUrl) {
                                       setTimeout(() => {
-                                        triggerDownload(
+                                        handleDownload(
                                           art.cardOnlyUrl!,
                                           `TCG_${art.name.replace(/\s+/g, "_")}_card_only.png`
                                         );
