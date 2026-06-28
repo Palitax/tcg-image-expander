@@ -973,6 +973,7 @@ export default function Home() {
       setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
       setElapsedTime(0);
       setActiveStepMessage("");
+      setNewArtworkName("");
     }
   }, []);
 
@@ -1114,7 +1115,13 @@ export default function Home() {
         body: cropFormData
       });
 
-      const { croppedImage, trimmedCard: cropTrimmedCard, usedFallback: cropFallback } = await parseResponseData(
+      const { 
+        croppedImage, 
+        trimmedCard: cropTrimmedCard, 
+        usedFallback: cropFallback,
+        cardName,
+        cardNumber
+      } = await parseResponseData(
         cropResponse,
         "Failed to analyze and crop card artwork."
       );
@@ -1122,6 +1129,19 @@ export default function Home() {
       setTrimmedCard(cropTrimmedCard || null);
       updateStepStatus("LAYOUT", "success");
       updateStepStatus("CROP", "success");
+
+      // Auto-populate card name and number detected by Gemini
+      let detectedName = "";
+      if (cardName && cardName.trim()) {
+        detectedName += cardName.trim();
+      }
+      if (cardNumber && cardNumber.trim()) {
+        if (detectedName) detectedName += " ";
+        detectedName += cardNumber.trim();
+      }
+      if (detectedName) {
+        setNewArtworkName(detectedName);
+      }
 
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateStepStatus("OUTPAINT", "running");
@@ -1826,7 +1846,9 @@ export default function Home() {
                           type="button"
                           onClick={() => {
                             setSaveTarget("generate");
-                            setNewArtworkName(file?.name ? file.name.replace(/\.[^/.]+$/, "") : "");
+                            if (!newArtworkName) {
+                              setNewArtworkName(file?.name ? file.name.replace(/\.[^/.]+$/, "") : "");
+                            }
                             setIsSaveModalOpen(true);
                           }}
                           className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
@@ -2173,11 +2195,13 @@ export default function Home() {
                           type="button"
                           onClick={() => {
                             setSaveTarget("case");
-                            setNewArtworkName(
-                              selectedArtworkId 
-                                ? `${savedArtworks.find(a => a.id === selectedArtworkId)?.name} Slab`
-                                : file?.name ? `${file.name.replace(/\.[^/.]+$/, "")} Slab` : "My Slab Showcase"
-                            );
+                            if (selectedArtworkId) {
+                              setNewArtworkName(`${savedArtworks.find(a => a.id === selectedArtworkId)?.name} Slab`);
+                            } else if (newArtworkName) {
+                              setNewArtworkName(`${newArtworkName} Slab`);
+                            } else {
+                              setNewArtworkName(file?.name ? `${file.name.replace(/\.[^/.]+$/, "")} Slab` : "My Slab Showcase");
+                            }
                             setIsSaveModalOpen(true);
                           }}
                           className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"

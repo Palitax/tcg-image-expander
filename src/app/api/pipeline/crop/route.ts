@@ -115,10 +115,12 @@ export async function POST(request: Request) {
    Rules for illustration:
    - Locate the main artwork area. Differentiate it from bottom gameplay rules text, character banners, and borders.
 3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.
-4. "isCleanCardImage": Set to true if the uploaded image contains ONLY the physical trading card itself, with NO outer mounting boards, cases, white margins, or background scenery surrounding it (the card edges extend all the way to the boundary of the image). Otherwise false.`
+4. "isCleanCardImage": Set to true if the uploaded image contains ONLY the physical trading card itself, with NO outer mounting boards, cases, white margins, or background scenery surrounding it (the card edges extend all the way to the boundary of the image). Otherwise false.
+5. "cardName": The text title/name of the character, Pokemon, item, or card (usually printed in bold letters at the top/center of the card, e.g. "Charizard", "Monkey.D.Luffy"). If not visible/legible, return an empty string.
+6. "cardNumber": The set/card sequence number, registration code, or catalog ID (usually located in the bottom corners or borders of the card, e.g. "151/165", "OP05-119", "PR-060"). If not visible/legible, return an empty string.`
           ],
           config: {
-            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the precise bounding box of the physical trading card, 2) a clean rectangular illustration area inside the card, 3) whether a 'SAMPLE' watermark exists, and 4) whether the uploaded image contains ONLY the card itself with no margins or backgrounds (isCleanCardImage). Return ONLY a JSON object matching the requested schema.",
+            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the precise bounding box of the physical trading card, 2) a clean rectangular illustration area inside the card, 3) whether a 'SAMPLE' watermark exists, 4) whether the uploaded image contains ONLY the card itself with no margins or backgrounds (isCleanCardImage), 5) the text name of the card (cardName), and 6) the set/card number printed at the bottom or corners (cardNumber). Return ONLY a JSON object matching the requested schema.",
             responseMimeType: "application/json",
             responseSchema: {
               type: "object",
@@ -150,9 +152,17 @@ export async function POST(request: Request) {
                 isCleanCardImage: {
                   type: "boolean",
                   description: "True if the uploaded image contains only the physical trading card itself with no outer backing, case, mount, white space, or table backgrounds. False otherwise."
+                },
+                cardName: {
+                  type: "string",
+                  description: "The name of the character/Pokémon/item on the card (e.g. 'Pikachu', 'Monkey.D.Luffy'). Leave blank if not found."
+                },
+                cardNumber: {
+                  type: "string",
+                  description: "The card number/ID printed at the bottom corners/borders (e.g. '151/165', 'OP05-119', 'PR-060'). Leave blank if not found."
                 }
               },
-              required: ["card", "illustration", "hasSampleWatermark", "isCleanCardImage"]
+              required: ["card", "illustration", "hasSampleWatermark", "isCleanCardImage", "cardName", "cardNumber"]
             }
           }
         });
@@ -175,6 +185,8 @@ export async function POST(request: Request) {
     let hasSampleWatermark = false;
     let isCleanCardImage = false;
     let usedFallback = false;
+    let cardName = "";
+    let cardNumber = "";
 
     if (layoutText) {
       try {
@@ -184,6 +196,8 @@ export async function POST(request: Request) {
           illustrationCoords = parsed.illustration;
           hasSampleWatermark = !!parsed.hasSampleWatermark;
           isCleanCardImage = !!parsed.isCleanCardImage;
+          cardName = parsed.cardName || "";
+          cardNumber = parsed.cardNumber || "";
           console.log("[Crop API] AI successfully detected layout:", parsed);
         } else {
           throw new Error("Missing card or illustration coordinates in model response.");
@@ -424,7 +438,9 @@ export async function POST(request: Request) {
       croppedImage: `data:image/png;base64,${croppedBase64}`,
       trimmedCard: `data:image/webp;base64,${trimmedCardBase64}`,
       coords: { ix1, iy1, ix2, iy2 },
-      usedFallback
+      usedFallback,
+      cardName,
+      cardNumber
     });
 
   } catch (error: any) {
