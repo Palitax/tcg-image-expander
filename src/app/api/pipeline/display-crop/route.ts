@@ -150,6 +150,18 @@ export async function POST(request: Request) {
     const ai = new GoogleGenAI({ apiKey });
     const formData = await request.formData();
     const file = formData.get("displayImage") as File | null;
+    const borderWidth = Number(formData.get("borderWidth") || "0");
+    const borderColorHex = String(formData.get("borderColor") || "#ffffff");
+
+    const hexToRgb = (hex: string) => {
+      const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+      return match ? {
+        r: parseInt(match[1], 16),
+        g: parseInt(match[2], 16),
+        b: parseInt(match[3], 16)
+      } : { r: 255, g: 255, b: 255 };
+    };
+    const borderColor = hexToRgb(borderColorHex);
 
     if (!file) {
       return NextResponse.json({ error: "No image file uploaded." }, { status: 400 });
@@ -375,10 +387,110 @@ export async function POST(request: Request) {
       .png({ compressionLevel: 7 })
       .toBuffer();
 
-    const cutoutBase64 = resizedCutoutBuffer.toString("base64");
+    let borderedCutoutBuffer = resizedCutoutBuffer;
+    if (borderWidth > 0) {
+      try {
+        console.log(`[Display Crop API] Applying outline border: ${borderWidth}px, color: rgb(${borderColor.r}, ${borderColor.g}, ${borderColor.b})`);
+        writeDebugLog(`Applying outline border: ${borderWidth}px, color: rgb(${borderColor.r}, ${borderColor.g}, ${borderColor.b})`);
+        
+        const pad = borderWidth + 2;
+        const paddedImage = await sharp(resizedCutoutBuffer)
+          .extend({
+            top: pad,
+            bottom: pad,
+            left: pad,
+            right: pad,
+            background: { r: 0, g: 0, b: 0, alpha: 0 }
+          })
+          .toBuffer({ resolveWithObject: true });
+        
+        const pWidth = paddedImage.info.width;
+        const pHeight = paddedImage.info.height;
+        const pBuffer = paddedImage.data;
 
-    // Crop style reference image (max 512px inside)
-    const styleRefBuffer = await sharp(resizedCutoutBuffer)
+        // Extract alpha channel to dilate
+        const alphaImage = await sharp(pBuffer)
+          .extractChannel("alpha")
+          .raw()
+          .toBuffer();
+
+        const dilatedAlpha = new Uint8Array(pWidth * pHeight);
+        
+        // Fast 2D dilation
+        for (let y = 0; y < pHeight; y++) {
+          for (let x = 0; x < pWidth; x++) {
+            const idx = y * pWidth + x;
+            if (alphaImage[idx] > 20) {
+              dilatedAlpha[idx] = 255;
+              continue;
+            }
+            
+            // Check neighbors within distance W
+            let isNearForeground = false;
+            for (let dy = -borderWidth; dy <= borderWidth; dy++) {
+              for (let dx = -borderWidth; dx <= borderWidth; dx++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx >= 0 && nx < pWidth && ny >= 0 && ny < pHeight) {
+                  const nidx = ny * pWidth + nx;
+                  if (alphaImage[nidx] > 20) {
+                    isNearForeground = true;
+                    break;
+                  }
+                }
+              }
+              if (isNearForeground) break;
+            }
+            
+            if (isNearForeground) {
+              dilatedAlpha[idx] = 255;
+            }
+          }
+        }
+
+        // Create solid color border layer
+        const borderLayer = Buffer.alloc(pWidth * pHeight * 4);
+        for (let i = 0; i < pWidth * pHeight; i++) {
+          const idx = i * 4;
+          borderLayer[idx] = borderColor.r;
+          borderLayer[idx + 1] = borderColor.g;
+          borderLayer[idx + 2] = borderColor.b;
+          borderLayer[idx + 3] = dilatedAlpha[i];
+        }
+
+        // Composite original cutout on top of border layer
+        const bordered = await sharp(borderLayer, {
+          raw: {
+            width: pWidth,
+            height: pHeight,
+            channels: 4
+          }
+        })
+        .composite([{
+          input: pBuffer,
+          top: 0,
+          left: 0
+        }])
+        .png()
+        .toBuffer();
+
+        // Trim transparency to fit tightly
+        const trimmedBordered = await sharp(bordered)
+          .trim()
+          .png()
+          .toBuffer();
+
+        borderedCutoutBuffer = trimmedBordered;
+      } catch (borderErr: any) {
+        console.warn("[Display Crop API] Failed to apply outline border:", borderErr.message);
+        writeDebugLog(`Failed to apply outline border: ${borderErr.message}`);
+      }
+    }
+
+    const cutoutBase64 = borderedCutoutBuffer.toString("base64");
+
+    // Crop style reference image (max 512px inside) using the clean bordered cutout
+    const styleRefBuffer = await sharp(borderedCutoutBuffer)
       .resize(512, 512, { fit: "inside" })
       .png()
       .toBuffer();
