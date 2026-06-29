@@ -323,6 +323,13 @@ export default function Home() {
   const [displayActiveStepMessage, setDisplayActiveStepMessage] = useState<string>("");
   const [isDisplayDownloadOpen, setIsDisplayDownloadOpen] = useState<boolean>(false);
 
+  // Watermark logo states
+  const [watermarkFile, setWatermarkFile] = useState<File | null>(null);
+  const [watermarkPreviewUrl, setWatermarkPreviewUrl] = useState<string | null>(null);
+  const [watermarkOpacity, setWatermarkOpacity] = useState<number>(0.33); // default 33% opacity
+  const [watermarkPosition, setWatermarkPosition] = useState<string>("bottom-center");
+  const [watermarkScale, setWatermarkScale] = useState<number>(0.15); // default 15% width scale
+
   // Upload base64 image data URL to Supabase Storage
   const uploadBase64ToSupabase = async (base64Data: string, path: string): Promise<string> => {
     const matches = base64Data.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
@@ -1444,7 +1451,11 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           displayCutout: cutoutImage, 
-          backgroundImage
+          backgroundImage,
+          watermarkImage: watermarkPreviewUrl,
+          watermarkPosition,
+          watermarkOpacity,
+          watermarkScale
         })
       });
 
@@ -2249,6 +2260,118 @@ export default function Home() {
                         <div className="text-[10px] text-zinc-500 mt-0.5">Soft, blurred version of the display box colors</div>
                       </button>
                     </div>
+                  </div>
+
+                  {/* Watermark Logo Section */}
+                  <div className="border-t border-zinc-800 pt-4 mt-2">
+                    <label className="block text-sm font-semibold text-white mb-2 flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-purple-400" />
+                      Overlay Logo / Watermark (Optional)
+                    </label>
+                    
+                    {!watermarkPreviewUrl ? (
+                      <div className="flex items-center justify-center border border-dashed border-zinc-800 rounded-xl p-4 bg-zinc-950/40 hover:bg-zinc-950/60 transition-all">
+                        <label className="cursor-pointer text-center py-2 px-4 flex flex-col items-center">
+                          <Upload className="w-5 h-5 text-zinc-500 mb-1" />
+                          <span className="text-xs font-semibold text-zinc-400">Upload Watermark Image</span>
+                          <span className="text-[10px] text-zinc-650 mt-0.5">PNG / JPG (Transparency recommended)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) {
+                                setWatermarkFile(f);
+                                const reader = new FileReader();
+                                reader.onload = () => setWatermarkPreviewUrl(reader.result as string);
+                                reader.readAsDataURL(f);
+                              }
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3 p-3 rounded-xl border border-zinc-850 bg-zinc-950/20">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={watermarkPreviewUrl}
+                              alt="Watermark preview"
+                              className="w-10 h-10 object-contain rounded bg-zinc-900 border border-zinc-800 p-1"
+                            />
+                            <div>
+                              <div className="text-xs font-semibold text-zinc-300 truncate max-w-[150px]">
+                                {watermarkFile ? watermarkFile.name : "Watermark Logo"}
+                              </div>
+                              <div className="text-[10px] text-zinc-500">
+                                Size: {Math.round(watermarkScale * 100)}% | Opacity: {Math.round(watermarkOpacity * 100)}%
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setWatermarkFile(null);
+                              setWatermarkPreviewUrl(null);
+                            }}
+                            className="text-xs font-semibold text-rose-450 hover:text-rose-450 transition-colors py-1 px-2 rounded hover:bg-rose-500/10 cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 mt-1">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-zinc-400 mb-1">Position</label>
+                            <select
+                              value={watermarkPosition}
+                              onChange={(e) => setWatermarkPosition(e.target.value)}
+                              className="w-full text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-zinc-300 outline-none focus:border-purple-500"
+                            >
+                              <option value="bottom-center">Bottom Middle</option>
+                              <option value="bottom-right">Bottom Right</option>
+                              <option value="bottom-left">Bottom Left</option>
+                              <option value="top-left">Top Left</option>
+                              <option value="top-right">Top Right</option>
+                              <option value="center">Center</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-zinc-400 mb-1">Scale/Size</label>
+                            <select
+                              value={watermarkScale}
+                              onChange={(e) => setWatermarkScale(Number(e.target.value))}
+                              className="w-full text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-zinc-300 outline-none focus:border-purple-500"
+                            >
+                              <option value="0.05">Tiny (5%)</option>
+                              <option value="0.10">Small (10%)</option>
+                              <option value="0.15">Medium (15%)</option>
+                              <option value="0.25">Large (25%)</option>
+                              <option value="0.35">Huge (35%)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="mt-1">
+                          <div className="flex justify-between items-center text-[11px] font-semibold text-zinc-400 mb-1">
+                            <span>Opacity (Watermark)</span>
+                            <span className="text-zinc-200">{Math.round(watermarkOpacity * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0.05"
+                            max="1.0"
+                            step="0.05"
+                            value={watermarkOpacity}
+                            onChange={(e) => setWatermarkOpacity(Number(e.target.value))}
+                            className="w-full accent-purple-500 bg-zinc-800 h-1 rounded-lg cursor-pointer appearance-none"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {displayFile && (

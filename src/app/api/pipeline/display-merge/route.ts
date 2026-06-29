@@ -5,7 +5,14 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const { displayCutout, backgroundImage } = await request.json();
+    const { 
+      displayCutout, 
+      backgroundImage,
+      watermarkImage,
+      watermarkPosition = "bottom-center",
+      watermarkOpacity = 0.33,
+      watermarkScale = 0.15
+    } = await request.json();
 
     if (!displayCutout || !backgroundImage) {
       return NextResponse.json(
@@ -125,16 +132,90 @@ export async function POST(request: Request) {
     .png()
     .toBuffer();
 
+    // Process optional watermark overlay
+    let watermarkOverlay: any = null;
+    if (watermarkImage) {
+      try {
+        const watermarkBase64 = watermarkImage.includes(",") ? watermarkImage.split(",")[1] : watermarkImage;
+        const watermarkBuffer = Buffer.from(watermarkBase64, "base64");
+        
+        // Get watermark metadata
+        const watermarkMeta = await sharp(watermarkBuffer).metadata();
+        const wmWidth = watermarkMeta.width || 0;
+        const wmHeight = watermarkMeta.height || 0;
+
+        if (wmWidth > 0 && wmHeight > 0) {
+          const wmRatio = wmWidth / wmHeight;
+          const targetWmWidth = Math.round(bgWidth * watermarkScale);
+          const targetWmHeight = Math.round(targetWmWidth / wmRatio);
+
+          // Resize watermark
+          let resizedWm = await sharp(watermarkBuffer)
+            .resize(targetWmWidth, targetWmHeight)
+            .png()
+            .toBuffer();
+
+          // Apply opacity: composite with solid color of specified alpha using blend "dest-in"
+          const opacityAlpha = Math.round(watermarkOpacity * 255);
+          resizedWm = await sharp(resizedWm)
+            .ensureAlpha()
+            .composite([{
+              input: Buffer.from([0, 0, 0, opacityAlpha]),
+              raw: { width: 1, height: 1, channels: 4 },
+              tile: true,
+              blend: "dest-in"
+            }])
+            .png()
+            .toBuffer();
+
+          // Calculate coordinates based on watermarkPosition
+          let wmLeft = Math.round((bgWidth - targetWmWidth) / 2);
+          let wmTop = bgHeight - targetWmHeight - Math.round(bgHeight * 0.05); // default bottom-center
+
+          if (watermarkPosition === "bottom-right") {
+            wmLeft = bgWidth - targetWmWidth - Math.round(bgWidth * 0.05);
+            wmTop = bgHeight - targetWmHeight - Math.round(bgHeight * 0.05);
+          } else if (watermarkPosition === "bottom-left") {
+            wmLeft = Math.round(bgWidth * 0.05);
+            wmTop = bgHeight - targetWmHeight - Math.round(bgHeight * 0.05);
+          } else if (watermarkPosition === "top-left") {
+            wmLeft = Math.round(bgWidth * 0.05);
+            wmTop = Math.round(bgHeight * 0.05);
+          } else if (watermarkPosition === "top-right") {
+            wmLeft = bgWidth - targetWmWidth - Math.round(bgWidth * 0.05);
+            wmTop = Math.round(bgHeight * 0.05);
+          } else if (watermarkPosition === "center") {
+            wmLeft = Math.round((bgWidth - targetWmWidth) / 2);
+            wmTop = Math.round((bgHeight - targetWmHeight) / 2);
+          }
+
+          watermarkOverlay = {
+            input: resizedWm,
+            left: wmLeft,
+            top: wmTop
+          };
+        }
+      } catch (wmError: any) {
+        console.warn("[Display Merge API] Watermark overlay failed:", wmError.message);
+      }
+    }
+
     // Overlay final display box + shadow centered on the background
     const finalTop = Math.round((bgHeight - paddedHeight) / 2);
     const finalLeft = Math.round((bgWidth - paddedWidth) / 2);
 
+    const compositeArray: any[] = [{
+      input: displayWithShadow,
+      top: finalTop,
+      left: finalLeft
+    }];
+
+    if (watermarkOverlay) {
+      compositeArray.push(watermarkOverlay);
+    }
+
     const finalResultBuffer = await sharp(backgroundBuffer)
-      .composite([{
-        input: displayWithShadow,
-        top: finalTop,
-        left: finalLeft
-      }])
+      .composite(compositeArray)
       .png()
       .toBuffer();
 
