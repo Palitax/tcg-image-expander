@@ -1378,13 +1378,15 @@ export default function Home() {
         cutoutImage, 
         croppedImage, 
         displayName,
-        displaySeries
+        displaySeries,
+        coords,
+        usedFallback
       } = await parseResponseData(
         cropResponse,
         "Failed to analyze and cutout display box."
       );
       
-      console.log("[Display Studio] Layout & Crop success:", { displayName, displaySeries });
+      console.log("[Display Studio] Layout & Crop success:", { displayName, displaySeries, usedFallback, coords });
       setDisplayCutoutUrl(cutoutImage || null);
       updateDisplayStepStatus("LAYOUT", "success");
       updateDisplayStepStatus("CROP", "success");
