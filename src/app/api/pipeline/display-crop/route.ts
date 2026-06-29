@@ -37,6 +37,105 @@ async function generateContentWithRetry(ai: any, params: any, retries = 2, delay
   }
   throw new Error("Failed to generate content after retries.");
 }
+function removeSolidBackground(width: number, height: number, rawBuffer: Buffer, threshold = 40): Buffer | null {
+  const size = width * height;
+  const visited = new Uint8Array(size); // 0 = unvisited, 1 = background, 2 = border/visited
+  const mask = new Uint8Array(size);
+  mask.fill(1); // 1 = keep, 0 = remove
+
+  const getPixel = (x: number, y: number) => {
+    const idx = (y * width + x) * 4;
+    return {
+      r: rawBuffer[idx],
+      g: rawBuffer[idx + 1],
+      b: rawBuffer[idx + 2],
+      a: rawBuffer[idx + 3]
+    };
+  };
+
+  const corners = [
+    getPixel(0, 0),
+    getPixel(width - 1, 0),
+    getPixel(0, height - 1),
+    getPixel(width - 1, height - 1)
+  ];
+
+  // Average corner colors to find bg reference
+  const bgR = Math.round(corners.reduce((sum, c) => sum + c.r, 0) / 4);
+  const bgG = Math.round(corners.reduce((sum, c) => sum + c.g, 0) / 4);
+  const bgB = Math.round(corners.reduce((sum, c) => sum + c.b, 0) / 4);
+
+  // If the background is not solid (e.g. corners have high variance), we should abort and use AI
+  const variance = corners.reduce((sum, c) => {
+    return sum + Math.abs(c.r - bgR) + Math.abs(c.g - bgG) + Math.abs(c.b - bgB);
+  }, 0) / 4;
+
+  if (variance > 45) {
+    console.log("[removeSolidBackground] Corner variance is too high, aborting solid background removal.");
+    return null;
+  }
+
+  // BFS Queue
+  const queue: number[] = [];
+
+  const enqueue = (x: number, y: number) => {
+    const idx = y * width + x;
+    if (visited[idx] === 0) {
+      const p = getPixel(x, y);
+      const diff = Math.abs(p.r - bgR) + Math.abs(p.g - bgG) + Math.abs(p.b - bgB);
+      if (diff < threshold) {
+        visited[idx] = 1; // background
+        mask[idx] = 0;    // remove
+        queue.push(idx);
+      } else {
+        visited[idx] = 2; // visited but foreground
+      }
+    }
+  };
+
+  // Enqueue all boundary pixels
+  for (let x = 0; x < width; x++) {
+    enqueue(x, 0);
+    enqueue(x, height - 1);
+  }
+  for (let y = 0; y < height; y++) {
+    enqueue(0, y);
+    enqueue(width - 1, y);
+  }
+
+  // BFS loop
+  let head = 0;
+  while (head < queue.length) {
+    const idx = queue[head++];
+    const x = idx % width;
+    const y = Math.floor(idx / width);
+
+    const neighbors = [
+      { x: x + 1, y },
+      { x: x - 1, y },
+      { x, y: y + 1 },
+      { x, y: y - 1 }
+    ];
+
+    for (const n of neighbors) {
+      if (n.x >= 0 && n.x < width && n.y >= 0 && n.y < height) {
+        enqueue(n.x, n.y);
+      }
+    }
+  }
+
+  // Create new RGBA buffer with updated alpha channel
+  const outBuffer = Buffer.alloc(rawBuffer.length);
+  for (let i = 0; i < size; i++) {
+    const srcIdx = i * 4;
+    outBuffer[srcIdx] = rawBuffer[srcIdx];
+    outBuffer[srcIdx + 1] = rawBuffer[srcIdx + 1];
+    outBuffer[srcIdx + 2] = rawBuffer[srcIdx + 2];
+    outBuffer[srcIdx + 3] = mask[i] === 0 ? 0 : rawBuffer[srcIdx + 3];
+  }
+
+  return outBuffer;
+}
 
 export async function POST(request: Request) {
   try {
@@ -66,6 +165,20 @@ export async function POST(request: Request) {
 
     if (width === 0 || height === 0) {
       return NextResponse.json({ error: "Failed to read image dimensions." }, { status: 400 });
+    }
+
+    // Try to remove solid background using BFS contour extraction
+    let solidBgCutoutBuffer: Buffer | null = null;
+    try {
+      const rawImage = await sharp(originalImageBuffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      
+      solidBgCutoutBuffer = removeSolidBackground(width, height, rawImage.data);
+    } catch (bfsError: any) {
+      console.warn("[Display Crop API] Solid background BFS extraction failed:", bfsError.message);
+      writeDebugLog(`Solid background BFS extraction failed: ${bfsError.message}`);
     }
 
     const base64Image = originalImageBuffer.toString("base64");
@@ -190,20 +303,37 @@ export async function POST(request: Request) {
       y: Math.max(0, Math.min(Math.round(p.y), height - 1))
     }));
 
-    // Create SVG Mask for the polygon
-    const pointsString = clampedPolygon.map(p => `${p.x},${p.y}`).join(" ");
-    const polygonMask = Buffer.from(
-      `<svg width="${width}" height="${height}"><polygon points="${pointsString}" fill="white"/></svg>`
-    );
-
-    // Apply the polygon mask to make background transparent
-    const cutout = await sharp(originalImageBuffer)
-      .composite([{
-        input: polygonMask,
-        blend: "dest-in"
-      }])
+    // Apply either BFS solid background cutout or polygon mask
+    let cutout;
+    if (solidBgCutoutBuffer) {
+      cutout = await sharp(solidBgCutoutBuffer, {
+        raw: {
+          width,
+          height,
+          channels: 4
+        }
+      })
       .png()
       .toBuffer();
+      
+      console.log("[Display Crop API] Solid background cutout successfully generated via BFS contour extraction.");
+      writeDebugLog("Solid background cutout successfully generated via BFS contour extraction.");
+    } else {
+      // Create SVG Mask for the polygon
+      const pointsString = clampedPolygon.map(p => `${p.x},${p.y}`).join(" ");
+      const polygonMask = Buffer.from(
+        `<svg width="${width}" height="${height}"><polygon points="${pointsString}" fill="white"/></svg>`
+      );
+
+      // Apply the polygon mask to make background transparent
+      cutout = await sharp(originalImageBuffer)
+        .composite([{
+          input: polygonMask,
+          blend: "dest-in"
+        }])
+        .png()
+        .toBuffer();
+    }
 
     // Auto-trim transparent borders
     let finalCutoutBuffer = cutout;
