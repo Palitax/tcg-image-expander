@@ -317,7 +317,7 @@ export default function Home() {
   const [isDisplayProcessing, setIsDisplayProcessing] = useState<boolean>(false);
   const [displayErrorMessage, setDisplayErrorMessage] = useState<string | null>(null);
   const [displayAspectRatio, setDisplayAspectRatio] = useState<string>("3:4");
-  const [displayBgMode, setDisplayBgMode] = useState<"outpaint" | "ambient">("outpaint");
+  const [displayBgMode, setDisplayBgMode] = useState<"outpaint" | "ambient" | "transparent">("outpaint");
   const [displaySteps, setDisplaySteps] = useState<ProgressStep[]>(DISPLAY_STEPS);
   const [displayElapsedTime, setDisplayElapsedTime] = useState<number>(0);
   const [displayActiveStepMessage, setDisplayActiveStepMessage] = useState<string>("");
@@ -1411,6 +1411,18 @@ export default function Home() {
         setNewArtworkName(detectedName);
       }
 
+      if (displayBgMode === "transparent") {
+        console.log("[Display Studio] Transparent mode selected. Skipping background generation and merge steps.");
+        setDisplayResultUrl(cutoutImage || null);
+        
+        // Mark remaining steps as success
+        setDisplaySteps(prev => 
+          prev.map(s => s.id === "OUTPAINT" || s.id === "MERGE" ? { ...s, status: "success" } : s)
+        );
+        setDisplayActiveStepMessage("Completed transparent cutout!");
+        return;
+      }
+
       console.log("[Display Studio] Starting Outpaint step with mode:", displayBgMode);
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateDisplayStepStatus("OUTPAINT", "running");
@@ -2234,7 +2246,7 @@ export default function Home() {
 
                   <div>
                     <label className="block text-sm font-medium text-zinc-300 mb-2">Background Generation Mode</label>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-3">
                       <button
                         type="button"
                         onClick={() => setDisplayBgMode("outpaint")}
@@ -2245,7 +2257,7 @@ export default function Home() {
                         }`}
                       >
                         <div className="font-semibold text-xs">Themed Backdrop</div>
-                        <div className="text-[10px] text-zinc-500 mt-0.5">Gemini describes context, Imagen 3 builds scene</div>
+                        <div className="text-[10px] text-zinc-550 mt-0.5">Gemini describes context, Imagen 3 builds scene</div>
                       </button>
                       <button
                         type="button"
@@ -2257,7 +2269,19 @@ export default function Home() {
                         }`}
                       >
                         <div className="font-semibold text-xs">Ambient Blur</div>
-                        <div className="text-[10px] text-zinc-500 mt-0.5">Soft, blurred version of the display box colors</div>
+                        <div className="text-[10px] text-zinc-550 mt-0.5">Soft, blurred version of the display box colors</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDisplayBgMode("transparent")}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          displayBgMode === "transparent"
+                            ? "bg-purple-600/10 border-purple-500 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.05)]"
+                            : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                        }`}
+                      >
+                        <div className="font-semibold text-xs">Transparent Cutout</div>
+                        <div className="text-[10px] text-zinc-550 mt-0.5">Remove background and return transparent display box</div>
                       </button>
                     </div>
                   </div>
