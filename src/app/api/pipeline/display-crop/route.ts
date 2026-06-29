@@ -64,11 +64,13 @@ export async function POST(request: Request) {
     let layoutText = "";
     let lastError;
 
-    const describePrompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
+    const describePrompt = `The dimensions of the uploaded image are ${width}x${height} pixels. The image contains a display box on a plain background (often white or light grey). Please identify:
 1. "polygon": A list of vertices (x, y coordinates in absolute pixels) forming a closed polygon that tightly traces the outer boundary/silhouette of the collectible display box (like a booster box, trainer box, or deck box) in the image.
    Rules for tracing display boundary:
-   - Identify the actual packaging box. Ignore table backgrounds, shadows on the ground, scanner borders, hands, or surrounding background scenery.
-   - Trace all visible boundary edges. Since display boxes are 3D rectangular prisms, the resulting silhouette will typically form a hexagon or similar polygon shape if viewed at an angle.
+   - Identify the actual printed packaging box. Ignore any shadows, table backgrounds, scanner borders, hands, or surrounding background scenery.
+   - The polygon MUST tightly outline ONLY the printed display box. Place the vertices exactly on the boundary where the printed box artwork ends and the plain background (e.g. the white background) begins.
+   - Do NOT include any part of the plain background (e.g., the white space) inside the polygon. If the box is dark and has a high-contrast transition to a white background, be extremely careful not to let the polygon bleed into the white background.
+   - Only trace faces that are actually visible and part of the printed box. Do NOT assume there are additional faces or construct a symmetric hexagon if a side face is not visible or if the box ends earlier.
    - Coordinates MUST be absolute integer values between 0 and the image dimensions (width: ${width}, height: ${height}).
 2. "displayName": The name/title of the display box (usually printed on the front, e.g. "One Piece OP-16 Booster Box"). Detect and translate Japanese, Korean, Chinese, or non-English names to their official English equivalent (e.g. translate '결전의 각' or '决战之刻' to 'Decisive Battle' or OP-16 equivalent). If not visible, return empty.
 3. "displaySeries": The franchise or game series name (e.g., 'One Piece Card Game', 'Pokemon TCG', 'Yu-Gi-Oh').`;
