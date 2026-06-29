@@ -1361,6 +1361,7 @@ export default function Home() {
     setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
 
     try {
+      console.log("[Display Studio] Starting Layout & Crop step...");
       // STEP 1 & 2: Bounding Box/Polygon Detection & Crop
       updateDisplayStepStatus("LAYOUT", "running");
       setDisplayActiveStepMessage("Locating display box boundary...");
@@ -1383,6 +1384,7 @@ export default function Home() {
         "Failed to analyze and cutout display box."
       );
       
+      console.log("[Display Studio] Layout & Crop success:", { displayName, displaySeries });
       setDisplayCutoutUrl(cutoutImage || null);
       updateDisplayStepStatus("LAYOUT", "success");
       updateDisplayStepStatus("CROP", "success");
@@ -1400,6 +1402,7 @@ export default function Home() {
         setNewArtworkName(detectedName);
       }
 
+      console.log("[Display Studio] Starting Outpaint step with mode:", displayBgMode);
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateDisplayStepStatus("OUTPAINT", "running");
       setDisplayActiveStepMessage("Analyzing display theme with Gemini...");
@@ -1425,9 +1428,11 @@ export default function Home() {
         outpaintResponse,
         "Failed to generate themed backdrop."
       );
+      console.log("[Display Studio] Outpaint background generated successfully.");
       setDisplayBgUrl(backgroundImage || null);
       updateDisplayStepStatus("OUTPAINT", "success");
 
+      console.log("[Display Studio] Starting Merge step...");
       // STEP 4: Merge display cutout + shadow over background
       updateDisplayStepStatus("MERGE", "running");
       setDisplayActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
@@ -1445,13 +1450,14 @@ export default function Home() {
         mergeResponse,
         "Failed to merge display cutout and background."
       );
+      console.log("[Display Studio] Merge completed successfully.");
       updateDisplayStepStatus("MERGE", "success");
       setDisplayResultUrl(resultImageUrl || null);
       setDisplayActiveStepMessage("Completed!");
 
     } catch (error) {
       const message = getErrorMessage(error);
-      console.error("Display pipeline error:", error);
+      console.error("[Display Studio] Display pipeline error:", error);
       setDisplayErrorMessage(message || "An unexpected error occurred during processing.");
       
       // Mark current running step as error
