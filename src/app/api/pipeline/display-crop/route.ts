@@ -458,7 +458,56 @@ export async function POST(request: Request) {
           borderLayer[idx + 3] = dilatedAlpha[i];
         }
 
-        // Composite original cutout on top of border layer
+        // Morphological erosion to shrink the foreground mask by 1.5 pixels,
+        // which removes white background pixels clinging to the display edge.
+        const erodedAlpha = new Uint8Array(pWidth * pHeight);
+        const erosionRadius = 1.5;
+        const rInt = Math.ceil(erosionRadius);
+
+        for (let y = 0; y < pHeight; y++) {
+          for (let x = 0; x < pWidth; x++) {
+            const idx = y * pWidth + x;
+            if (alphaImage[idx] <= 20) {
+              erodedAlpha[idx] = 0;
+              continue;
+            }
+
+            let isNearBackground = false;
+            for (let dy = -rInt; dy <= rInt; dy++) {
+              for (let dx = -rInt; dx <= rInt; dx++) {
+                if (dx * dx + dy * dy > erosionRadius * erosionRadius) continue;
+                
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx >= 0 && nx < pWidth && ny >= 0 && ny < pHeight) {
+                  const nidx = ny * pWidth + nx;
+                  if (alphaImage[nidx] <= 20) {
+                    isNearBackground = true;
+                    break;
+                  }
+                } else {
+                  isNearBackground = true;
+                  break;
+                }
+              }
+              if (isNearBackground) break;
+            }
+
+            erodedAlpha[idx] = isNearBackground ? 0 : 255;
+          }
+        }
+
+        // Apply eroded alpha mask to the original cutout buffer
+        const erodedForeground = Buffer.alloc(pWidth * pHeight * 4);
+        for (let i = 0; i < pWidth * pHeight; i++) {
+          const idx = i * 4;
+          erodedForeground[idx] = pBuffer[idx];
+          erodedForeground[idx + 1] = pBuffer[idx + 1];
+          erodedForeground[idx + 2] = pBuffer[idx + 2];
+          erodedForeground[idx + 3] = erodedAlpha[i] === 0 ? 0 : pBuffer[idx + 3];
+        }
+
+        // Composite eroded foreground on top of border layer
         const bordered = await sharp(borderLayer, {
           raw: {
             width: pWidth,
@@ -467,7 +516,7 @@ export async function POST(request: Request) {
           }
         })
         .composite([{
-          input: pBuffer,
+          input: erodedForeground,
           top: 0,
           left: 0
         }])
