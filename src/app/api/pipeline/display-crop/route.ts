@@ -489,20 +489,57 @@ export async function POST(request: Request) {
           }
         }
 
-        // Composite layers directly in raw pixel buffer (avoiding sharp composite calls)
+        // Smooth both masks (dilated and eroded) with high-quality Gaussian blur for anti-aliasing
+        const smoothDilatedAlpha = await sharp(Buffer.from(dilatedAlpha), {
+          raw: {
+            width: pWidth,
+            height: pHeight,
+            channels: 1
+          }
+        })
+        .blur(0.8)
+        .raw()
+        .toBuffer();
+
+        const smoothErodedAlpha = await sharp(Buffer.from(erodedAlpha), {
+          raw: {
+            width: pWidth,
+            height: pHeight,
+            channels: 1
+          }
+        })
+        .blur(0.6)
+        .raw()
+        .toBuffer();
+
+        // Mathematically composite layers with precise alpha blending in raw pixel buffer
         const borderedLayer = Buffer.alloc(pWidth * pHeight * 4);
         for (let i = 0; i < pWidth * pHeight; i++) {
           const idx = i * 4;
-          if (erodedAlpha[i] > 0) {
+          const fgAlpha = (smoothErodedAlpha[i] / 255) * (pBuffer[idx + 3] / 255);
+          
+          if (fgAlpha >= 0.99) {
             borderedLayer[idx] = pBuffer[idx];
             borderedLayer[idx + 1] = pBuffer[idx + 1];
             borderedLayer[idx + 2] = pBuffer[idx + 2];
             borderedLayer[idx + 3] = pBuffer[idx + 3];
-          } else {
+          } else if (fgAlpha <= 0.01) {
             borderedLayer[idx] = borderColor.r;
             borderedLayer[idx + 1] = borderColor.g;
             borderedLayer[idx + 2] = borderColor.b;
-            borderedLayer[idx + 3] = dilatedAlpha[i];
+            borderedLayer[idx + 3] = smoothDilatedAlpha[i];
+          } else {
+            const bgAlpha = (smoothDilatedAlpha[i] / 255) * (1 - fgAlpha);
+            const outAlpha = fgAlpha + bgAlpha;
+            
+            if (outAlpha > 0) {
+              borderedLayer[idx] = Math.round((pBuffer[idx] * fgAlpha + borderColor.r * bgAlpha) / outAlpha);
+              borderedLayer[idx + 1] = Math.round((pBuffer[idx + 1] * fgAlpha + borderColor.g * bgAlpha) / outAlpha);
+              borderedLayer[idx + 2] = Math.round((pBuffer[idx + 2] * fgAlpha + borderColor.b * bgAlpha) / outAlpha);
+              borderedLayer[idx + 3] = Math.round(outAlpha * 255);
+            } else {
+              borderedLayer[idx + 3] = 0;
+            }
           }
         }
 
