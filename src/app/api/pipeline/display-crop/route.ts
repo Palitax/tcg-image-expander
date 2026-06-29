@@ -395,6 +395,7 @@ export async function POST(request: Request) {
         
         const pad = borderWidth + 2;
         const paddedImage = await sharp(resizedCutoutBuffer)
+          .ensureAlpha()
           .extend({
             top: pad,
             bottom: pad,
@@ -402,17 +403,18 @@ export async function POST(request: Request) {
             right: pad,
             background: { r: 0, g: 0, b: 0, alpha: 0 }
           })
+          .raw()
           .toBuffer({ resolveWithObject: true });
         
         const pWidth = paddedImage.info.width;
         const pHeight = paddedImage.info.height;
         const pBuffer = paddedImage.data;
 
-        // Extract alpha channel to dilate
-        const alphaImage = await sharp(pBuffer)
-          .extractChannel("alpha")
-          .raw()
-          .toBuffer();
+        // Extract alpha channel directly from raw pixel buffer
+        const alphaImage = new Uint8Array(pWidth * pHeight);
+        for (let i = 0; i < pWidth * pHeight; i++) {
+          alphaImage[i] = pBuffer[i * 4 + 3];
+        }
 
         const dilatedAlpha = new Uint8Array(pWidth * pHeight);
         
@@ -446,16 +448,6 @@ export async function POST(request: Request) {
               dilatedAlpha[idx] = 255;
             }
           }
-        }
-
-        // Create solid color border layer
-        const borderLayer = Buffer.alloc(pWidth * pHeight * 4);
-        for (let i = 0; i < pWidth * pHeight; i++) {
-          const idx = i * 4;
-          borderLayer[idx] = borderColor.r;
-          borderLayer[idx + 1] = borderColor.g;
-          borderLayer[idx + 2] = borderColor.b;
-          borderLayer[idx + 3] = dilatedAlpha[i];
         }
 
         // Morphological erosion to shrink the foreground mask by 1.5 pixels,
@@ -497,29 +489,30 @@ export async function POST(request: Request) {
           }
         }
 
-        // Apply eroded alpha mask to the original cutout buffer
-        const erodedForeground = Buffer.alloc(pWidth * pHeight * 4);
+        // Composite layers directly in raw pixel buffer (avoiding sharp composite calls)
+        const borderedLayer = Buffer.alloc(pWidth * pHeight * 4);
         for (let i = 0; i < pWidth * pHeight; i++) {
           const idx = i * 4;
-          erodedForeground[idx] = pBuffer[idx];
-          erodedForeground[idx + 1] = pBuffer[idx + 1];
-          erodedForeground[idx + 2] = pBuffer[idx + 2];
-          erodedForeground[idx + 3] = erodedAlpha[i] === 0 ? 0 : pBuffer[idx + 3];
+          if (erodedAlpha[i] > 0) {
+            borderedLayer[idx] = pBuffer[idx];
+            borderedLayer[idx + 1] = pBuffer[idx + 1];
+            borderedLayer[idx + 2] = pBuffer[idx + 2];
+            borderedLayer[idx + 3] = pBuffer[idx + 3];
+          } else {
+            borderedLayer[idx] = borderColor.r;
+            borderedLayer[idx + 1] = borderColor.g;
+            borderedLayer[idx + 2] = borderColor.b;
+            borderedLayer[idx + 3] = dilatedAlpha[i];
+          }
         }
 
-        // Composite eroded foreground on top of border layer
-        const bordered = await sharp(borderLayer, {
+        const bordered = await sharp(borderedLayer, {
           raw: {
             width: pWidth,
             height: pHeight,
             channels: 4
           }
         })
-        .composite([{
-          input: erodedForeground,
-          top: 0,
-          left: 0
-        }])
         .png()
         .toBuffer();
 
