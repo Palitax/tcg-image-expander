@@ -20,7 +20,8 @@ import {
   Trash2,
   Pencil,
   X,
-  ChevronDown
+  ChevronDown,
+  Package
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -56,6 +57,13 @@ const INITIAL_STEPS: ProgressStep[] = [
   { id: "CROP", label: "Artwork Extraction", description: "Sharp extracts the illustration using coordinates", status: "idle" },
   { id: "OUTPAINT", label: "Background Expansion", description: "Imagen 3 outpaints background in target aspect ratio", status: "idle" },
   { id: "MERGE", label: "Card Compositing", description: "Overlay card with elegant soft shadow and finish", status: "idle" }
+];
+
+const DISPLAY_STEPS: ProgressStep[] = [
+  { id: "LAYOUT", label: "Display Detection", description: "Gemini traces the display box boundary", status: "idle" },
+  { id: "CROP", label: "Cutout & Trim", description: "Sharp extracts and trims the transparent cutout", status: "idle" },
+  { id: "OUTPAINT", label: "Background Generation", description: "Imagen 3 generates a matching themed scenery", status: "idle" },
+  { id: "MERGE", label: "3D Composition", description: "Composite cutout with soft drop shadow onto background", status: "idle" }
 ];
 
 // Helper to convert file to Base64 data URL
@@ -255,10 +263,10 @@ export default function Home() {
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("outpaint");
   const [shouldCropCard, setShouldCropCard] = useState<boolean>(true);
 
-  const [activeTab, setActiveTab] = useState<"generate" | "case" | "library">("generate");
+  const [activeTab, setActiveTab] = useState<"generate" | "case" | "library" | "display">("generate");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
-  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload">("generate");
+  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload" | "display">("generate");
   const [newArtworkName, setNewArtworkName] = useState<string>("");
   const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
   const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
@@ -299,6 +307,21 @@ export default function Home() {
 
   // Lightbox larger view state
   const [lightboxImage, setLightboxImage] = useState<{ url: string; title: string } | null>(null);
+
+  // Display Studio states
+  const [displayFile, setDisplayFile] = useState<File | null>(null);
+  const [displayPreviewUrl, setDisplayPreviewUrl] = useState<string | null>(null);
+  const [displayResultUrl, setDisplayResultUrl] = useState<string | null>(null);
+  const [displayCutoutUrl, setDisplayCutoutUrl] = useState<string | null>(null);
+  const [displayBgUrl, setDisplayBgUrl] = useState<string | null>(null);
+  const [isDisplayProcessing, setIsDisplayProcessing] = useState<boolean>(false);
+  const [displayErrorMessage, setDisplayErrorMessage] = useState<string | null>(null);
+  const [displayAspectRatio, setDisplayAspectRatio] = useState<string>("3:4");
+  const [displayBgMode, setDisplayBgMode] = useState<"outpaint" | "ambient">("outpaint");
+  const [displaySteps, setDisplaySteps] = useState<ProgressStep[]>(DISPLAY_STEPS);
+  const [displayElapsedTime, setDisplayElapsedTime] = useState<number>(0);
+  const [displayActiveStepMessage, setDisplayActiveStepMessage] = useState<string>("");
+  const [isDisplayDownloadOpen, setIsDisplayDownloadOpen] = useState<boolean>(false);
 
   // Upload base64 image data URL to Supabase Storage
   const uploadBase64ToSupabase = async (base64Data: string, path: string): Promise<string> => {
@@ -428,11 +451,18 @@ export default function Home() {
             const dbOriginalCardUrl = row.original_card_url || undefined;
             let originalCardUrl = dbOriginalCardUrl;
             let cardOnlyUrl: string | undefined = undefined;
+            let isDisplay = false;
 
             if (dbOriginalCardUrl && dbOriginalCardUrl.includes("?card_only=")) {
               const parts = dbOriginalCardUrl.split("?card_only=");
               originalCardUrl = parts[0];
-              cardOnlyUrl = decodeURIComponent(parts[1]);
+              const queryPart = parts[1];
+              if (queryPart.includes("&is_display=true")) {
+                isDisplay = true;
+                cardOnlyUrl = decodeURIComponent(queryPart.replace("&is_display=true", ""));
+              } else {
+                cardOnlyUrl = decodeURIComponent(queryPart);
+              }
             }
 
             const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
@@ -453,7 +483,8 @@ export default function Home() {
               cardOnlyUrl: cardOnlyUrl,
               aspectRatio: row.aspect_ratio,
               timestamp: Number(row.timestamp),
-              isCase: isCase
+              isCase: isCase,
+              isDisplay: isDisplay
             };
           });
           setSavedArtworks(formatted);
@@ -532,11 +563,18 @@ export default function Home() {
           const dbOriginalCardUrl = row.original_card_url || undefined;
           let originalCardUrl = dbOriginalCardUrl;
           let cardOnlyUrl: string | undefined = undefined;
+          let isDisplay = false;
 
           if (dbOriginalCardUrl && dbOriginalCardUrl.includes("?card_only=")) {
             const parts = dbOriginalCardUrl.split("?card_only=");
             originalCardUrl = parts[0];
-            cardOnlyUrl = decodeURIComponent(parts[1]);
+            const queryPart = parts[1];
+            if (queryPart.includes("&is_display=true")) {
+              isDisplay = true;
+              cardOnlyUrl = decodeURIComponent(queryPart.replace("&is_display=true", ""));
+            } else {
+              cardOnlyUrl = decodeURIComponent(queryPart);
+            }
           }
 
           const isCase = originalCardUrl ? (originalCardUrl.includes("case_with_card") || originalCardUrl.includes("/case_with_card")) : false;
@@ -557,7 +595,8 @@ export default function Home() {
             cardOnlyUrl: cardOnlyUrl,
             aspectRatio: row.aspect_ratio,
             timestamp: Number(row.timestamp),
-            isCase: isCase
+            isCase: isCase,
+            isDisplay: isDisplay
           };
         });
         setSavedArtworks(formatted);
@@ -671,6 +710,7 @@ export default function Home() {
     const targetUrl = 
       saveTarget === "case" ? caseResultUrl : 
       saveTarget === "upload" ? libraryUploadDataUrl : 
+      saveTarget === "display" ? displayResultUrl :
       resultImageUrl;
 
     if (!targetUrl || !newArtworkName.trim()) return;
@@ -681,10 +721,12 @@ export default function Home() {
     let originalCardUrl = 
       saveTarget === "generate" ? (trimmedCard || undefined) : 
       saveTarget === "case" ? (caseWithCardUrl || caseCardImage || undefined) : 
+      saveTarget === "display" ? (displayPreviewUrl || undefined) :
       undefined;
     let backgroundUrl = 
       saveTarget === "generate" ? (backgroundImageUrl || undefined) : 
       saveTarget === "case" ? (caseBgResultUrl || caseBgImage || undefined) : 
+      saveTarget === "display" ? (displayBgUrl || undefined) :
       undefined;
 
     const timestamp = Date.now();
@@ -695,7 +737,18 @@ export default function Home() {
         if (imageUrl.startsWith("data:image/")) {
           imageUrl = await uploadBase64ToSupabase(imageUrl, `spaces/${currentSpace.id}/${artId}/final.png`);
         }
-        if (originalCardUrl && originalCardUrl.startsWith("data:image/")) {
+        if (saveTarget === "display" && displayFile) {
+          const path = `spaces/${currentSpace.id}/${artId}/display_original.png`;
+          const { error: uploadError } = await supabase.storage
+            .from("tcg-artworks")
+            .upload(path, displayFile, { contentType: displayFile.type, upsert: true });
+          if (!uploadError) {
+            const { data: { publicUrl } } = supabase.storage
+              .from("tcg-artworks")
+              .getPublicUrl(path);
+            originalCardUrl = publicUrl;
+          }
+        } else if (originalCardUrl && originalCardUrl.startsWith("data:image/")) {
           const filename = saveTarget === "case" ? "case_with_card.png" : "card.png";
           originalCardUrl = await uploadBase64ToSupabase(originalCardUrl, `spaces/${currentSpace.id}/${artId}/${filename}`);
         }
@@ -728,10 +781,14 @@ export default function Home() {
               cardOnlyUrl = caseCardImage;
             }
           }
+        } else if (saveTarget === "display" && displayCutoutUrl) {
+          if (displayCutoutUrl.startsWith("data:image/")) {
+            cardOnlyUrl = await uploadBase64ToSupabase(displayCutoutUrl, `spaces/${currentSpace.id}/${artId}/display_cutout.png`);
+          }
         }
 
-        if (saveTarget === "case" && originalCardUrl && cardOnlyUrl) {
-          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}`;
+        if ((saveTarget === "case" || saveTarget === "display") && originalCardUrl && cardOnlyUrl) {
+          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}${saveTarget === "display" ? "&is_display=true" : ""}`;
         }
 
         const { error } = await supabase
@@ -743,7 +800,10 @@ export default function Home() {
             image_url: imageUrl,
             original_card_url: originalCardUrl || null,
             background_url: backgroundUrl || null,
-            aspect_ratio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
+            aspect_ratio: 
+              saveTarget === "upload" ? libraryUploadAspectRatio : 
+              saveTarget === "display" ? displayAspectRatio : 
+              aspectRatio,
             timestamp: timestamp
           });
 
@@ -763,10 +823,17 @@ export default function Home() {
         imageUrl: imageUrl,
         originalCardUrl: originalCardUrl,
         backgroundUrl: backgroundUrl,
-        cardOnlyUrl: saveTarget === "case" ? (caseCardImage || undefined) : undefined,
-        aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
+        cardOnlyUrl: 
+          saveTarget === "case" ? (caseCardImage || undefined) : 
+          saveTarget === "display" ? (displayCutoutUrl || undefined) : 
+          undefined,
+        aspectRatio: 
+          saveTarget === "upload" ? libraryUploadAspectRatio : 
+          saveTarget === "display" ? displayAspectRatio : 
+          aspectRatio,
         timestamp: timestamp,
-        isCase: saveTarget === "case"
+        isCase: saveTarget === "case",
+        isDisplay: saveTarget === "display"
       };
 
       try {
@@ -781,19 +848,24 @@ export default function Home() {
     // Reconstruct cardOnlyUrl in memory for the updated state (either local or supabase-predicted)
     let finalCardOnlyUrl: string | undefined = undefined;
     let finalOriginalCardUrl = originalCardUrl;
-    if (saveTarget === "case") {
+    if (saveTarget === "case" || saveTarget === "display") {
       if (!isLocalMode && currentSpace) {
         if (originalCardUrl && originalCardUrl.includes("?card_only=")) {
           const parts = originalCardUrl.split("?card_only=");
           finalOriginalCardUrl = parts[0];
-          finalCardOnlyUrl = decodeURIComponent(parts[1]);
+          const queryPart = parts[1];
+          if (queryPart.includes("&is_display=true")) {
+            finalCardOnlyUrl = decodeURIComponent(queryPart.replace("&is_display=true", ""));
+          } else {
+            finalCardOnlyUrl = decodeURIComponent(queryPart);
+          }
         } else if (originalCardUrl && originalCardUrl.includes("case_with_card.png")) {
           finalCardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
         } else {
-          finalCardOnlyUrl = caseCardImage || undefined;
+          finalCardOnlyUrl = saveTarget === "case" ? (caseCardImage || undefined) : (displayCutoutUrl || undefined);
         }
       } else {
-        finalCardOnlyUrl = caseCardImage || undefined;
+        finalCardOnlyUrl = saveTarget === "case" ? (caseCardImage || undefined) : (displayCutoutUrl || undefined);
       }
     }
 
@@ -804,9 +876,13 @@ export default function Home() {
       originalCardUrl: finalOriginalCardUrl,
       backgroundUrl: backgroundUrl,
       cardOnlyUrl: finalCardOnlyUrl,
-      aspectRatio: saveTarget === "upload" ? libraryUploadAspectRatio : aspectRatio,
+      aspectRatio: 
+        saveTarget === "upload" ? libraryUploadAspectRatio : 
+        saveTarget === "display" ? displayAspectRatio : 
+        aspectRatio,
       timestamp: timestamp,
-      isCase: saveTarget === "case"
+      isCase: saveTarget === "case",
+      isDisplay: saveTarget === "display"
     };
 
     const updated = [newArtworkRecord, ...savedArtworks];
@@ -960,6 +1036,26 @@ export default function Home() {
     };
   }, [isProcessing]);
 
+  const displayTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (isDisplayProcessing) {
+      const startTime = Date.now();
+      displayTimerRef.current = setInterval(() => {
+        setDisplayElapsedTime((Date.now() - startTime) / 1000);
+      }, 100);
+    } else {
+      if (displayTimerRef.current) {
+        clearInterval(displayTimerRef.current);
+      }
+    }
+    return () => {
+      if (displayTimerRef.current) {
+        clearInterval(displayTimerRef.current);
+      }
+    };
+  }, [isDisplayProcessing]);
+
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       const selectedFile = acceptedFiles[0];
@@ -984,6 +1080,35 @@ export default function Home() {
     },
     maxFiles: 1,
     disabled: isProcessing
+  });
+
+  const onDisplayDrop = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      const selectedFile = acceptedFiles[0];
+      setDisplayFile(selectedFile);
+      setDisplayPreviewUrl(URL.createObjectURL(selectedFile));
+      setDisplayResultUrl(null);
+      setDisplayCutoutUrl(null);
+      setDisplayBgUrl(null);
+      setDisplayErrorMessage(null);
+      setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
+      setDisplayElapsedTime(0);
+      setDisplayActiveStepMessage("");
+      setNewArtworkName("");
+    }
+  }, []);
+
+  const {
+    getRootProps: getDisplayRootProps,
+    getInputProps: getDisplayInputProps,
+    isDragActive: isDisplayDragActive
+  } = useDropzone({
+    onDrop: onDisplayDrop,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 1,
+    disabled: isDisplayProcessing
   });
 
   const onLibraryDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -1060,6 +1185,10 @@ export default function Home() {
               if (!isProcessing) {
                 onDrop([pastedFile]);
               }
+            } else if (activeTab === "display") {
+              if (!isDisplayProcessing) {
+                onDisplayDrop([pastedFile]);
+              }
             } else if (activeTab === "library") {
               onLibraryDrop([pastedFile]);
             }
@@ -1073,7 +1202,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-  }, [activeTab, isProcessing, onDrop, onLibraryDrop]);
+  }, [activeTab, isProcessing, isDisplayProcessing, onDrop, onDisplayDrop, onLibraryDrop]);
 
   const updateStepStatus = (stepId: string, status: "running" | "success" | "error") => {
     setSteps(prev => 
@@ -1081,7 +1210,20 @@ export default function Home() {
         if (step.id === stepId) {
           return { ...step, status };
         }
-        // If this step succeeded, make sure all previous steps are marked success too
+        if (status === "success" && prev.findIndex(s => s.id === stepId) > prev.findIndex(s => s.id === step.id)) {
+          return { ...step, status: "success" };
+        }
+        return step;
+      })
+    );
+  };
+
+  const updateDisplayStepStatus = (stepId: string, status: "running" | "success" | "error") => {
+    setDisplaySteps(prev => 
+      prev.map(step => {
+        if (step.id === stepId) {
+          return { ...step, status };
+        }
         if (status === "success" && prev.findIndex(s => s.id === stepId) > prev.findIndex(s => s.id === step.id)) {
           return { ...step, status: "success" };
         }
@@ -1208,6 +1350,123 @@ export default function Home() {
     }
   };
 
+  const handleProcessDisplayImage = async () => {
+    if (!displayFile) return;
+    setIsDisplayProcessing(true);
+    setDisplayErrorMessage(null);
+    setDisplayResultUrl(null);
+    setDisplayCutoutUrl(null);
+    setDisplayBgUrl(null);
+    setDisplayElapsedTime(0);
+    setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
+
+    try {
+      // STEP 1 & 2: Bounding Box/Polygon Detection & Crop
+      updateDisplayStepStatus("LAYOUT", "running");
+      setDisplayActiveStepMessage("Locating display box boundary...");
+      
+      const cropFormData = new FormData();
+      cropFormData.append("displayImage", displayFile);
+
+      const cropResponse = await fetch("/api/pipeline/display-crop", {
+        method: "POST",
+        body: cropFormData
+      });
+
+      const { 
+        cutoutImage, 
+        croppedImage, 
+        displayName,
+        displaySeries
+      } = await parseResponseData(
+        cropResponse,
+        "Failed to analyze and cutout display box."
+      );
+      
+      setDisplayCutoutUrl(cutoutImage || null);
+      updateDisplayStepStatus("LAYOUT", "success");
+      updateDisplayStepStatus("CROP", "success");
+
+      // Auto-populate display name detected by Gemini
+      let detectedName = "";
+      if (displayName && displayName.trim()) {
+        detectedName += displayName.trim();
+      }
+      if (displaySeries && displaySeries.trim()) {
+        if (detectedName) detectedName += " - ";
+        detectedName += displaySeries.trim();
+      }
+      if (detectedName) {
+        setNewArtworkName(detectedName);
+      }
+
+      // STEP 3: Outpainting with style analysis & Imagen 3
+      updateDisplayStepStatus("OUTPAINT", "running");
+      setDisplayActiveStepMessage("Analyzing display theme with Gemini...");
+
+      const outpaintResponse = await fetchWithRetry(
+        "/api/pipeline/outpaint",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            croppedImage: cutoutImage, // Use the clean transparent cutout as style reference
+            aspectRatio: displayAspectRatio, 
+            mode: displayBgMode,
+            isDisplay: true
+          })
+        },
+        2,
+        1500,
+        (msg) => setDisplayActiveStepMessage(msg)
+      );
+
+      const { backgroundImage } = await parseResponseData(
+        outpaintResponse,
+        "Failed to generate themed backdrop."
+      );
+      setDisplayBgUrl(backgroundImage || null);
+      updateDisplayStepStatus("OUTPAINT", "success");
+
+      // STEP 4: Merge display cutout + shadow over background
+      updateDisplayStepStatus("MERGE", "running");
+      setDisplayActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
+
+      const mergeResponse = await fetch("/api/pipeline/display-merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          displayCutout: cutoutImage, 
+          backgroundImage
+        })
+      });
+
+      const { resultImageUrl } = await parseResponseData(
+        mergeResponse,
+        "Failed to merge display cutout and background."
+      );
+      updateDisplayStepStatus("MERGE", "success");
+      setDisplayResultUrl(resultImageUrl || null);
+      setDisplayActiveStepMessage("Completed!");
+
+    } catch (error) {
+      const message = getErrorMessage(error);
+      console.error("Display pipeline error:", error);
+      setDisplayErrorMessage(message || "An unexpected error occurred during processing.");
+      
+      // Mark current running step as error
+      setDisplaySteps(prev => {
+        const runningIdx = prev.findIndex(s => s.status === "running" || s.status === "idle");
+        if (runningIdx !== -1) {
+          return prev.map((s, idx) => idx === runningIdx ? { ...s, status: "error" } : s);
+        }
+        return prev;
+      });
+    } finally {
+      setIsDisplayProcessing(false);
+    }
+  };
+
   const handleReset = () => {
     setFile(null);
     setPreviewUrl(null);
@@ -1232,6 +1491,18 @@ export default function Home() {
     setCaseBgResultUrl(null);
     setIsCaseOverlayLoaded(false);
     setCaseErrorMessage(null);
+
+    // Reset Display Studio states
+    setDisplayFile(null);
+    setDisplayPreviewUrl(null);
+    setDisplayResultUrl(null);
+    setDisplayCutoutUrl(null);
+    setDisplayBgUrl(null);
+    setDisplayErrorMessage(null);
+    setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
+    setDisplayElapsedTime(0);
+    setDisplayActiveStepMessage("");
+    setIsDisplayDownloadOpen(false);
   };
 
   const filteredArtworks = savedArtworks.filter(art =>
@@ -1396,6 +1667,18 @@ export default function Home() {
             >
               <Sparkles className="w-4 h-4" />
               Studio
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("display")}
+              className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
+                activeTab === "display"
+                  ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
+                  : "border border-transparent text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              Display Studio
             </button>
             <button
               type="button"
@@ -1891,6 +2174,353 @@ export default function Home() {
           </section>
 
         </div>
+        ) : activeTab === "display" ? (
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* Left panel - Controls & Source */}
+            <section className="lg:col-span-7 flex flex-col gap-6">
+              
+              {/* Aspect Ratio & Control Card */}
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-purple-400" />
+                  1. Configuration
+                </h2>
+                
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-300 mb-2">Target Aspect Ratio</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[
+                        { value: "3:4", label: "Portrait 3:4", desc: "Classic Showcase" },
+                        { value: "9:16", label: "Story 9:16", desc: "Vertical Full" },
+                        { value: "1:1", label: "Square 1:1", desc: "Grid/Instagram" },
+                        { value: "16:9", label: "Landscape 16:9", desc: "Banner/Wallpaper" }
+                      ].map((ratio) => (
+                        <button
+                          key={ratio.value}
+                          type="button"
+                          onClick={() => setDisplayAspectRatio(ratio.value)}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            displayAspectRatio === ratio.value
+                              ? "bg-purple-600/10 border-purple-500 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.05)]"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                          }`}
+                        >
+                          <div className="font-semibold text-xs">{ratio.label}</div>
+                          <div className="text-[10px] text-zinc-500 mt-0.5">{ratio.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-300 mb-2">Background Generation Mode</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setDisplayBgMode("outpaint")}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          displayBgMode === "outpaint"
+                            ? "bg-purple-600/10 border-purple-500 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.05)]"
+                            : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                        }`}
+                      >
+                        <div className="font-semibold text-xs">Themed Backdrop</div>
+                        <div className="text-[10px] text-zinc-500 mt-0.5">Gemini describes context, Imagen 3 builds scene</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDisplayBgMode("ambient")}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          displayBgMode === "ambient"
+                            ? "bg-purple-600/10 border-purple-500 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.05)]"
+                            : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                        }`}
+                      >
+                        <div className="font-semibold text-xs">Ambient Blur</div>
+                        <div className="text-[10px] text-zinc-500 mt-0.5">Soft, blurred version of the display box colors</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {displayFile && (
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleProcessDisplayImage}
+                        disabled={isDisplayProcessing}
+                        className="flex-1 py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:bg-purple-600/50 text-white font-bold text-sm transition-all shadow-[0_4px_20px_rgba(168,85,247,0.3)] hover:shadow-[0_4px_25px_rgba(168,85,247,0.45)] flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        {isDisplayProcessing ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            <span>Processing Display...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-4 h-4" />
+                            <span>Generate Merged Display</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleReset}
+                        disabled={isDisplayProcessing}
+                        className="py-3 px-4 rounded-xl border border-zinc-855 hover:border-zinc-700 hover:bg-zinc-900 bg-transparent text-zinc-300 font-semibold text-sm transition-all cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Source Upload Card */}
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex-1 flex flex-col min-h-[350px]">
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-purple-400" />
+                  2. Upload Display Box Image
+                </h2>
+                
+                {!displayPreviewUrl ? (
+                  <div
+                    {...getDisplayRootProps()}
+                    className={`flex-1 border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-8 text-center transition-all ${
+                      isDisplayDragActive
+                        ? "border-purple-500 bg-purple-600/5 shadow-[inset_0_0_20px_rgba(168,85,247,0.05)]"
+                        : "border-zinc-800 hover:border-zinc-700 bg-zinc-950/40"
+                    } ${isDisplayProcessing ? "opacity-50 pointer-events-none" : "cursor-pointer"}`}
+                  >
+                    <input {...getDisplayInputProps()} />
+                    <div className="w-16 h-16 rounded-2xl bg-purple-600/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-4 shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
+                      <Upload className="w-8 h-8" />
+                    </div>
+                    <p className="text-sm font-semibold text-zinc-200">
+                      Drag & drop your display box image here
+                    </p>
+                    <p className="text-xs text-zinc-550 mt-1.5 max-w-sm">
+                      Supports PNG, JPEG, WEBP. Paste directly from clipboard (Ctrl+V / Cmd+V).
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex-1 relative rounded-xl border border-zinc-850 bg-zinc-950/60 overflow-hidden flex items-center justify-center p-4">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={displayPreviewUrl}
+                      alt="Source display"
+                      className="max-h-[380px] w-auto object-contain rounded-lg shadow-2xl"
+                    />
+                    {!isDisplayProcessing && (
+                      <button
+                        onClick={handleReset}
+                        className="absolute top-4 right-4 p-2 rounded-xl bg-black/60 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-black/80 transition-all cursor-pointer shadow-lg"
+                        title="Remove Image"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Right panel - Result & Progress */}
+            <section className="lg:col-span-5 flex flex-col gap-6 h-full">
+              {/* Output Preview */}
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col flex-1 min-h-[420px]">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-purple-400" />
+                    Output Preview
+                  </h2>
+                  
+                  {displayResultUrl && (
+                    <div className="flex gap-2">
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setIsDisplayDownloadOpen(!isDisplayDownloadOpen)}
+                          className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Download
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                        
+                        {isDisplayDownloadOpen && (
+                          <>
+                            <div className="fixed inset-0 z-20" onClick={() => setIsDisplayDownloadOpen(false)} />
+                            <div className="absolute right-0 mt-1 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsDisplayDownloadOpen(false);
+                                  triggerDownload(displayResultUrl, `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}.png`);
+                                }}
+                                className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                              >
+                                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                                <span>Merged Showcase</span>
+                              </button>
+                              {displayCutoutUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsDisplayDownloadOpen(false);
+                                    triggerDownload(displayCutoutUrl, `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_cutout.png`);
+                                  }}
+                                  className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
+                                >
+                                  <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
+                                  <span>Display Cutout Only</span>
+                                </button>
+                              )}
+                              {displayBgUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsDisplayDownloadOpen(false);
+                                    const filesToDownload = [
+                                      { url: displayBgUrl, filename: `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_background.png` },
+                                      { url: displayCutoutUrl || displayResultUrl, filename: `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_cutout.png` }
+                                    ];
+                                    triggerZipDownload(filesToDownload, `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_split.zip`);
+                                  }}
+                                  className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
+                                >
+                                  <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
+                                    <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
+                                  </div>
+                                  <span>Split Background & Cutout</span>
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSaveTarget("display");
+                          setIsSaveModalOpen(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Bookmark className="w-3.5 h-3.5" />
+                        Save to Library
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 border border-zinc-850 bg-zinc-950/40 rounded-xl relative overflow-hidden min-h-[300px] flex items-center justify-center p-4">
+                  {displayResultUrl ? (
+                    <div 
+                      className="relative max-h-[380px] w-auto overflow-hidden rounded-lg shadow-2xl border border-zinc-850 cursor-zoom-in"
+                      onClick={() => setLightboxImage({ url: displayResultUrl, title: newArtworkName || "Merged Display Box" })}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={displayResultUrl}
+                        alt="Result showcase"
+                        className="max-h-[380px] w-auto object-contain transition-transform duration-500 hover:scale-[1.02]"
+                      />
+                    </div>
+                  ) : (
+                    <div className="text-center p-8 flex flex-col items-center max-w-sm">
+                      <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-555 flex items-center justify-center mb-3">
+                        <Sparkles className="w-5 h-5" />
+                      </div>
+                      <h3 className="font-semibold text-zinc-350 text-sm">No display generated yet</h3>
+                      <p className="text-xs text-zinc-555 mt-1">
+                        Configure layout options, upload an image of a display box and click Generate.
+                      </p>
+                    </div>
+                  )}
+
+                  {isDisplayProcessing && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
+                      <div className="relative w-16 h-16 flex items-center justify-center mb-6">
+                        <div className="absolute inset-0 border-2 border-purple-500/20 rounded-full" />
+                        <div className="absolute inset-0 border-2 border-t-purple-500 rounded-full animate-spin" />
+                        <Sparkles className="w-6 h-6 text-purple-400 animate-pulse" />
+                      </div>
+                      <div className="font-bold text-white text-base mb-1">
+                        Creating Display Showcase...
+                      </div>
+                      <div className="text-zinc-400 text-xs font-semibold mb-3 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-zinc-555" />
+                        <span>Elapsed Time: <strong className="text-zinc-300">{displayElapsedTime.toFixed(1)}s</strong></span>
+                      </div>
+                      <div className="px-4 py-1.5 rounded-full border border-purple-500/20 bg-purple-600/10 text-[10px] text-purple-400 font-bold tracking-wider uppercase animate-pulse">
+                        {displayActiveStepMessage}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Progress Steps Card */}
+              {isDisplayProcessing || displayResultUrl || displayErrorMessage ? (
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
+                  <h2 className="text-sm font-bold text-zinc-400 tracking-wider uppercase mb-4 flex items-center gap-2">
+                    Processing Steps
+                  </h2>
+                  <div className="flex flex-col gap-4">
+                    {displaySteps.map((step) => {
+                      const isIdle = step.status === "idle";
+                      const isRunning = step.status === "running";
+                      const isSuccess = step.status === "success";
+                      const isError = step.status === "error";
+
+                      return (
+                        <div
+                          key={step.id}
+                          className={`flex items-start gap-3.5 p-3 rounded-xl border transition-all ${
+                            isRunning
+                              ? "bg-purple-600/5 border-purple-500/30 text-purple-400"
+                              : isSuccess
+                              ? "bg-emerald-600/5 border-emerald-500/20 text-emerald-400"
+                              : isError
+                              ? "bg-rose-600/5 border-rose-500/20 text-rose-400"
+                              : "bg-zinc-950/20 border-zinc-850 text-zinc-400"
+                          }`}
+                        >
+                          <div className="mt-0.5 shrink-0">
+                            {isRunning ? (
+                              <RefreshCw className="w-4 h-4 animate-spin text-purple-400" />
+                            ) : isSuccess ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            ) : isError ? (
+                              <AlertCircle className="w-4 h-4 text-rose-400" />
+                            ) : (
+                              <div className="w-4 h-4 rounded-full border border-zinc-700 bg-zinc-900" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="font-semibold text-xs leading-none">
+                              {step.label}
+                            </div>
+                            <p className="text-[10px] text-zinc-500 mt-1 leading-normal">
+                              {step.description}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {displayErrorMessage && (
+                    <div className="mt-4 p-3 rounded-xl border border-rose-500/20 bg-rose-600/10 text-xs font-semibold text-rose-400 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{displayErrorMessage}</span>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </section>
+          </div>
         ) : activeTab === "case" ? (
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left panel - Case configuration & library selection */}
@@ -2319,6 +2949,17 @@ export default function Home() {
                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/60 border border-zinc-850 text-[10px] text-zinc-355 font-bold z-10">
                         {art.aspectRatio || "3:4"}
                       </span>
+
+                      {/* Type Badge */}
+                      <span className={`absolute top-2 left-2 px-2 py-0.5 rounded border text-[10px] font-bold z-10 ${
+                        art.isDisplay 
+                          ? "bg-purple-950/80 border-purple-800 text-purple-300"
+                          : art.isCase
+                          ? "bg-indigo-950/80 border-indigo-800 text-indigo-300"
+                          : "bg-blue-950/80 border-blue-800 text-blue-300"
+                      }`}>
+                        {art.isDisplay ? "Display" : art.isCase ? "Case" : "Card"}
+                      </span>
                     </div>
 
                     <h3 className="font-bold text-white text-base truncate mb-1" title={art.name}>
@@ -2374,27 +3015,27 @@ export default function Home() {
                                 className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                               >
                                 <Layers className="w-3.5 h-3.5 text-purple-400" />
-                                <span>{art.isCase ? "Merged Showcase" : "Merged Card"}</span>
+                                <span>{art.isDisplay ? "Merged Display" : art.isCase ? "Merged Showcase" : "Merged Card"}</span>
                               </button>
                               {(art.cardOnlyUrl || art.originalCardUrl) && (
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
-                                    const targetCardUrl = art.isCase ? (art.cardOnlyUrl || art.originalCardUrl) : art.originalCardUrl;
+                                    const targetCardUrl = (art.isCase || art.isDisplay) ? (art.cardOnlyUrl || art.originalCardUrl) : art.originalCardUrl;
                                     if (targetCardUrl) {
-                                      const suffix = art.isCase ? "card_only" : "card";
+                                      const suffix = art.isDisplay ? "cutout" : art.isCase ? "card_only" : "card";
                                       triggerDownload(
                                         targetCardUrl, 
                                         `TCG_${art.name.replace(/\s+/g, "_")}_${suffix}.png`,
-                                        art.isCase ? art.originalCardUrl : undefined
+                                        (art.isCase || art.isDisplay) ? art.originalCardUrl : undefined
                                       );
                                     }
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                 >
                                   <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
-                                  <span>{art.isCase ? "Card Only (No Case/BG)" : "Card Only (No BG)"}</span>
+                                  <span>{art.isDisplay ? "Display Cutout (No BG)" : art.isCase ? "Card Only (No Case/BG)" : "Card Only (No BG)"}</span>
                                 </button>
                               )}
                               {art.backgroundUrl && (
@@ -2403,10 +3044,11 @@ export default function Home() {
                                   onClick={() => {
                                     setOpenLibraryDownloadId(null);
                                     const nameBase = art.name.replace(/\s+/g, "_");
-                                    const cardUrl = art.originalCardUrl || art.imageUrl;
+                                    const cardUrl = art.isDisplay ? (art.cardOnlyUrl || art.originalCardUrl || art.imageUrl) : (art.originalCardUrl || art.imageUrl);
+                                    const suffix = art.isDisplay ? "cutout" : "card";
                                     const filesToDownload: { url: string; filename: string; fallbackUrl?: string }[] = [
                                       { url: art.backgroundUrl!, filename: `TCG_${nameBase}_background.png` },
-                                      { url: cardUrl, filename: `TCG_${nameBase}_card.png` }
+                                      { url: cardUrl, filename: `TCG_${nameBase}_${suffix}.png` }
                                     ];
                                     triggerZipDownload(filesToDownload, `TCG_${nameBase}_split_components.zip`);
                                   }}
@@ -2415,7 +3057,7 @@ export default function Home() {
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                     <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
                                   </div>
-                                  <span>{art.isCase ? "Split BG & Case" : "Split BG & Card"}</span>
+                                  <span>{art.isDisplay ? "Split BG & Cutout" : art.isCase ? "Split BG & Case" : "Split BG & Card"}</span>
                                 </button>
                               )}
                               {art.isCase && art.backgroundUrl && art.originalCardUrl && (

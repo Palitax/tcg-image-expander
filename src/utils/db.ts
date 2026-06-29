@@ -12,6 +12,7 @@ export interface SavedArtwork {
   aspectRatio: string;
   timestamp: number;
   isCase?: boolean;
+  isDisplay?: boolean;
 }
 
 export function initDB(): Promise<IDBDatabase> {

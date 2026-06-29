@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const { croppedImage, aspectRatio, mode = "backdrop" } = await request.json();
+    const { croppedImage, aspectRatio, mode = "backdrop", isDisplay = false } = await request.json();
 
     if (!croppedImage) {
       return NextResponse.json({ error: "Missing croppedImage base64 data." }, { status: 400 });
@@ -76,13 +76,15 @@ export async function POST(request: Request) {
       let description = "";
       let lastError;
 
-      const describePrompt = mode === "backdrop"
-        ? "Analyze this trading card illustration. Write a detailed prompt to generate a matching background scenery/backdrop. Your description MUST focus ONLY on the environment, scenery, backdrop elements, artistic style (e.g. anime sketch, watercolor, oil painting), color palette, lighting, brushstrokes, and general aesthetic. You MUST completely ignore and exclude any characters, figures, or humans in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery."
-        : "Analyze this trading card illustration. Describe the environmental scenery, artistic style (e.g. anime, oil painting, watercolor), key color palette, lighting, and general aesthetic. You MUST completely ignore and exclude any character figures, card text, card borders, play cost symbols, and power attributes from your description. Return only the description.";
+      const describePrompt = isDisplay
+        ? "Analyze this collectible display box packaging. Describe the visual theme, franchise setting, color scheme, artistic style, and artwork motifs visible on the box. Write a detailed prompt to generate a matching background scenery/backdrop that feels like a natural environment or thematic setting for this display box. Focus ONLY on the background scenery/backdrop, style, and colors. You MUST completely ignore and exclude the display box itself, any text, and branding logos from the background description. Return only the descriptive prompt for the background scenery."
+        : (mode === "backdrop"
+          ? "Analyze this trading card illustration. Write a detailed prompt to generate a matching background scenery/backdrop. Your description MUST focus ONLY on the environment, scenery, backdrop elements, artistic style (e.g. anime sketch, watercolor, oil painting), color palette, lighting, brushstrokes, and general aesthetic. You MUST completely ignore and exclude any characters, figures, or humans in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery."
+          : "Analyze this trading card illustration. Describe the environmental scenery, artistic style (e.g. anime, oil painting, watercolor), key color palette, lighting, and general aesthetic. You MUST completely ignore and exclude any character figures, card text, card borders, play cost symbols, and power attributes from your description. Return only the description.");
 
       for (const model of models) {
         try {
-          console.log(`[Outpaint API] Describing style with model ${model} (mode: ${mode})`);
+          console.log(`[Outpaint API] Describing style with model ${model} (mode: ${mode}, isDisplay: ${isDisplay})`);
           const styleResponse = await generateContentWithRetry(ai, {
             model,
             contents: [
@@ -118,7 +120,9 @@ export async function POST(request: Request) {
         .trim();
 
       let outpaintPrompt = "";
-      if (mode === "backdrop") {
+      if (isDisplay) {
+        outpaintPrompt = `A beautiful, high-quality scenery backdrop: ${sanitizedDescription}. High quality, detailed, continuous landscape in the same aesthetic and art style. Exclude any characters, boxes, or text.`;
+      } else if (mode === "backdrop") {
         outpaintPrompt = `A beautiful, high-quality scenery backdrop: ${sanitizedDescription}. High quality, detailed, continuous landscape in the same aesthetic and art style. Exclude any characters or text.`;
       } else {
         outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the background environment to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic. Do NOT replicate, extend, or generate any characters, figures, humans, text, play cost symbols, power attributes, or card borders. Focus strictly on extending the background scenery.`;
@@ -131,11 +135,11 @@ export async function POST(request: Request) {
 
       for (const imgModel of imageModels) {
         try {
-          console.log(`[Outpaint API] Attempting Gemini Image Generation with model ${imgModel} (mode: ${mode})`);
+          console.log(`[Outpaint API] Attempting Gemini Image Generation with model ${imgModel} (mode: ${mode}, isDisplay: ${isDisplay})`);
           
           let contentsArray: any[] = [];
-          if (mode === "backdrop") {
-            // Text-to-Image mode: do not pass the reference image to prevent character replication in background
+          if (mode === "backdrop" || isDisplay) {
+            // Text-to-Image mode: do not pass the reference image to prevent character/box replication in background
             contentsArray = [outpaintPrompt];
           } else {
             // Outpaint/Image-to-Image mode: pass the reference image to extend it
