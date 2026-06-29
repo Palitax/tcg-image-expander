@@ -1,8 +1,19 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
+import fs from "fs";
+import path from "path";
 
 export const dynamic = "force-dynamic";
+
+function writeDebugLog(message: string) {
+  try {
+    const logPath = path.join(process.cwd(), "public", "display_crop_debug.log");
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`);
+  } catch (err) {
+    console.error("Failed to write debug log:", err);
+  }
+}
 export const preferredRegion = "iad1"; // Force US-East server
 
 // Helper to call generateContent with retry on transient errors (503, 429)
@@ -122,10 +133,14 @@ export async function POST(request: Request) {
         });
         if (layoutResponse.text) {
           layoutText = layoutResponse.text;
+          writeDebugLog(`Model ${model} successfully returned text: ${layoutText}`);
           break;
+        } else {
+          writeDebugLog(`Model ${model} returned empty layoutResponse.text.`);
         }
       } catch (e: any) {
         console.warn(`[Display Crop API] Model ${model} failed: ${e.message}`);
+        writeDebugLog(`Model ${model} threw error: ${e.message}. Stack: ${e.stack || ""}`);
         lastError = e;
         if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
           throw e;
@@ -146,16 +161,19 @@ export async function POST(request: Request) {
           displayName = parsed.displayName || "";
           displaySeries = parsed.displaySeries || "";
           console.log("[Display Crop API] AI successfully detected layout:", parsed);
+          writeDebugLog(`Parsed polygon vertices count: ${polygon.length}. Name: ${displayName}, Series: ${displaySeries}`);
         } else {
           throw new Error("Invalid or empty polygon returned by model.");
         }
       } catch (e: any) {
         console.warn(`[Display Crop API] Failed to parse layout JSON: "${layoutText}". Error: ${e.message}`);
+        writeDebugLog(`Failed to parse layout JSON: "${layoutText}". Error: ${e.message}`);
       }
     }
 
     if (polygon.length < 3) {
       console.warn("[Display Crop API] Using backup/fallback layout detection.");
+      writeDebugLog(`Polygon length is ${polygon.length}. Triggering backup/fallback layout detection!`);
       usedFallback = true;
       // Fallback polygon: A simple centered rectangle (70% of dimensions)
       polygon = [
@@ -248,6 +266,7 @@ export async function POST(request: Request) {
 
   } catch (error: any) {
     console.error("Error in Display Crop API:", error);
+    writeDebugLog(`CRITICAL ERROR in Display Crop API: ${error.message}. Stack: ${error.stack || ""}`);
     return NextResponse.json({ error: error.message || "Internal server error during crop." }, { status: 500 });
   }
 }
