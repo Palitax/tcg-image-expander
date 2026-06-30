@@ -1,3 +1,4 @@
+// Trigger Vercel rebuild
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
