@@ -322,8 +322,6 @@ export default function Home() {
   const [displayElapsedTime, setDisplayElapsedTime] = useState<number>(0);
   const [displayActiveStepMessage, setDisplayActiveStepMessage] = useState<string>("");
   const [isDisplayDownloadOpen, setIsDisplayDownloadOpen] = useState<boolean>(false);
-  const [displayBorderWidth, setDisplayBorderWidth] = useState<number>(3); // 3px default
-  const [displayBorderColor, setDisplayBorderColor] = useState<string>("#ffffff"); // White default
 
   // Watermark logo states
   const [watermarkFile, setWatermarkFile] = useState<File | null>(null);
@@ -1377,8 +1375,6 @@ export default function Home() {
       
       const cropFormData = new FormData();
       cropFormData.append("displayImage", displayFile);
-      cropFormData.append("borderWidth", String(displayBorderWidth));
-      cropFormData.append("borderColor", displayBorderColor);
 
       const cropResponse = await fetch("/api/pipeline/display-crop", {
         method: "POST",
@@ -2287,57 +2283,6 @@ export default function Home() {
                         <div className="font-semibold text-xs">Transparent Cutout</div>
                         <div className="text-[10px] text-zinc-550 mt-0.5">Remove background and return transparent display box</div>
                       </button>
-                    </div>
-                  </div>
-
-                  {/* Border / Outline Settings Section */}
-                  <div className="border-t border-zinc-800 pt-4 mt-2">
-                    <label className="block text-sm font-semibold text-white mb-2 flex items-center gap-1.5">
-                      <Layers className="w-4 h-4 text-purple-400" />
-                      Display Box Border / Outline (Conceals pixelation)
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1">Border Width</label>
-                        <select
-                          value={displayBorderWidth}
-                          onChange={(e) => setDisplayBorderWidth(Number(e.target.value))}
-                          className="w-full text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 text-zinc-300 outline-none focus:border-purple-500"
-                        >
-                          <option value="0">No Border (None)</option>
-                          <option value="1">1px (Thin)</option>
-                          <option value="2">2px (Medium-Thin)</option>
-                          <option value="3">3px (Standard)</option>
-                          <option value="4">4px (Thick)</option>
-                          <option value="5">5px (Extra Thick)</option>
-                        </select>
-                      </div>
-                      
-                      <div>
-                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1">Border Color</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="color"
-                            value={displayBorderColor}
-                            onChange={(e) => setDisplayBorderColor(e.target.value)}
-                            className="w-10 h-9 rounded-lg border border-zinc-800 bg-zinc-900 cursor-pointer p-0.5"
-                            title="Choose custom color"
-                          />
-                          <select
-                            value={displayBorderColor}
-                            onChange={(e) => setDisplayBorderColor(e.target.value)}
-                            className="flex-1 text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 text-zinc-300 outline-none focus:border-purple-500"
-                          >
-                            <option value="#ffffff">White</option>
-                            <option value="#d4d4d8">Silver/Grey</option>
-                            <option value="#eab308">Gold</option>
-                            <option value="#a855f7">Purple</option>
-                            <option value="#3b82f6">Blue</option>
-                            <option value="#ef4444">Red</option>
-                            <option value="#000000">Black</option>
-                          </select>
-                        </div>
-                      </div>
                     </div>
                   </div>
 

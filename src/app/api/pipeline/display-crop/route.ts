@@ -137,6 +137,84 @@ function removeSolidBackground(width: number, height: number, rawBuffer: Buffer,
   return outBuffer;
 }
 
+async function shaveCutoutEdges(cutoutBuffer: Buffer, radius = 2.5): Promise<Buffer> {
+  const sharpCutout = sharp(cutoutBuffer);
+  const metadata = await sharpCutout.metadata();
+  const width = metadata.width || 0;
+  const height = metadata.height || 0;
+
+  if (width === 0 || height === 0) return cutoutBuffer;
+
+  const rawCutout = await sharpCutout
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const rawData = rawCutout.data;
+  const size = width * height;
+  const mask = new Uint8Array(size);
+
+  for (let i = 0; i < size; i++) {
+    mask[i] = rawData[i * 4 + 3] > 128 ? 1 : 0; // threshold alpha channel
+  }
+
+  const temp = new Uint8Array(mask);
+  
+  // Morphological erosion
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (temp[idx] === 1) {
+        let hasBgNeighbor = false;
+        // Search circle window
+        const rInt = Math.ceil(radius);
+        for (let dy = -rInt; dy <= rInt; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= height) {
+            hasBgNeighbor = true;
+            break;
+          }
+          for (let dx = -rInt; dx <= rInt; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= width) {
+              hasBgNeighbor = true;
+              break;
+            }
+            if (dx * dx + dy * dy <= radius * radius) {
+              if (temp[ny * width + nx] === 0) {
+                hasBgNeighbor = true;
+                break;
+              }
+            }
+          }
+          if (hasBgNeighbor) break;
+        }
+        if (hasBgNeighbor) {
+          mask[idx] = 0;
+        }
+      }
+    }
+  }
+
+  // Write back transparent alpha values
+  for (let i = 0; i < size; i++) {
+    const srcIdx = i * 4;
+    if (mask[i] === 0) {
+      rawData[srcIdx + 3] = 0; // Transparent
+    }
+  }
+
+  return await sharp(rawData, {
+    raw: {
+      width,
+      height,
+      channels: 4
+    }
+  })
+  .png()
+  .toBuffer();
+}
+
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -150,18 +228,6 @@ export async function POST(request: Request) {
     const ai = new GoogleGenAI({ apiKey });
     const formData = await request.formData();
     const file = formData.get("displayImage") as File | null;
-    const borderWidth = Number(formData.get("borderWidth") || "0");
-    const borderColorHex = String(formData.get("borderColor") || "#ffffff");
-
-    const hexToRgb = (hex: string) => {
-      const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
-      return match ? {
-        r: parseInt(match[1], 16),
-        g: parseInt(match[2], 16),
-        b: parseInt(match[3], 16)
-      } : { r: 255, g: 255, b: 255 };
-    };
-    const borderColor = hexToRgb(borderColorHex);
 
     if (!file) {
       return NextResponse.json({ error: "No image file uploaded." }, { status: 400 });
@@ -346,6 +412,15 @@ export async function POST(request: Request) {
         .png()
         .toBuffer();
     }
+    // Apply edge shaving (shave 2.5px to avoid white margins)
+    try {
+      cutout = await shaveCutoutEdges(cutout, 2.5);
+      console.log("[Display Crop API] Shaved 2.5px from cutout edges to remove pixelated white border.");
+      writeDebugLog("Shaved 2.5px from cutout edges to remove pixelated white border.");
+    } catch (shaveError: any) {
+      console.warn("[Display Crop API] Edge shaving failed:", shaveError.message);
+      writeDebugLog(`Edge shaving failed: ${shaveError.message}`);
+    }
 
     // Auto-trim transparent borders
     let finalCutoutBuffer = cutout;
@@ -387,189 +462,10 @@ export async function POST(request: Request) {
       .png({ compressionLevel: 7 })
       .toBuffer();
 
-    let borderedCutoutBuffer = resizedCutoutBuffer;
-    if (borderWidth > 0) {
-      try {
-        console.log(`[Display Crop API] Applying outline border: ${borderWidth}px, color: rgb(${borderColor.r}, ${borderColor.g}, ${borderColor.b})`);
-        writeDebugLog(`Applying outline border: ${borderWidth}px, color: rgb(${borderColor.r}, ${borderColor.g}, ${borderColor.b})`);
-        
-        const pad = borderWidth + 2;
-        const paddedImage = await sharp(resizedCutoutBuffer)
-          .ensureAlpha()
-          .extend({
-            top: pad,
-            bottom: pad,
-            left: pad,
-            right: pad,
-            background: { r: 0, g: 0, b: 0, alpha: 0 }
-          })
-          .raw()
-          .toBuffer({ resolveWithObject: true });
-        
-        const pWidth = paddedImage.info.width;
-        const pHeight = paddedImage.info.height;
-        const pBuffer = paddedImage.data;
+    const cutoutBase64 = resizedCutoutBuffer.toString("base64");
 
-        // Extract alpha channel directly from raw pixel buffer
-        const alphaImage = new Uint8Array(pWidth * pHeight);
-        for (let i = 0; i < pWidth * pHeight; i++) {
-          alphaImage[i] = pBuffer[i * 4 + 3];
-        }
-
-        const dilatedAlpha = new Uint8Array(pWidth * pHeight);
-        
-        // Fast 2D dilation
-        for (let y = 0; y < pHeight; y++) {
-          for (let x = 0; x < pWidth; x++) {
-            const idx = y * pWidth + x;
-            if (alphaImage[idx] > 20) {
-              dilatedAlpha[idx] = 255;
-              continue;
-            }
-            
-            // Check neighbors within distance W
-            let isNearForeground = false;
-            for (let dy = -borderWidth; dy <= borderWidth; dy++) {
-              for (let dx = -borderWidth; dx <= borderWidth; dx++) {
-                const nx = x + dx;
-                const ny = y + dy;
-                if (nx >= 0 && nx < pWidth && ny >= 0 && ny < pHeight) {
-                  const nidx = ny * pWidth + nx;
-                  if (alphaImage[nidx] > 20) {
-                    isNearForeground = true;
-                    break;
-                  }
-                }
-              }
-              if (isNearForeground) break;
-            }
-            
-            if (isNearForeground) {
-              dilatedAlpha[idx] = 255;
-            }
-          }
-        }
-
-        // Morphological erosion to shrink the foreground mask by 1.5 pixels,
-        // which removes white background pixels clinging to the display edge.
-        const erodedAlpha = new Uint8Array(pWidth * pHeight);
-        const erosionRadius = 1.5;
-        const rInt = Math.ceil(erosionRadius);
-
-        for (let y = 0; y < pHeight; y++) {
-          for (let x = 0; x < pWidth; x++) {
-            const idx = y * pWidth + x;
-            if (alphaImage[idx] <= 20) {
-              erodedAlpha[idx] = 0;
-              continue;
-            }
-
-            let isNearBackground = false;
-            for (let dy = -rInt; dy <= rInt; dy++) {
-              for (let dx = -rInt; dx <= rInt; dx++) {
-                if (dx * dx + dy * dy > erosionRadius * erosionRadius) continue;
-                
-                const nx = x + dx;
-                const ny = y + dy;
-                if (nx >= 0 && nx < pWidth && ny >= 0 && ny < pHeight) {
-                  const nidx = ny * pWidth + nx;
-                  if (alphaImage[nidx] <= 20) {
-                    isNearBackground = true;
-                    break;
-                  }
-                } else {
-                  isNearBackground = true;
-                  break;
-                }
-              }
-              if (isNearBackground) break;
-            }
-
-            erodedAlpha[idx] = isNearBackground ? 0 : 255;
-          }
-        }
-
-        // Smooth both masks (dilated and eroded) with high-quality Gaussian blur for anti-aliasing
-        const smoothDilatedAlpha = await sharp(Buffer.from(dilatedAlpha), {
-          raw: {
-            width: pWidth,
-            height: pHeight,
-            channels: 1
-          }
-        })
-        .blur(0.8)
-        .raw()
-        .toBuffer();
-
-        const smoothErodedAlpha = await sharp(Buffer.from(erodedAlpha), {
-          raw: {
-            width: pWidth,
-            height: pHeight,
-            channels: 1
-          }
-        })
-        .blur(0.6)
-        .raw()
-        .toBuffer();
-
-        // Mathematically composite layers with precise alpha blending in raw pixel buffer
-        const borderedLayer = Buffer.alloc(pWidth * pHeight * 4);
-        for (let i = 0; i < pWidth * pHeight; i++) {
-          const idx = i * 4;
-          const fgAlpha = (smoothErodedAlpha[i] / 255) * (pBuffer[idx + 3] / 255);
-          
-          if (fgAlpha >= 0.99) {
-            borderedLayer[idx] = pBuffer[idx];
-            borderedLayer[idx + 1] = pBuffer[idx + 1];
-            borderedLayer[idx + 2] = pBuffer[idx + 2];
-            borderedLayer[idx + 3] = pBuffer[idx + 3];
-          } else if (fgAlpha <= 0.01) {
-            borderedLayer[idx] = borderColor.r;
-            borderedLayer[idx + 1] = borderColor.g;
-            borderedLayer[idx + 2] = borderColor.b;
-            borderedLayer[idx + 3] = smoothDilatedAlpha[i];
-          } else {
-            const bgAlpha = (smoothDilatedAlpha[i] / 255) * (1 - fgAlpha);
-            const outAlpha = fgAlpha + bgAlpha;
-            
-            if (outAlpha > 0) {
-              borderedLayer[idx] = Math.round((pBuffer[idx] * fgAlpha + borderColor.r * bgAlpha) / outAlpha);
-              borderedLayer[idx + 1] = Math.round((pBuffer[idx + 1] * fgAlpha + borderColor.g * bgAlpha) / outAlpha);
-              borderedLayer[idx + 2] = Math.round((pBuffer[idx + 2] * fgAlpha + borderColor.b * bgAlpha) / outAlpha);
-              borderedLayer[idx + 3] = Math.round(outAlpha * 255);
-            } else {
-              borderedLayer[idx + 3] = 0;
-            }
-          }
-        }
-
-        const bordered = await sharp(borderedLayer, {
-          raw: {
-            width: pWidth,
-            height: pHeight,
-            channels: 4
-          }
-        })
-        .png()
-        .toBuffer();
-
-        // Trim transparency to fit tightly
-        const trimmedBordered = await sharp(bordered)
-          .trim()
-          .png()
-          .toBuffer();
-
-        borderedCutoutBuffer = trimmedBordered;
-      } catch (borderErr: any) {
-        console.warn("[Display Crop API] Failed to apply outline border:", borderErr.message);
-        writeDebugLog(`Failed to apply outline border: ${borderErr.message}`);
-      }
-    }
-
-    const cutoutBase64 = borderedCutoutBuffer.toString("base64");
-
-    // Crop style reference image (max 512px inside) using the clean bordered cutout
-    const styleRefBuffer = await sharp(borderedCutoutBuffer)
+    // Crop style reference image (max 512px inside)
+    const styleRefBuffer = await sharp(resizedCutoutBuffer)
       .resize(512, 512, { fit: "inside" })
       .png()
       .toBuffer();
