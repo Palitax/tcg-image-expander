@@ -276,6 +276,7 @@ export default function Home() {
   const [isRenameModalOpen, setIsRenameModalOpen] = useState<boolean>(false);
   const [renamingArtwork, setRenamingArtwork] = useState<SavedArtwork | null>(null);
   const [renameValue, setRenameValue] = useState<string>("");
+  const [identifyingArtworkId, setIdentifyingArtworkId] = useState<string | null>(null);
 
   // Space authentication states
   const [currentSpace, setCurrentSpace] = useState<{ id: string; name: string } | null>(null);
@@ -705,6 +706,88 @@ export default function Home() {
     );
     setIsRenameModalOpen(false);
     setRenamingArtwork(null);
+  };
+
+  const handleFindCardName = async (art: SavedArtwork) => {
+    const targetUrl = art.originalCardUrl || art.cardOnlyUrl || art.imageUrl;
+    if (!targetUrl) {
+      alert("No image available to identify.");
+      return;
+    }
+
+    setIdentifyingArtworkId(art.id);
+    
+    try {
+      const response = await fetch("/api/pipeline/identify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ imageUrl: targetUrl }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to analyze card name.");
+      }
+
+      const data = await response.json();
+      if (data.isFound && data.cardName) {
+        let finalName = data.cardName.trim();
+        if (data.cardNumber && data.cardNumber.trim()) {
+          finalName += " " + data.cardNumber.trim();
+        }
+
+        if (!isLocalMode && currentSpace) {
+          setIsLoginLoading(true);
+          try {
+            const { data: updateData, error } = await supabase
+              .from("artworks")
+              .update({ name: finalName })
+              .eq("id", art.id)
+              .select("id");
+
+            if (error) throw error;
+            if (!updateData || updateData.length === 0) {
+              throw new Error("No rows were updated. Make sure you executed the UPDATE RLS policy in Supabase.");
+            }
+          } catch (err) {
+            const message = getErrorMessage(err);
+            alert("Failed to update card name in database: " + message);
+            return;
+          } finally {
+            setIsLoginLoading(false);
+          }
+        } else {
+          try {
+            const updatedArt = { ...art, name: finalName };
+            await saveArtwork(updatedArt);
+          } catch (err) {
+            const message = getErrorMessage(err);
+            alert("Failed to update card name locally: " + message);
+            return;
+          }
+        }
+
+        setSavedArtworks(prev =>
+          prev.map(item => (item.id === art.id ? { ...item, name: finalName } : item))
+        );
+
+        let msg = `Successfully identified card!\nName: ${data.cardName}`;
+        if (data.cardNumber) msg += `\nNumber: ${data.cardNumber}`;
+        if (data.detectedLanguage && data.detectedLanguage.toLowerCase() !== "english") {
+          msg += `\nDetected Language: ${data.detectedLanguage} (Translated to English)`;
+        }
+        alert(msg);
+      } else {
+        alert("Could not identify the card name or number from the image.");
+      }
+    } catch (error: any) {
+      console.error("Error identifying card name:", error);
+      alert("Error identifying card: " + error.message);
+    } finally {
+      setIdentifyingArtworkId(null);
+    }
   };
 
   const closeSaveModal = () => {
@@ -3246,6 +3329,21 @@ export default function Home() {
                           </>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => handleFindCardName(art)}
+                        disabled={identifyingArtworkId === art.id}
+                        className={`p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors ${
+                          identifyingArtworkId === art.id ? "cursor-wait opacity-65" : ""
+                        }`}
+                        title="Find card name"
+                      >
+                        {identifyingArtworkId === art.id ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
