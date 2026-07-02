@@ -151,6 +151,38 @@ const fetchBlob = async (url: string, fallbackUrl?: string): Promise<{ blob: Blo
   }
 };
 
+const convertBlobToPng = async (blob: Blob): Promise<Blob> => {
+  if (blob.type === "image/png") return blob;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Failed to get 2d context for PNG conversion"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) {
+          resolve(pngBlob);
+        } else {
+          reject(new Error("Failed to generate PNG blob"));
+        }
+      }, "image/png");
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load image for PNG conversion"));
+    };
+    img.src = url;
+  });
+};
+
 const getAdjustedFilename = (filename: string, mimeType: string): string => {
   let ext = "";
   if (mimeType === "image/webp") ext = "webp";
@@ -163,24 +195,61 @@ const getAdjustedFilename = (filename: string, mimeType: string): string => {
   return filename;
 };
 
+const fetchAndProcessImage = async (
+  url: string,
+  filename: string,
+  fallbackUrl?: string
+): Promise<{ blob: Blob; mimeType: string }> => {
+  let blob: Blob;
+  let mimeType: string;
+
+  if (url.startsWith("data:")) {
+    const response = await fetch(url);
+    blob = await response.blob();
+    mimeType = blob.type;
+  } else {
+    const fetched = await fetchBlob(url, fallbackUrl);
+    blob = fetched.blob;
+    mimeType = fetched.mimeType;
+  }
+
+  // If the user requested a .png file but we got webp (or another format), convert it to png.
+  if (filename.toLowerCase().endsWith(".png") && mimeType !== "image/png") {
+    try {
+      const pngBlob = await convertBlobToPng(blob);
+      return { blob: pngBlob, mimeType: "image/png" };
+    } catch (err) {
+      console.error("Failed to convert image to PNG on client side:", err);
+    }
+  }
+
+  return { blob, mimeType };
+};
+
 const triggerDownload = async (url: string, filename: string, fallbackUrl?: string): Promise<void> => {
   try {
     if (url.startsWith("data:")) {
       const mimeMatch = url.match(/^data:([^;]+);/);
-      let adjustedFilename = filename;
-      if (mimeMatch) {
-        adjustedFilename = getAdjustedFilename(filename, mimeMatch[1]);
+      const isPngRequested = filename.toLowerCase().endsWith(".png");
+      const isSourcePng = mimeMatch && mimeMatch[1] === "image/png";
+
+      // If we don't need PNG conversion, use direct data URI download for speed
+      if (!isPngRequested || isSourcePng) {
+        let adjustedFilename = filename;
+        if (mimeMatch) {
+          adjustedFilename = getAdjustedFilename(filename, mimeMatch[1]);
+        }
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = adjustedFilename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
       }
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = adjustedFilename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      return;
     }
 
-    const { blob, mimeType } = await fetchBlob(url, fallbackUrl);
+    const { blob, mimeType } = await fetchAndProcessImage(url, filename, fallbackUrl);
     const adjustedFilename = getAdjustedFilename(filename, mimeType);
     const objectUrl = URL.createObjectURL(blob);
 
@@ -215,7 +284,7 @@ const triggerZipDownload = async (
     
     // Fetch all files in parallel
     const fetchPromises = files.map(async (file) => {
-      const { blob, mimeType } = await fetchBlob(file.url, file.fallbackUrl);
+      const { blob, mimeType } = await fetchAndProcessImage(file.url, file.filename, file.fallbackUrl);
       const adjustedFilename = getAdjustedFilename(file.filename, mimeType);
       zip.file(adjustedFilename, blob);
     });

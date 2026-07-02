@@ -420,7 +420,7 @@ export async function POST(request: Request) {
         input: roundedCornersMask,
         blend: 'dest-in'
       }])
-      .webp({ quality: 85 })
+      .png({ compressionLevel: 7 })
       .toBuffer();
 
     const trimmedCardBase64 = roundedCardBuffer.toString("base64");
@@ -436,7 +436,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       croppedImage: `data:image/png;base64,${croppedBase64}`,
-      trimmedCard: `data:image/webp;base64,${trimmedCardBase64}`,
+      trimmedCard: `data:image/png;base64,${trimmedCardBase64}`,
       coords: { ix1, iy1, ix2, iy2 },
       usedFallback,
       cardName,
