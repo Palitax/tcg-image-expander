@@ -266,6 +266,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"generate" | "case" | "library" | "display">("generate");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload" | "display">("generate");
   const [newArtworkName, setNewArtworkName] = useState<string>("");
   const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
@@ -791,9 +792,11 @@ export default function Home() {
   };
 
   const closeSaveModal = () => {
+    if (isSaving) return;
     setIsSaveModalOpen(false);
     setNewArtworkName("");
     setLibraryUploadDataUrl(null);
+    setIsSaving(false);
   };
 
   const handleSaveArtwork = async () => {
@@ -820,6 +823,7 @@ export default function Home() {
       undefined;
 
     const timestamp = Date.now();
+    setIsSaving(true);
 
     if (!isLocalMode && currentSpace) {
       setIsLoginLoading(true);
@@ -902,6 +906,7 @@ export default function Home() {
         const message = getErrorMessage(err);
         alert("Failed to save artwork to database: " + message);
         setIsLoginLoading(false);
+        setIsSaving(false);
         return;
       } finally {
         setIsLoginLoading(false);
@@ -931,6 +936,7 @@ export default function Home() {
       } catch (err) {
         const message = getErrorMessage(err);
         alert("Failed to save artwork locally: " + message);
+        setIsSaving(false);
         return;
       }
     }
@@ -977,6 +983,7 @@ export default function Home() {
 
     const updated = [newArtworkRecord, ...savedArtworks];
     setSavedArtworks(updated);
+    setIsSaving(false);
     closeSaveModal();
   };
 
@@ -3417,7 +3424,8 @@ export default function Home() {
             <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-850 rounded-2xl p-6 shadow-2xl">
               <button
                 onClick={closeSaveModal}
-                className="absolute top-4 right-4 p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors"
+                disabled={isSaving}
+                className="absolute top-4 right-4 p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3435,10 +3443,11 @@ export default function Home() {
                 placeholder="e.g. Charizard Alt Art"
                 value={newArtworkName}
                 onChange={(e) => setNewArtworkName(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm mb-6"
+                disabled={isSaving}
+                className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm mb-6 disabled:opacity-50"
                 autoFocus
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && newArtworkName.trim()) handleSaveArtwork();
+                  if (e.key === "Enter" && newArtworkName.trim() && !isSaving) handleSaveArtwork();
                 }}
               />
 
@@ -3446,17 +3455,25 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={closeSaveModal}
-                  className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
+                  disabled={isSaving}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveArtwork}
-                  disabled={!newArtworkName.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white text-sm font-semibold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)]"
+                  disabled={!newArtworkName.trim() || isSaving}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white text-sm font-semibold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)] flex items-center gap-2"
                 >
-                  Save Artwork
+                  {isSaving ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Artwork"
+                  )}
                 </button>
               </div>
             </div>
