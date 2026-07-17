@@ -319,7 +319,7 @@ const triggerZipDownload = async (
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<string>("3:4");
+  const [aspectRatio, setAspectRatio] = useState<string>("9:16");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [steps, setSteps] = useState<ProgressStep[]>(INITIAL_STEPS);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1732,7 +1732,7 @@ export default function Home() {
             </div>
 
             <h2 className="text-2xl font-extrabold text-white mb-2 text-center">
-              Willkommen bei New World Legacy – Bilder generieren
+              Willkommen beim New World Legacy Shop Asset Generator
             </h2>
             <p className="text-sm text-zinc-400 mb-6 text-center">
               {loginStep === "name" 
@@ -1852,8 +1852,8 @@ export default function Home() {
             <Sparkles className="w-3.5 h-3.5" />
             all_out_luffy x New World Legacy
           </div>
-          <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-white via-zinc-300 to-purple-400 bg-clip-text text-transparent">
-            New World Legacy – Bilder generieren
+          <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-white via-zinc-300 to-purple-400 bg-clip-text text-transparent pb-2 leading-tight">
+            New World Legacy Shop Asset Generator
           </h1>
           <p className="mt-3 text-lg text-zinc-400 max-w-2xl">
             Erweitere Karten-Illustrationen zu immersiven Hintergründen. Präsentiere Karten in atemberaubenden Layouts, optimiert für Webshops und Social-Media-Sharing.
@@ -3604,7 +3604,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="mt-16 text-center text-xs text-zinc-650 border-t border-zinc-900 pt-8 pb-4">
-          <p>© {new Date().getFullYear()} New World Legacy – Bilder generieren. Powered by Google Gemini & Imagen 3.</p>
+          <p>© {new Date().getFullYear()} New World Legacy Shop Asset Generator. Powered by Google Gemini & Imagen 3.</p>
         </footer>
         {/* Save Modal Popup */}
         {isSaveModalOpen && (
