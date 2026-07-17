@@ -53,17 +53,17 @@ interface ProgressStep {
 }
 
 const INITIAL_STEPS: ProgressStep[] = [
-  { id: "LAYOUT", label: "Layout Analysis", description: "Gemini detects inner card artwork bounding box", status: "idle" },
-  { id: "CROP", label: "Artwork Extraction", description: "Sharp extracts the illustration using coordinates", status: "idle" },
-  { id: "OUTPAINT", label: "Background Expansion", description: "Imagen 3 outpaints background in target aspect ratio", status: "idle" },
-  { id: "MERGE", label: "Card Compositing", description: "Overlay card with elegant soft shadow and finish", status: "idle" }
+  { id: "LAYOUT", label: "Layout-Analyse", description: "Gemini erkennt Begrenzungsrahmen der inneren Karte", status: "idle" },
+  { id: "CROP", label: "Kunstwerk-Extraktion", description: "Sharp schneidet das Bild mithilfe von Koordinaten aus", status: "idle" },
+  { id: "OUTPAINT", label: "Hintergrund-Erweiterung", description: "Imagen 3 erweitert den Hintergrund im gewünschten Seitenverhältnis", status: "idle" },
+  { id: "MERGE", label: "Karten-Compositing", description: "Karte mit elegantem weichem Schatten und Finish überlagern", status: "idle" }
 ];
 
 const DISPLAY_STEPS: ProgressStep[] = [
-  { id: "LAYOUT", label: "Display Detection", description: "Gemini traces the display box boundary", status: "idle" },
-  { id: "CROP", label: "Cutout & Trim", description: "Sharp extracts and trims the transparent cutout", status: "idle" },
-  { id: "OUTPAINT", label: "Background Generation", description: "Imagen 3 generates a matching themed scenery", status: "idle" },
-  { id: "MERGE", label: "3D Composition", description: "Composite cutout with soft drop shadow onto background", status: "idle" }
+  { id: "LAYOUT", label: "Display-Erkennung", description: "Gemini verfolgt die Begrenzung des Display-Rahmens", status: "idle" },
+  { id: "CROP", label: "Ausschnitt & Zuschnitt", description: "Sharp extrahiert und schneidet den transparenten Ausschnitt zu", status: "idle" },
+  { id: "OUTPAINT", label: "Hintergrund-Generierung", description: "Imagen 3 generiert eine passende thematische Szene", status: "idle" },
+  { id: "MERGE", label: "3D-Komposition", description: "Komposition des Ausschnitts mit weichem Schattenwurf auf den Hintergrund", status: "idle" }
 ];
 
 // Helper to convert file to Base64 data URL
@@ -341,6 +341,8 @@ export default function Home() {
   const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
   const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [libraryCategory, setLibraryCategory] = useState<"all" | "cards" | "displays">("all");
+  const [libraryCardSubCategory, setLibraryCardSubCategory] = useState<"all" | "case" | "noCase">("all");
 
   // Card renaming states
   const [isRenameModalOpen, setIsRenameModalOpen] = useState<boolean>(false);
@@ -599,7 +601,7 @@ export default function Home() {
       }
     } catch (err) {
       const message = getErrorMessage(err);
-      setLoginError(message || "Failed to check space availability.");
+      setLoginError(message || "Überprüfung der Bereichsverfügbarkeit fehlgeschlagen.");
     } finally {
       setIsLoginLoading(false);
     }
@@ -683,11 +685,11 @@ export default function Home() {
         setLoginPasscode("");
         setLoginStep("name");
       } else {
-        setLoginError("Incorrect 4-digit passcode.");
+        setLoginError("Falscher 4-stelliger Passcode.");
       }
     } catch (err) {
       const message = getErrorMessage(err);
-      setLoginError(message || "An error occurred during login.");
+      setLoginError(message || "Ein Fehler ist beim Anmelden aufgetreten.");
     } finally {
       setIsLoginLoading(false);
       setIsSpaceSyncing(false);
@@ -724,7 +726,7 @@ export default function Home() {
       }
     } catch (err) {
       const message = getErrorMessage(err);
-      setLoginError(message || "Failed to create space.");
+      setLoginError(message || "Bereich konnte nicht erstellt werden.");
     } finally {
       setIsLoginLoading(false);
     }
@@ -1695,9 +1697,24 @@ export default function Home() {
     setIsDisplayDownloadOpen(false);
   };
 
-  const filteredArtworks = savedArtworks.filter(art =>
-    art.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredArtworks = savedArtworks.filter(art => {
+    const matchesSearch = art.name.toLowerCase().includes(searchQuery.toLowerCase());
+    if (!matchesSearch) return false;
+
+    if (libraryCategory === "displays") {
+      return !!art.isDisplay;
+    } else if (libraryCategory === "cards") {
+      const isCard = !art.isDisplay;
+      if (!isCard) return false;
+      if (libraryCardSubCategory === "case") {
+        return !!art.isCase;
+      } else if (libraryCardSubCategory === "noCase") {
+        return !art.isCase;
+      }
+      return true;
+    }
+    return true; // "all"
+  });
 
   return (
     <div className="flex-1 w-full min-h-screen flex flex-col relative overflow-hidden bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-950/20 via-zinc-950 to-black">
@@ -1715,14 +1732,14 @@ export default function Home() {
             </div>
 
             <h2 className="text-2xl font-extrabold text-white mb-2 text-center">
-              Welcome to New World Legacy – Bilder generieren
+              Willkommen bei New World Legacy – Bilder generieren
             </h2>
             <p className="text-sm text-zinc-400 mb-6 text-center">
               {loginStep === "name" 
-                ? "Enter a Space name to access your library or create a new sharing Space."
+                ? "Gib einen Bereichsnamen ein, um auf deine Bibliothek zuzugreifen oder einen neuen geteilten Bereich zu erstellen."
                 : loginStep === "code"
-                ? `Enter the 4-digit passcode for Space "${loginSpaceName}".`
-                : `Space "${loginSpaceName}" does not exist. Create it by setting a 4-digit passcode.`}
+                ? `Gib den 4-stelligen Passcode für den Bereich "${loginSpaceName}" ein.`
+                : `Der Bereich "${loginSpaceName}" existiert nicht. Erstelle ihn, indem du einen 4-stelligen Passcode festlegst.`}
             </p>
 
             {loginError && (
@@ -1739,7 +1756,7 @@ export default function Home() {
               >
                 <input
                   type="text"
-                  placeholder="Space Name (e.g. pikachu-fans)"
+                  placeholder="Bereichsname (z. B. pikachu-fans)"
                   value={loginSpaceName}
                   onChange={(e) => setLoginSpaceName(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ""))}
                   className="w-full px-4 py-3 rounded-xl bg-zinc-955 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm"
@@ -1754,7 +1771,7 @@ export default function Home() {
                     onChange={(e) => setIsKeepLoggedIn(e.target.checked)}
                     className="rounded border-zinc-800 bg-zinc-955 text-purple-600 focus:ring-0 focus:ring-offset-0"
                   />
-                  Remember me on this device
+                  Auf diesem Gerät angemeldet bleiben
                 </label>
 
                 <button
@@ -1762,7 +1779,7 @@ export default function Home() {
                   disabled={isLoginLoading || !loginSpaceName.trim()}
                   className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white font-semibold text-sm transition-all flex items-center justify-center gap-2"
                 >
-                  {isLoginLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Continue"}
+                  {isLoginLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Weiter"}
                 </button>
               </form>
             )}
@@ -1803,7 +1820,7 @@ export default function Home() {
                     }}
                     className="flex-1 py-3 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-955 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
                   >
-                    Back
+                    Zurück
                   </button>
                   <button
                     type="button"
@@ -1814,9 +1831,9 @@ export default function Home() {
                     {isLoginLoading ? (
                       <RefreshCw className="w-4 h-4 animate-spin" />
                     ) : loginStep === "code" ? (
-                      "Unlock Space"
+                      "Bereich freischalten"
                     ) : (
-                      "Create Space"
+                      "Bereich erstellen"
                     )}
                   </button>
                 </div>
@@ -1833,13 +1850,13 @@ export default function Home() {
         <header className="text-center mb-10 flex flex-col items-center">
           <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-purple-500/20 bg-purple-500/5 text-purple-400 text-xs font-semibold uppercase tracking-wider mb-3">
             <Sparkles className="w-3.5 h-3.5" />
-            AI-Powered TCG Showcases
+            all_out_luffy x New World Legacy
           </div>
           <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-white via-zinc-300 to-purple-400 bg-clip-text text-transparent">
             New World Legacy – Bilder generieren
           </h1>
           <p className="mt-3 text-lg text-zinc-400 max-w-2xl">
-            Expand card illustrations into immersive backgrounds. Display cards in stunning layouts optimized for web shops and social media sharing.
+            Erweitere Karten-Illustrationen zu immersiven Hintergründen. Präsentiere Karten in atemberaubenden Layouts, optimiert für Webshops und Social-Media-Sharing.
           </p>
         </header>
 
@@ -1868,7 +1885,7 @@ export default function Home() {
               }`}
             >
               <Package className="w-4 h-4" />
-              Display Studio
+              Display-Studio
             </button>
             <button
               type="button"
@@ -1880,7 +1897,7 @@ export default function Home() {
               }`}
             >
               <Layers className="w-4 h-4" />
-              Case Maker
+              Case-Maker
             </button>
             <button
               type="button"
@@ -1892,7 +1909,7 @@ export default function Home() {
               }`}
             >
               <Bookmark className="w-4 h-4" />
-              My Library ({savedArtworks.length})
+              Meine Bibliothek ({savedArtworks.length})
             </button>
           </div>
 
@@ -1900,7 +1917,7 @@ export default function Home() {
           {!isLocalMode && currentSpace && (
             <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/20 text-xs font-semibold text-zinc-400">
               <Layers className="w-3.5 h-3.5 text-purple-400" />
-              <span>Space: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
+              <span>Bereich: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
               {isSpaceSyncing && <RefreshCw className="w-3 h-3 text-purple-400 animate-spin" />}
               <span className="w-px h-3.5 bg-zinc-800 mx-1" />
               <button
@@ -1908,7 +1925,7 @@ export default function Home() {
                 onClick={handleLogout}
                 className="text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 cursor-pointer"
               >
-                Logout
+                Abmelden
               </button>
             </div>
           )}
@@ -1919,23 +1936,22 @@ export default function Home() {
           
           {/* Left panel - Controls & Source */}
           <section className="lg:col-span-7 flex flex-col gap-6">
-            
             {/* Aspect Ratio & Control Card */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
               <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                 <Layers className="w-5 h-5 text-purple-400" />
-                1. Configuration
+                1. Konfiguration
               </h2>
               
               <div className="flex flex-col gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-300 mb-2">Target Aspect Ratio</label>
+                  <label className="block text-sm font-medium text-zinc-300 mb-2">Ziel-Seitenverhältnis</label>
                   <div className="grid grid-cols-4 gap-2">
                     {[
-                      { value: "3:4", label: "Portrait 3:4", desc: "Classic Showcase" },
-                      { value: "9:16", label: "Story 9:16", desc: "Vertical Full" },
-                      { value: "1:1", label: "Square 1:1", desc: "Grid/Instagram" },
-                      { value: "16:9", label: "Landscape 16:9", desc: "Banner/Wallpaper" }
+                      { value: "3:4", label: "Porträt 3:4", desc: "Klassische Präsentation" },
+                      { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild" },
+                      { value: "1:1", label: "Quadrat 1:1", desc: "Raster/Instagram" },
+                      { value: "16:9", label: "Querformat 16:9", desc: "Banner/Hintergrund" }
                     ].map((ratio) => (
                       <button
                         key={ratio.value}
@@ -1961,7 +1977,7 @@ export default function Home() {
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
               <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                 <ImageIcon className="w-5 h-5 text-purple-400" />
-                2. Card Upload
+                2. Karte hochladen
               </h2>
 
               {!file ? (
@@ -1978,14 +1994,14 @@ export default function Home() {
                     <Upload className="w-6 h-6" />
                   </div>
                   <p className="text-sm font-semibold text-zinc-200 text-center">
-                    Drag and drop your card image here, or <span className="text-purple-400">browse</span>
+                    Ziehe dein Kartenbild hierher oder klicke auf <span className="text-purple-400">Durchsuchen</span>
                   </p>
                   <p className="text-xs text-zinc-500 mt-2 text-center">
-                    Supports PNG, JPG, JPEG, WEBP (up to 10MB)
+                    Unterstützt PNG, JPG, JPEG, WEBP (bis zu 10MB)
                   </p>
                 </div>
               ) : (
-                <div className="relative rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950/50 p-4 flex flex-col items-center">
+                <div className="relative rounded-xl overflow-hidden border border-zinc-800 bg-zinc-955/50 p-4 flex flex-col items-center">
                   <div className="max-w-[280px] w-full aspect-[2.5/3.5] relative rounded-lg overflow-hidden shadow-xl border border-zinc-800/80 bg-zinc-900">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -2005,7 +2021,7 @@ export default function Home() {
                         disabled={isProcessing}
                         className="rounded border-zinc-800 bg-zinc-955 text-purple-600 focus:ring-0 focus:ring-offset-0 disabled:opacity-50"
                       />
-                      Auto-crop card edges (turn off if card is already clean/full-bleed)
+                      Kanten automatisch zuschneiden (deaktivieren, wenn die Karte bereits sauber/randlos ist)
                     </label>
                   </div>
                   
@@ -2023,7 +2039,7 @@ export default function Home() {
                           className="px-3 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
                         >
                           <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                          Retry
+                          Erneut versuchen
                         </button>
                       )}
                       <button
@@ -2033,7 +2049,7 @@ export default function Home() {
                         className="px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
-                        Remove
+                        Entfernen
                       </button>
                     </div>
                   </div>
@@ -2052,12 +2068,12 @@ export default function Home() {
                 {isProcessing ? (
                   <>
                     <RefreshCw className="w-5 h-5 animate-spin" />
-                    Processing ({elapsedTime.toFixed(1)}s)...
+                    Verarbeite ({elapsedTime.toFixed(1)}s)...
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-5 h-5" />
-                    Expand Card Illustration
+                    Karten-Illustration erweitern
                   </>
                 )}
               </button>
@@ -2069,7 +2085,7 @@ export default function Home() {
                 <div className="flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
                   <div>
-                    <h3 className="font-semibold text-white">Pipeline Execution Failed</h3>
+                    <h3 className="font-semibold text-white">Ausführung der Pipeline fehlgeschlagen</h3>
                     <p className="text-sm text-zinc-400 mt-1">{errorMessage}</p>
                   </div>
                 </div>
@@ -2079,14 +2095,14 @@ export default function Home() {
                     onClick={handleReset}
                     className="px-3.5 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-400 hover:text-zinc-200 text-xs font-semibold transition-colors"
                   >
-                    Clear File
+                    Datei leeren
                   </button>
                   <button
                     type="button"
                     onClick={handleProcessImage}
                     className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors"
                   >
-                    Retry
+                    Erneut versuchen
                   </button>
                 </div>
               </div>
@@ -2240,7 +2256,7 @@ export default function Home() {
                               className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
                             >
                               <Download className="w-4 h-4" />
-                              Download
+                              Herunterladen
                             </button>
                             <button
                               type="button"
@@ -2274,7 +2290,7 @@ export default function Home() {
                                   className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                                 >
                                   <Layers className="w-4 h-4 text-purple-400" />
-                                  <span>Merged Card (Single Image)</span>
+                                  <span>Zusammengefügte Karte (Einzelbild)</span>
                                 </button>
                                 {(trimmedCard || previewUrl) && (
                                   <button
@@ -2308,7 +2324,7 @@ export default function Home() {
                                     <div className="w-4 h-4 flex items-center justify-center shrink-0">
                                       <span className="text-[10px] font-bold text-indigo-400">ZIP</span>
                                     </div>
-                                    <span>Split Components (BG + Card)</span>
+                                    <span>Komponenten trennen (Hintergrund + Karte)</span>
                                   </button>
                                 )}
                               </div>
@@ -2327,7 +2343,7 @@ export default function Home() {
                           className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
                         >
                           <Bookmark className="w-4 h-4" />
-                          Save to Library
+                          In Bibliothek speichern
                         </button>
                       </div>
                       <button
@@ -2343,7 +2359,7 @@ export default function Home() {
                         className="w-full py-3 rounded-xl bg-purple-600/15 border border-purple-500/30 hover:bg-purple-600/25 text-purple-400 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(168,85,247,0.05)]"
                       >
                         <Layers className="w-4 h-4" />
-                        Create Case Showcase
+                        Case-Showcase erstellen
                       </button>
                     </div>
                   </div>
@@ -2352,9 +2368,9 @@ export default function Home() {
                     <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
                       <ImageIcon className="w-8 h-8 text-zinc-650" />
                     </div>
-                    <p className="text-sm font-semibold text-zinc-400">No showcase generated yet</p>
-                    <p className="text-xs text-zinc-600 mt-2 max-w-[240px]">
-                      Upload your trading card and run the pipeline to see the final product showcase.
+                    <p className="text-sm font-semibold text-zinc-400">Noch kein Showcase generiert</p>
+                    <p className="text-xs text-zinc-650 mt-2 max-w-[240px]">
+                      Lade deine Sammelkarte hoch und starte die Pipeline, um das fertige Produkt-Showcase zu sehen.
                     </p>
                   </div>
                 )}
@@ -2373,18 +2389,18 @@ export default function Home() {
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
                 <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                   <Layers className="w-5 h-5 text-purple-400" />
-                  1. Configuration
+                  1. Konfiguration
                 </h2>
                 
                 <div className="flex flex-col gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-zinc-300 mb-2">Target Aspect Ratio</label>
+                    <label className="block text-sm font-medium text-zinc-300 mb-2">Ziel-Seitenverhältnis</label>
                     <div className="grid grid-cols-4 gap-2">
                       {[
-                        { value: "3:4", label: "Portrait 3:4", desc: "Classic Showcase" },
-                        { value: "9:16", label: "Story 9:16", desc: "Vertical Full" },
-                        { value: "1:1", label: "Square 1:1", desc: "Grid/Instagram" },
-                        { value: "16:9", label: "Landscape 16:9", desc: "Banner/Wallpaper" }
+                        { value: "3:4", label: "Porträt 3:4", desc: "Klassische Präsentation" },
+                        { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild" },
+                        { value: "1:1", label: "Quadrat 1:1", desc: "Raster/Instagram" },
+                        { value: "16:9", label: "Querformat 16:9", desc: "Banner/Hintergrund" }
                       ].map((ratio) => (
                         <button
                           key={ratio.value}
@@ -2404,7 +2420,7 @@ export default function Home() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-zinc-300 mb-2">Background Generation Mode</label>
+                    <label className="block text-sm font-medium text-zinc-300 mb-2">Hintergrund-Generierungsmodus</label>
                     <div className="grid grid-cols-3 gap-3">
                       <button
                         type="button"
@@ -2415,8 +2431,8 @@ export default function Home() {
                             : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                         }`}
                       >
-                        <div className="font-semibold text-xs">Themed Backdrop</div>
-                        <div className="text-[10px] text-zinc-550 mt-0.5">Gemini describes context, Imagen 3 builds scene</div>
+                        <div className="font-semibold text-xs">Thematischer Hintergrund</div>
+                        <div className="text-[10px] text-zinc-550 mt-0.5">Gemini beschreibt den Kontext, Imagen 3 baut die Szene</div>
                       </button>
                       <button
                         type="button"
@@ -2427,8 +2443,8 @@ export default function Home() {
                             : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                         }`}
                       >
-                        <div className="font-semibold text-xs">Ambient Blur</div>
-                        <div className="text-[10px] text-zinc-550 mt-0.5">Soft, blurred version of the display box colors</div>
+                        <div className="font-semibold text-xs">Ambient-Weichzeichner</div>
+                        <div className="text-[10px] text-zinc-550 mt-0.5">Weiche, verschwommene Version der Displaybox-Farben</div>
                       </button>
                       <button
                         type="button"
@@ -2439,8 +2455,8 @@ export default function Home() {
                             : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                         }`}
                       >
-                        <div className="font-semibold text-xs">Transparent Cutout</div>
-                        <div className="text-[10px] text-zinc-550 mt-0.5">Remove background and return transparent display box</div>
+                        <div className="font-semibold text-xs">Transparenter Ausschnitt</div>
+                        <div className="text-[10px] text-zinc-550 mt-0.5">Hintergrund entfernen und transparente Displaybox ausgeben</div>
                       </button>
                     </div>
                   </div>
@@ -2449,15 +2465,15 @@ export default function Home() {
                   <div className="border-t border-zinc-800 pt-4 mt-2">
                     <label className="block text-sm font-semibold text-white mb-2 flex items-center gap-1.5">
                       <ImageIcon className="w-4 h-4 text-purple-400" />
-                      Overlay Logo / Watermark (Optional)
+                      Logo / Wasserzeichen überlagern (optional)
                     </label>
                     
                     {!watermarkPreviewUrl ? (
                       <div className="flex items-center justify-center border border-dashed border-zinc-800 rounded-xl p-4 bg-zinc-950/40 hover:bg-zinc-950/60 transition-all">
                         <label className="cursor-pointer text-center py-2 px-4 flex flex-col items-center">
                           <Upload className="w-5 h-5 text-zinc-500 mb-1" />
-                          <span className="text-xs font-semibold text-zinc-400">Upload Watermark Image</span>
-                          <span className="text-[10px] text-zinc-650 mt-0.5">PNG / JPG (Transparency recommended)</span>
+                          <span className="text-xs font-semibold text-zinc-400">Wasserzeichen-Bild hochladen</span>
+                          <span className="text-[10px] text-zinc-650 mt-0.5">PNG / JPG (Transparenz empfohlen)</span>
                           <input
                             type="file"
                             accept="image/*"
@@ -2481,15 +2497,15 @@ export default function Home() {
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={watermarkPreviewUrl}
-                              alt="Watermark preview"
+                              alt="Wasserzeichen-Vorschau"
                               className="w-10 h-10 object-contain rounded bg-zinc-900 border border-zinc-800 p-1"
                             />
                             <div>
                               <div className="text-xs font-semibold text-zinc-300 truncate max-w-[150px]">
-                                {watermarkFile ? watermarkFile.name : "Watermark Logo"}
+                                {watermarkFile ? watermarkFile.name : "Wasserzeichen-Logo"}
                               </div>
                               <div className="text-[10px] text-zinc-500">
-                                Size: {Math.round(watermarkScale * 100)}% | Opacity: {Math.round(watermarkOpacity * 100)}%
+                                Größe: {Math.round(watermarkScale * 100)}% | Deckkraft: {Math.round(watermarkOpacity * 100)}%
                               </div>
                             </div>
                           </div>
@@ -2499,9 +2515,9 @@ export default function Home() {
                               setWatermarkFile(null);
                               setWatermarkPreviewUrl(null);
                             }}
-                            className="text-xs font-semibold text-rose-450 hover:text-rose-450 transition-colors py-1 px-2 rounded hover:bg-rose-500/10 cursor-pointer"
+                            className="text-xs font-semibold text-rose-455 hover:text-rose-450 transition-colors py-1 px-2 rounded hover:bg-rose-500/10 cursor-pointer"
                           >
-                            Remove
+                            Entfernen
                           </button>
                         </div>
 
@@ -2513,34 +2529,34 @@ export default function Home() {
                               onChange={(e) => setWatermarkPosition(e.target.value)}
                               className="w-full text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-zinc-300 outline-none focus:border-purple-500"
                             >
-                              <option value="bottom-center">Bottom Middle</option>
-                              <option value="bottom-right">Bottom Right</option>
-                              <option value="bottom-left">Bottom Left</option>
-                              <option value="top-left">Top Left</option>
-                              <option value="top-right">Top Right</option>
-                              <option value="center">Center</option>
+                              <option value="bottom-center">Unten Mitte</option>
+                              <option value="bottom-right">Unten Rechts</option>
+                              <option value="bottom-left">Unten Links</option>
+                              <option value="top-left">Oben Links</option>
+                              <option value="top-right">Oben Rechts</option>
+                              <option value="center">Zentriert</option>
                             </select>
                           </div>
 
                           <div>
-                            <label className="block text-[11px] font-semibold text-zinc-400 mb-1">Scale/Size</label>
+                            <label className="block text-[11px] font-semibold text-zinc-400 mb-1">Größe</label>
                             <select
                               value={watermarkScale}
                               onChange={(e) => setWatermarkScale(Number(e.target.value))}
                               className="w-full text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-zinc-300 outline-none focus:border-purple-500"
                             >
-                              <option value="0.05">Tiny (5%)</option>
-                              <option value="0.10">Small (10%)</option>
-                              <option value="0.15">Medium (15%)</option>
-                              <option value="0.25">Large (25%)</option>
-                              <option value="0.35">Huge (35%)</option>
+                              <option value="0.05">Sehr klein (5%)</option>
+                              <option value="0.10">Klein (10%)</option>
+                              <option value="0.15">Mittel (15%)</option>
+                              <option value="0.25">Groß (25%)</option>
+                              <option value="0.35">Sehr groß (35%)</option>
                             </select>
                           </div>
                         </div>
 
                         <div className="mt-1">
                           <div className="flex justify-between items-center text-[11px] font-semibold text-zinc-400 mb-1">
-                            <span>Opacity (Watermark)</span>
+                            <span>Deckkraft (Wasserzeichen)</span>
                             <span className="text-zinc-200">{Math.round(watermarkOpacity * 100)}%</span>
                           </div>
                           <input
@@ -2568,12 +2584,12 @@ export default function Home() {
                         {isDisplayProcessing ? (
                           <>
                             <RefreshCw className="w-4 h-4 animate-spin" />
-                            <span>Processing Display...</span>
+                            <span>Display wird verarbeitet...</span>
                           </>
                         ) : (
                           <>
                             <Sparkles className="w-4 h-4" />
-                            <span>Generate Merged Display</span>
+                            <span>Zusammengefügtes Display generieren</span>
                           </>
                         )}
                       </button>
@@ -2583,7 +2599,7 @@ export default function Home() {
                         disabled={isDisplayProcessing}
                         className="py-3 px-4 rounded-xl border border-zinc-855 hover:border-zinc-700 hover:bg-zinc-900 bg-transparent text-zinc-300 font-semibold text-sm transition-all cursor-pointer disabled:cursor-not-allowed"
                       >
-                        Reset
+                        Zurücksetzen
                       </button>
                     </div>
                   )}
@@ -2594,7 +2610,7 @@ export default function Home() {
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex-1 flex flex-col min-h-[350px]">
                 <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                   <ImageIcon className="w-5 h-5 text-purple-400" />
-                  2. Upload Display Box Image
+                  2. Displaybox-Bild hochladen
                 </h2>
                 
                 {!displayPreviewUrl ? (
@@ -2611,14 +2627,14 @@ export default function Home() {
                       <Upload className="w-8 h-8" />
                     </div>
                     <p className="text-sm font-semibold text-zinc-200">
-                      Drag & drop your display box image here
+                      Ziehe dein Displaybox-Bild hierher
                     </p>
                     <p className="text-xs text-zinc-550 mt-1.5 max-w-sm">
-                      Supports PNG, JPEG, WEBP. Paste directly from clipboard (Ctrl+V / Cmd+V).
+                      Unterstützt PNG, JPEG, WEBP. Direkt aus der Zwischenablage einfügen (Strg+V / Cmd+V).
                     </p>
                   </div>
                 ) : (
-                  <div className="flex-1 relative rounded-xl border border-zinc-850 bg-zinc-950/60 overflow-hidden flex items-center justify-center p-4">
+                  <div className="flex-1 relative rounded-xl border border-zinc-850 bg-zinc-955/60 overflow-hidden flex items-center justify-center p-4">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={displayPreviewUrl}
@@ -2629,7 +2645,7 @@ export default function Home() {
                       <button
                         onClick={handleReset}
                         className="absolute top-4 right-4 p-2 rounded-xl bg-black/60 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-black/80 transition-all cursor-pointer shadow-lg"
-                        title="Remove Image"
+                        title="Bild entfernen"
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -2646,7 +2662,7 @@ export default function Home() {
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-lg font-semibold text-white flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-purple-400" />
-                    Output Preview
+                    Vorschau der Ausgabe
                   </h2>
                   
                   {displayResultUrl && (
@@ -2658,7 +2674,7 @@ export default function Home() {
                           className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          Download
+                          Herunterladen
                           <ChevronDown className="w-3 h-3" />
                         </button>
                         
@@ -2675,7 +2691,7 @@ export default function Home() {
                                 className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
                               >
                                 <Layers className="w-3.5 h-3.5 text-purple-400" />
-                                <span>Merged Showcase</span>
+                                <span>Zusammengefügtes Showcase</span>
                               </button>
                               {displayCutoutUrl && (
                                 <button
@@ -2687,7 +2703,7 @@ export default function Home() {
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
                                 >
                                   <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
-                                  <span>Display Cutout Only</span>
+                                  <span>Nur Display-Ausschnitt</span>
                                 </button>
                               )}
                               {displayBgUrl && (
@@ -2706,7 +2722,7 @@ export default function Home() {
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                     <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
                                   </div>
-                                  <span>Split Background & Cutout</span>
+                                  <span>Hintergrund & Ausschnitt trennen</span>
                                 </button>
                               )}
                             </div>
@@ -2723,7 +2739,7 @@ export default function Home() {
                         className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         <Bookmark className="w-3.5 h-3.5" />
-                        Save to Library
+                        In Bibliothek speichern
                       </button>
                     </div>
                   )}
@@ -2746,7 +2762,7 @@ export default function Home() {
                         />
                         {/* Click to zoom overlay */}
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
-                          <div className="p-3 rounded-full bg-black/60 border border-zinc-850 text-white backdrop-blur-md scale-90 group-hover:scale-100 transition-all duration-300">
+                          <div className="p-3 rounded-full bg-black/60 border border-zinc-855 text-white backdrop-blur-md scale-90 group-hover:scale-100 transition-all duration-300">
                             <Maximize2 className="w-5 h-5" />
                           </div>
                         </div>
@@ -2757,9 +2773,9 @@ export default function Home() {
                       <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-555 flex items-center justify-center mb-3">
                         <Sparkles className="w-5 h-5" />
                       </div>
-                      <h3 className="font-semibold text-zinc-350 text-sm">No display generated yet</h3>
+                      <h3 className="font-semibold text-zinc-350 text-sm">Noch kein Display generiert</h3>
                       <p className="text-xs text-zinc-555 mt-1">
-                        Configure layout options, upload an image of a display box and click Generate.
+                        Konfiguriere Layout-Optionen, lade ein Bild einer Displaybox hoch und klicke auf Generieren.
                       </p>
                     </div>
                   )}
@@ -2772,11 +2788,11 @@ export default function Home() {
                         <Sparkles className="w-6 h-6 text-purple-400 animate-pulse" />
                       </div>
                       <div className="font-bold text-white text-base mb-1">
-                        Creating Display Showcase...
+                        Display-Showcase wird erstellt...
                       </div>
                       <div className="text-zinc-400 text-xs font-semibold mb-3 flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5 text-zinc-555" />
-                        <span>Elapsed Time: <strong className="text-zinc-300">{displayElapsedTime.toFixed(1)}s</strong></span>
+                        <span>Vergangene Zeit: <strong className="text-zinc-300">{displayElapsedTime.toFixed(1)}s</strong></span>
                       </div>
                       <div className="px-4 py-1.5 rounded-full border border-purple-500/20 bg-purple-600/10 text-[10px] text-purple-400 font-bold tracking-wider uppercase animate-pulse">
                         {displayActiveStepMessage}
@@ -2790,7 +2806,7 @@ export default function Home() {
               {isDisplayProcessing || displayResultUrl || displayErrorMessage ? (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
                   <h2 className="text-sm font-bold text-zinc-400 tracking-wider uppercase mb-4 flex items-center gap-2">
-                    Processing Steps
+                    Verarbeitungsschritte
                   </h2>
                   <div className="flex flex-col gap-4">
                     {displaySteps.map((step) => {
@@ -2853,16 +2869,16 @@ export default function Home() {
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
                 <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                   <Layers className="w-5 h-5 text-purple-400" />
-                  TCG Case Configuration
+                  TCG Case-Konfiguration
                 </h2>
                 
                 <div className="flex flex-col gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-zinc-300 mb-2">Select Expanded Card</label>
+                    <label className="block text-sm font-medium text-zinc-300 mb-2">Erweiterte Karte auswählen</label>
                     {savedArtworks.length === 0 && !caseCardImage ? (
                       <div className="p-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center">
-                        <p className="text-sm text-zinc-500">Your library is empty.</p>
-                        <p className="text-xs text-zinc-650 mt-1">Please expand a card in the Studio and save it first, or use the currently generated card.</p>
+                        <p className="text-sm text-zinc-500">Deine Bibliothek ist leer.</p>
+                        <p className="text-xs text-zinc-650 mt-1">Bitte erweitere zuerst eine Karte im Studio und speichere sie, oder verwende die aktuell generierte Karte.</p>
                       </div>
                     ) : (
                       <div className="flex flex-col gap-3">
@@ -2888,13 +2904,13 @@ export default function Home() {
                           }}
                           className="w-full px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm"
                         >
-                          <option value="">-- Choose a card --</option>
+                          <option value="">-- Karte auswählen --</option>
                           {caseCardImage && !selectedArtworkId && (
-                            <option value="current">Current Session Card (Studio)</option>
+                            <option value="current">Aktuelle Sitzungskarte (Studio)</option>
                           )}
                           {savedArtworks.map(art => (
                             <option key={art.id} value={art.id}>
-                              {art.name} ({art.aspectRatio}){!art.originalCardUrl ? " [Will generate ambient background]" : ""}
+                              {art.name} ({art.aspectRatio}){!art.originalCardUrl ? " [Erzeugt Ambient-Hintergrund]" : ""}
                             </option>
                           ))}
                         </select>
@@ -2915,12 +2931,12 @@ export default function Home() {
                                 <p className="text-sm font-semibold text-zinc-200">
                                   {selectedArtworkId 
                                     ? savedArtworks.find(a => a.id === selectedArtworkId)?.name 
-                                    : "Current Session Card"}
+                                    : "Aktuelle Sitzungskarte"}
                                 </p>
                                 <p className="text-xs text-purple-400 font-medium">
                                   {caseBgImage === "ambient" 
-                                    ? "Ready to insert into case (with ambient blurred background)" 
-                                    : "Ready to insert into case (with expanded background)"}
+                                    ? "Bereit zum Einfügen in das Case (mit verschwommenem Ambient-Hintergrund)" 
+                                    : "Bereit zum Einfügen in das Case (mit erweitertem Hintergrund)"}
                                 </p>
                               </div>
                             </div>
@@ -2928,7 +2944,7 @@ export default function Home() {
                             {caseBgImage === "ambient" && (
                               <div className="px-4 py-3 rounded-xl border border-purple-500/10 bg-purple-500/5 text-purple-400 flex gap-2 items-center text-xs">
                                 <Info className="w-4 h-4 shrink-0" />
-                                <span>No background layer was found. An ambient blurred background will be generated.</span>
+                                <span>Keine Hintergrundebene gefunden. Ein verschwommener Ambient-Hintergrund wird generiert.</span>
                               </div>
                             )}
                           </div>
@@ -2950,12 +2966,12 @@ export default function Home() {
                   {isCaseProcessing ? (
                     <>
                       <RefreshCw className="w-5 h-5 animate-spin" />
-                      Creating Case Image...
+                      Case-Bild wird erstellt...
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-5 h-5" />
-                      Create Case Image
+                      Case-Bild erstellen
                     </>
                   )}
                 </button>
@@ -2967,7 +2983,7 @@ export default function Home() {
                   <div className="flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
                     <div>
-                      <h3 className="font-semibold text-white">Case Generation Failed</h3>
+                      <h3 className="font-semibold text-white">Case-Generierung fehlgeschlagen</h3>
                       <p className="text-sm text-zinc-400 mt-1">{caseErrorMessage}</p>
                     </div>
                   </div>
@@ -2982,14 +2998,14 @@ export default function Home() {
                       }}
                       className="px-3.5 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-400 hover:text-zinc-200 text-xs font-semibold transition-colors"
                     >
-                      Clear Selection
+                      Auswahl aufheben
                     </button>
                     <button
                       type="button"
                       onClick={handleProcessCaseImage}
                       className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-semibold transition-colors"
                     >
-                      Retry
+                      Erneut versuchen
                     </button>
                   </div>
                 </div>
@@ -3001,7 +3017,7 @@ export default function Home() {
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex-1 flex flex-col">
                 <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
                   <Maximize2 className="w-5 h-5 text-purple-400" />
-                  Case Showcase Preview
+                  Case-Showcase-Vorschau
                 </h2>
 
                 <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950/80 rounded-xl border border-zinc-850 p-4 relative min-h-[350px]">
@@ -3010,9 +3026,9 @@ export default function Home() {
                       <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
                         <RefreshCw className="w-8 h-8 text-purple-400 animate-spin" />
                       </div>
-                      <p className="text-sm font-semibold text-zinc-400">Rendering case showcase...</p>
+                      <p className="text-sm font-semibold text-zinc-400">Case-Showcase wird gerendert...</p>
                       <p className="text-xs text-zinc-650 mt-2 max-w-[200px]">
-                        Compositing card layers inside the transparent plastic slab template.
+                        Kombiniere Kartenebenen innerhalb der transparenten Kunststoff-Slab-Vorlage.
                       </p>
                     </div>
                   ) : caseResultUrl ? (
@@ -3055,7 +3071,7 @@ export default function Home() {
                               className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
                             >
                               <Download className="w-4 h-4" />
-                              Download
+                              Herunterladen
                             </button>
                             <button
                               type="button"
@@ -3087,7 +3103,7 @@ export default function Home() {
                                   className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                                 >
                                   <Layers className="w-4 h-4 text-purple-400" />
-                                  <span>Merged Showcase (Slab + BG)</span>
+                                  <span>Zusammengefügtes Showcase (Slab + Hintergrund)</span>
                                 </button>
                                 <button
                                   type="button"
@@ -3118,7 +3134,7 @@ export default function Home() {
                                   <div className="w-4 h-4 flex items-center justify-center shrink-0">
                                     <span className="text-[10px] font-bold text-indigo-400">ZIP</span>
                                   </div>
-                                  <span>Split Components (BG + Case)</span>
+                                  <span>Komponenten trennen (Hintergrund + Case)</span>
                                 </button>
                                 {caseCardImage && caseBgResultUrl && caseWithCardUrl && (
                                   <button
@@ -3138,7 +3154,7 @@ export default function Home() {
                                     <div className="w-4 h-4 flex items-center justify-center shrink-0">
                                       <span className="text-[10px] font-bold text-purple-400">ZIP</span>
                                     </div>
-                                    <span>All Parts (BG + Case + Card)</span>
+                                    <span>Alle Teile (Hintergrund + Case + Karte)</span>
                                   </button>
                                 )}
                               </div>
@@ -3161,7 +3177,7 @@ export default function Home() {
                           className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
                         >
                           <Bookmark className="w-4 h-4" />
-                          Save to Library
+                          In Bibliothek speichern
                         </button>
                       </div>
                     </div>
@@ -3170,9 +3186,9 @@ export default function Home() {
                       <div className="w-16 h-16 rounded-full border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
                         <Layers className="w-8 h-8 text-zinc-650" />
                       </div>
-                      <p className="text-sm font-semibold text-zinc-400">No case showcase generated yet</p>
-                      <p className="text-xs text-zinc-600 mt-2 max-w-[240px]">
-                        Select an expanded card from the config list and hit the button to generate the final TCG slab showcase.
+                      <p className="text-sm font-semibold text-zinc-400">Noch kein Case-Showcase generiert</p>
+                      <p className="text-xs text-zinc-650 mt-2 max-w-[240px]">
+                        Wähle eine erweiterte Karte aus der Konfigurationsliste und klicke auf die Schaltfläche, um das fertige TCG-Slab-Showcase zu generieren.
                       </p>
                     </div>
                   )}
@@ -3194,8 +3210,8 @@ export default function Home() {
                 <div className="w-16 h-16 rounded-full border border-purple-500/30 bg-purple-900/40 flex items-center justify-center mb-4">
                   <Upload className="w-8 h-8 text-purple-400" />
                 </div>
-                <p className="text-lg font-bold text-white">Drop image to save to Library</p>
-                <p className="text-xs text-purple-300 mt-2 font-medium">Supports PNG, JPG, WEBP</p>
+                <p className="text-lg font-bold text-white">Bild ablegen, um es in der Bibliothek zu speichern</p>
+                <p className="text-xs text-purple-300 mt-2 font-medium">Unterstützt PNG, JPG, WEBP</p>
               </div>
             )}
 
@@ -3203,11 +3219,11 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl">
               <div className="relative w-full sm:max-w-md">
                 <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                  <Search className="h-4 w-4 text-zinc-500" />
+                  <Search className="h-4 w-4 text-zinc-550" />
                 </span>
                 <input
                   type="text"
-                  placeholder="Search saved cards by name..."
+                  placeholder="Gespeicherte Karten nach Namen suchen..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-8 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm"
@@ -3233,11 +3249,96 @@ export default function Home() {
                   className="px-4 py-2.5 rounded-xl bg-purple-600/10 hover:bg-purple-600/20 border border-purple-500/30 hover:border-purple-500/50 text-purple-400 font-semibold text-xs flex items-center gap-2 transition-all"
                 >
                   <Upload className="w-4 h-4" />
-                  Upload Card
+                  Karte hochladen
                 </button>
                 <div className="text-sm text-zinc-400 font-medium whitespace-nowrap">
-                  Showing {filteredArtworks.length} of {savedArtworks.length} saved artworks
+                  Zeige {filteredArtworks.length} von {savedArtworks.length} gespeicherten Bildern
                 </div>
+              </div>
+            </div>
+
+            {/* Category / Filter Tabs */}
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+                <div className="flex gap-2">
+                  {[
+                    { id: "all", label: "Alle Einträge", icon: Bookmark },
+                    { id: "cards", label: "Karten", icon: Layers },
+                    { id: "displays", label: "Displays", icon: Package }
+                  ].map((cat) => {
+                    const Icon = cat.icon;
+                    const count = cat.id === "all" 
+                      ? savedArtworks.length 
+                      : cat.id === "cards" 
+                      ? savedArtworks.filter(a => !a.isDisplay).length
+                      : savedArtworks.filter(a => !!a.isDisplay).length;
+
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => {
+                          setLibraryCategory(cat.id as any);
+                          if (cat.id !== "cards") setLibraryCardSubCategory("all");
+                        }}
+                        className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all flex items-center gap-1.5 border ${
+                          libraryCategory === cat.id
+                            ? "bg-purple-600/15 border-purple-500/30 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.05)]"
+                            : "border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40"
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                        <span>{cat.label}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                          libraryCategory === cat.id 
+                            ? "bg-purple-500/20 text-purple-300" 
+                            : "bg-zinc-850 text-zinc-550"
+                        }`}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Secondary sub-filters for Cards */}
+                {libraryCategory === "cards" && (
+                  <div className="flex gap-2 bg-zinc-950 p-1 rounded-lg border border-zinc-850 animate-in fade-in slide-in-from-right-2 duration-200">
+                    {[
+                      { id: "all", label: "Alle Karten" },
+                      { id: "case", label: "Mit Case" },
+                      { id: "noCase", label: "Ohne Case" }
+                    ].map((sub) => {
+                      const count = sub.id === "all"
+                        ? savedArtworks.filter(a => !a.isDisplay).length
+                        : sub.id === "case"
+                        ? savedArtworks.filter(a => !a.isDisplay && a.isCase).length
+                        : savedArtworks.filter(a => !a.isDisplay && !a.isCase).length;
+
+                      return (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          onClick={() => setLibraryCardSubCategory(sub.id as any)}
+                          className={`px-3 py-1.5 rounded-md font-semibold text-[11px] transition-all flex items-center gap-1.5 ${
+                            libraryCardSubCategory === sub.id
+                              ? "bg-zinc-900 text-white border border-zinc-800 shadow-sm"
+                              : "text-zinc-400 hover:text-zinc-200 border border-transparent"
+                          }`}
+                        >
+                          <span>{sub.label}</span>
+                          <span className={`text-[9px] px-1 py-0.2 rounded-full ${
+                            libraryCardSubCategory === sub.id
+                              ? "bg-zinc-800 text-zinc-350"
+                              : "bg-zinc-900/60 text-zinc-555"
+                          }`}>
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -3290,7 +3391,7 @@ export default function Home() {
                       {art.name}
                     </h3>
                     <p className="text-[10px] text-zinc-550 mb-4">
-                      Saved {new Date(art.timestamp).toLocaleDateString(undefined, {
+                      Gespeichert am {new Date(art.timestamp).toLocaleDateString(undefined, {
                         month: "short",
                         day: "numeric",
                         year: "numeric",
@@ -3310,7 +3411,7 @@ export default function Home() {
                             className="flex-1 py-2 px-3 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
                           >
                             <Download className="w-3.5 h-3.5" />
-                            Download
+                            Herunterladen
                           </button>
                           <button
                             type="button"
@@ -3339,7 +3440,7 @@ export default function Home() {
                                 className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
                               >
                                 <Layers className="w-3.5 h-3.5 text-purple-400" />
-                                <span>{art.isDisplay ? "Merged Display" : art.isCase ? "Merged Showcase" : "Merged Card"}</span>
+                                <span>{art.isDisplay ? "Zusammengefügtes Display" : art.isCase ? "Zusammengefügtes Showcase" : "Zusammengefügte Karte"}</span>
                               </button>
                               {(art.cardOnlyUrl || art.originalCardUrl) && (
                                 <button
@@ -3359,7 +3460,7 @@ export default function Home() {
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
                                 >
                                   <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
-                                  <span>{art.isDisplay ? "Display Cutout (No BG)" : art.isCase ? "Card Only (No Case/BG)" : "Card Only (No BG)"}</span>
+                                  <span>{art.isDisplay ? "Display-Ausschnitt (Kein HG)" : art.isCase ? "Nur Karte (Kein Case/HG)" : "Nur Karte (Kein HG)"}</span>
                                 </button>
                               )}
                               {art.backgroundUrl && (
@@ -3381,7 +3482,7 @@ export default function Home() {
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                     <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
                                   </div>
-                                  <span>{art.isDisplay ? "Split BG & Cutout" : art.isCase ? "Split BG & Case" : "Split BG & Card"}</span>
+                                  <span>{art.isDisplay ? "Hintergrund & Ausschnitt trennen" : art.isCase ? "Hintergrund & Case trennen" : "Hintergrund & Karte trennen"}</span>
                                 </button>
                               )}
                               {art.isCase && art.backgroundUrl && art.originalCardUrl && (
@@ -3408,7 +3509,7 @@ export default function Home() {
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                     <span className="text-[9px] font-bold text-purple-400">ZIP</span>
                                   </div>
-                                  <span>All Parts (BG + Case + Card)</span>
+                                  <span>Alle Teile (Hintergrund + Case + Karte)</span>
                                 </button>
                               )}
                             </div>
@@ -3422,7 +3523,7 @@ export default function Home() {
                         className={`p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors ${
                           identifyingArtworkId === art.id ? "cursor-wait opacity-65" : ""
                         }`}
-                        title="Find card name"
+                        title="Kartenname finden"
                       >
                         {identifyingArtworkId === art.id ? (
                           <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
@@ -3437,8 +3538,8 @@ export default function Home() {
                           setRenameValue(art.name);
                           setIsRenameModalOpen(true);
                         }}
-                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
-                        title="Rename Card"
+                        className="p-2 rounded-lg border border-zinc-855 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
+                        title="Karte umbenennen"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -3448,16 +3549,16 @@ export default function Home() {
                           handleSelectArtworkForCase(art.id);
                           setActiveTab("case");
                         }}
-                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
-                        title="Create Case Showroom"
+                        className="p-2 rounded-lg border border-zinc-855 bg-zinc-955 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
+                        title="Case-Showroom erstellen"
                       >
                         <Layers className="w-3.5 h-3.5" />
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteArtwork(art.id)}
-                        className="p-2 rounded-lg border border-zinc-850 bg-zinc-955 text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
-                        title="Delete from Library"
+                        className="p-2 rounded-lg border border-zinc-855 bg-zinc-955 text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
+                        title="Aus Bibliothek löschen"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -3472,12 +3573,12 @@ export default function Home() {
                   <Bookmark className="w-8 h-8 text-zinc-650" />
                 </div>
                 <h3 className="text-lg font-semibold text-white">
-                  {searchQuery ? "No matching artworks found" : "Your library is empty"}
+                  {searchQuery ? "Keine passenden Kunstwerke gefunden" : "Deine Bibliothek ist leer"}
                 </h3>
                 <p className="text-sm text-zinc-500 mt-2 max-w-sm">
                   {searchQuery
-                    ? "Try checking for spelling errors or search for a different card name."
-                    : "Go to the Studio tab, expand your favorite trading cards, and save them to build your personal library."}
+                    ? "Überprüfe die Schreibweise oder suche nach einem anderen Kartennamen."
+                    : "Gehe zum Studio-Tab, erweitere deine Lieblingskarten und speichere sie, um deine persönliche Bibliothek aufzubauen."}
                 </p>
                 {!searchQuery && (
                   <button
@@ -3485,7 +3586,7 @@ export default function Home() {
                     onClick={() => setActiveTab("generate")}
                     className="mt-6 px-5 py-2.5 rounded-xl bg-purple-600/15 border border-purple-500/30 hover:bg-purple-600/25 text-purple-400 font-semibold text-sm transition-all"
                   >
-                    Open Generate Studio
+                    Erstellungs-Studio öffnen
                   </button>
                 )}
               </div>
@@ -3511,15 +3612,15 @@ export default function Home() {
 
               <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
                 <Bookmark className="w-5 h-5 text-purple-400" />
-                Save to Library
+                In Bibliothek speichern
               </h3>
               <p className="text-sm text-zinc-400 mb-4">
-                Enter a name for this expanded trading card artwork to save it to your library.
+                Gib einen Namen für dieses erweiterte Sammelkarten-Kunstwerk ein, um es in deiner Bibliothek zu speichern.
               </p>
 
               <input
                 type="text"
-                placeholder="e.g. Charizard Alt Art"
+                placeholder="z.B. Glurak Alt Art"
                 value={newArtworkName}
                 onChange={(e) => setNewArtworkName(e.target.value)}
                 disabled={isSaving}
@@ -3535,9 +3636,9 @@ export default function Home() {
                   type="button"
                   onClick={closeSaveModal}
                   disabled={isSaving}
-                  className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-355 hover:text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Cancel
+                  Abbrechen
                 </button>
                 <button
                   type="button"
@@ -3548,10 +3649,10 @@ export default function Home() {
                   {isSaving ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      Saving...
+                      Speichern...
                     </>
                   ) : (
-                    "Save Artwork"
+                    "Kunstwerk speichern"
                   )}
                 </button>
               </div>
@@ -3575,15 +3676,15 @@ export default function Home() {
 
               <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
                 <Pencil className="w-5 h-5 text-purple-400" />
-                Rename Artwork
+                Kunstwerk umbenennen
               </h3>
               <p className="text-sm text-zinc-400 mb-4">
-                Enter a new name for &quot;{renamingArtwork.name}&quot;.
+                Gib einen neuen Namen für &quot;{renamingArtwork.name}&quot; ein.
               </p>
 
               <input
                 type="text"
-                placeholder="e.g. Charizard Alt Art"
+                placeholder="z.B. Glurak Alt Art"
                 value={renameValue}
                 onChange={(e) => setRenameValue(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-550 focus:border-purple-500 focus:outline-none transition-colors text-sm mb-6"
@@ -3602,7 +3703,7 @@ export default function Home() {
                   }}
                   className="px-4 py-2.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-sm font-semibold transition-colors"
                 >
-                  Cancel
+                  Abbrechen
                 </button>
                 <button
                   type="button"
@@ -3610,7 +3711,7 @@ export default function Home() {
                   disabled={!renameValue.trim() || renameValue.trim() === renamingArtwork.name}
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 text-white text-sm font-semibold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)]"
                 >
-                  Rename
+                  Umbenennen
                 </button>
               </div>
             </div>

@@ -8,3 +8,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 - **Always Push to Git**: Once you finish implementing a feature, fix, or task, you must automatically stage all changes, commit them with a descriptive commit message, and push the changes to the remote Git repository. Do not wait for the user to ask for a git push.
 
+
+# Language Rule
+
+- **German Only**: All user-facing texts, button labels, descriptions, placeholders, error messages, and UI features added or modified from now on must always be written in German. Never use English for user-facing UI content.
+
