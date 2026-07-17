@@ -2729,18 +2729,28 @@ export default function Home() {
                   )}
                 </div>
 
-                <div className="flex-1 border border-zinc-850 bg-zinc-950/40 rounded-xl relative overflow-hidden min-h-[300px] flex items-center justify-center p-4">
+                <div className="flex-1 border border-zinc-850 bg-zinc-950/80 rounded-xl relative overflow-hidden min-h-[350px] flex flex-col items-center justify-center p-4">
                   {displayResultUrl ? (
-                    <div 
-                      className="relative max-h-[380px] w-auto overflow-hidden rounded-lg shadow-2xl border border-zinc-850 cursor-zoom-in"
-                      onClick={() => setLightboxImage({ url: displayResultUrl, title: newArtworkName || "Merged Display Box" })}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={displayResultUrl}
-                        alt="Result showcase"
-                        className="max-h-[380px] w-auto object-contain transition-transform duration-500 hover:scale-[1.02]"
-                      />
+                    <div className="w-full flex flex-col items-center animate-in fade-in duration-300">
+                      <div 
+                        className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
+                        style={{ aspectRatio: displayAspectRatio.replace(":", "/") }}
+                        onClick={() => setLightboxImage({ url: displayResultUrl, title: newArtworkName || "Merged Display Box" })}
+                        title="Größere Ansicht (Klicken)"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={displayResultUrl}
+                          alt="Result showcase"
+                          className={`w-full h-full ${displayBgMode === "transparent" ? "object-contain" : "object-cover"} transition-transform duration-500 group-hover:scale-[1.02]`}
+                        />
+                        {/* Click to zoom overlay */}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                          <div className="p-3 rounded-full bg-black/60 border border-zinc-850 text-white backdrop-blur-md scale-90 group-hover:scale-100 transition-all duration-300">
+                            <Maximize2 className="w-5 h-5" />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div className="text-center p-8 flex flex-col items-center max-w-sm">
