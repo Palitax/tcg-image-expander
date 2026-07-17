@@ -87,6 +87,9 @@ const fetchWithRetry = async (
   try {
     return await fetch(url, options);
   } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw e;
+    }
     if (retries > 0) {
       const msg = `Retrying connection in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
       if (onRetry) onRetry(msg);
@@ -319,7 +322,7 @@ const triggerZipDownload = async (
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<string>("9:16");
+  const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [steps, setSteps] = useState<ProgressStep[]>(INITIAL_STEPS);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -390,7 +393,7 @@ export default function Home() {
   const [isDisplayProcessing, setIsDisplayProcessing] = useState<boolean>(false);
   const [displayErrorMessage, setDisplayErrorMessage] = useState<string | null>(null);
   const [displayAspectRatio, setDisplayAspectRatio] = useState<string>("3:4");
-  const [displayBgMode, setDisplayBgMode] = useState<"outpaint" | "ambient" | "transparent">("outpaint");
+  const [displayBgMode, setDisplayBgMode] = useState<"outpaint" | "ambient" | "transparent">("transparent");
   const [displaySteps, setDisplaySteps] = useState<ProgressStep[]>(DISPLAY_STEPS);
   const [displayElapsedTime, setDisplayElapsedTime] = useState<number>(0);
   const [displayActiveStepMessage, setDisplayActiveStepMessage] = useState<string>("");
@@ -1185,6 +1188,13 @@ export default function Home() {
   const [elapsedTime, setElapsedTime] = useState<number>(0);
   const [activeStepMessage, setActiveStepMessage] = useState<string>("");
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancelProcessing = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
 
   useEffect(() => {
     if (isProcessing) {
@@ -1402,6 +1412,11 @@ export default function Home() {
 
   const handleProcessImage = async () => {
     if (!file) return;
+    
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     setIsProcessing(true);
     setErrorMessage(null);
     setResultImageUrl(null);
@@ -1422,7 +1437,8 @@ export default function Home() {
 
       const cropResponse = await fetch("/api/pipeline/crop", {
         method: "POST",
-        body: cropFormData
+        body: cropFormData,
+        signal
       });
 
       const { 
@@ -1462,7 +1478,8 @@ export default function Home() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ croppedImage, aspectRatio, mode: bgMode })
+          body: JSON.stringify({ croppedImage, aspectRatio, mode: bgMode }),
+          signal
         },
         2,
         1500,
@@ -1489,7 +1506,8 @@ export default function Home() {
           originalImage: cropTrimmedCard || trimmedCard, 
           backgroundImage,
           isTrimmed: !!(cropTrimmedCard || trimmedCard)
-        })
+        }),
+        signal
       });
 
       const { resultImageUrl } = await parseResponseData(
@@ -1501,6 +1519,11 @@ export default function Home() {
       setActiveStepMessage("Completed!");
 
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        setErrorMessage("Die Bildgenerierung wurde abgebrochen.");
+        setSteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
+        return;
+      }
       const message = getErrorMessage(error);
       console.error("Pipeline error:", error);
       setErrorMessage(message || "An unexpected error occurred during processing.");
@@ -2121,9 +2144,21 @@ export default function Home() {
                     <RefreshCw className={`w-5 h-5 text-purple-400 ${isProcessing ? "animate-spin" : ""}`} />
                     Pipeline Status
                   </h2>
-                  <div className="text-xs text-zinc-400 flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-zinc-850 bg-zinc-950/60 font-mono">
-                    <Clock className="w-3.5 h-3.5 text-zinc-500" />
-                    {elapsedTime.toFixed(1)}s
+                  <div className="flex items-center gap-2">
+                    {isProcessing && (
+                      <button
+                        type="button"
+                        onClick={handleCancelProcessing}
+                        className="px-2.5 py-1 rounded-lg border border-red-500/30 hover:border-red-500/50 bg-red-950/20 hover:bg-red-950/40 text-[10px] text-red-400 font-bold tracking-wide transition-all cursor-pointer flex items-center gap-1"
+                      >
+                        <X className="w-3 h-3" />
+                        Abbrechen
+                      </button>
+                    )}
+                    <div className="text-xs text-zinc-400 flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-zinc-850 bg-zinc-950/60 font-mono">
+                      <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                      {elapsedTime.toFixed(1)}s
+                    </div>
                   </div>
                 </div>
 
