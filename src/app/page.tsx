@@ -2642,7 +2642,7 @@ export default function Home() {
             {/* Right panel - Result & Progress */}
             <section className="lg:col-span-5 flex flex-col gap-6 h-full">
               {/* Output Preview */}
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col flex-1 min-h-[420px]">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col flex-1 min-h-[500px]">
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-lg font-semibold text-white flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-purple-400" />
@@ -2729,11 +2729,11 @@ export default function Home() {
                   )}
                 </div>
 
-                <div className="flex-1 border border-zinc-850 bg-zinc-950/80 rounded-xl relative overflow-hidden min-h-[350px] flex flex-col items-center justify-center p-4">
+                <div className="flex-1 border border-zinc-850 bg-zinc-950/80 rounded-xl relative overflow-hidden min-h-[420px] flex flex-col items-center justify-center p-6">
                   {displayResultUrl ? (
                     <div className="w-full flex flex-col items-center animate-in fade-in duration-300">
                       <div 
-                        className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
+                        className="relative rounded-lg overflow-hidden w-full max-w-[440px] cursor-pointer group transition-all duration-300"
                         style={{ aspectRatio: displayAspectRatio.replace(":", "/") }}
                         onClick={() => setLightboxImage({ url: displayResultUrl, title: newArtworkName || "Merged Display Box" })}
                         title="Größere Ansicht (Klicken)"
@@ -3639,12 +3639,12 @@ export default function Home() {
               onClick={(e) => e.stopPropagation()}
             >
               {/* The image */}
-              <div className="relative rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl bg-zinc-950 max-h-[80vh] max-w-full flex items-center justify-center">
+              <div className="relative rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl bg-zinc-950 max-h-[80vh] max-w-full flex items-center justify-center p-8">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={lightboxImage.url}
                   alt={lightboxImage.title}
-                  className="max-h-[75vh] max-w-full object-contain"
+                  className="max-h-[70vh] max-w-full object-contain"
                 />
               </div>
               
