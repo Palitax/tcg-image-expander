@@ -54,6 +54,21 @@ interface ProgressStep {
   status: "idle" | "running" | "success" | "error";
 }
 
+interface BatchItem {
+  id: string;
+  file: File;
+  previewUrl: string;
+  name: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  progressMsg?: string;
+  resultImageUrl?: string;
+  originalCardUrl?: string;
+  backgroundImageUrl?: string;
+  cutoutImageUrl?: string;
+  error?: string;
+  isSaved?: boolean;
+}
+
 const INITIAL_STEPS: ProgressStep[] = [
   { id: "LAYOUT", label: "Layout-Analyse", description: "Gemini erkennt Begrenzungsrahmen der inneren Karte", status: "idle" },
   { id: "CROP", label: "Kunstwerk-Extraktion", description: "Sharp schneidet das Bild mithilfe von Koordinaten aus", status: "idle" },
@@ -330,6 +345,17 @@ const triggerZipDownload = async (
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
+  const [cardBatchItems, setCardBatchItems] = useState<BatchItem[]>([]);
+  const [isCardBatchProcessing, setIsCardBatchProcessing] = useState<boolean>(false);
+
+  const [displayBatchItems, setDisplayBatchItems] = useState<BatchItem[]>([]);
+  const [isDisplayBatchProcessing, setIsDisplayBatchProcessing] = useState<boolean>(false);
+
+  const [boosterBatchItems, setBoosterBatchItems] = useState<BatchItem[]>([]);
+  const [isBoosterBatchProcessing, setIsBoosterBatchProcessing] = useState<boolean>(false);
+
+  const cancelBatchRef = useRef<boolean>(false);
+
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -1342,7 +1368,23 @@ export default function Home() {
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
-      const selectedFile = acceptedFiles[0];
+      let filesToProcess = acceptedFiles;
+      if (acceptedFiles.length > 10) {
+        alert("Maximal 10 Bilder auf einmal erlaubt. Nur die ersten 10 Bilder werden hinzugefügt.");
+        filesToProcess = acceptedFiles.slice(0, 10);
+      }
+
+      const newItems = filesToProcess.map(file => ({
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        name: file.name.replace(/\.[^/.]+$/, ""),
+        status: "pending" as const,
+        isSaved: false
+      }));
+      setCardBatchItems(newItems);
+
+      const selectedFile = filesToProcess[0];
       setFile(selectedFile);
       setPreviewUrl(URL.createObjectURL(selectedFile));
       setResultImageUrl(null);
@@ -1353,7 +1395,7 @@ export default function Home() {
       setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
       setElapsedTime(0);
       setActiveStepMessage("");
-      setNewArtworkName("");
+      setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
     }
   }, []);
 
@@ -1362,13 +1404,29 @@ export default function Home() {
     accept: {
       "image/*": [".jpeg", ".jpg", ".png", ".webp"]
     },
-    maxFiles: 1,
-    disabled: isProcessing
+    maxFiles: 10,
+    disabled: isProcessing || isCardBatchProcessing
   });
 
   const onDisplayDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
-      const selectedFile = acceptedFiles[0];
+      let filesToProcess = acceptedFiles;
+      if (acceptedFiles.length > 10) {
+        alert("Maximal 10 Bilder auf einmal erlaubt. Nur die ersten 10 Bilder werden hinzugefügt.");
+        filesToProcess = acceptedFiles.slice(0, 10);
+      }
+
+      const newItems = filesToProcess.map(file => ({
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        name: file.name.replace(/\.[^/.]+$/, ""),
+        status: "pending" as const,
+        isSaved: false
+      }));
+      setDisplayBatchItems(newItems);
+
+      const selectedFile = filesToProcess[0];
       setDisplayFile(selectedFile);
       setDisplayPreviewUrl(URL.createObjectURL(selectedFile));
       setDisplayResultUrl(null);
@@ -1378,7 +1436,7 @@ export default function Home() {
       setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
       setDisplayElapsedTime(0);
       setDisplayActiveStepMessage("");
-      setNewArtworkName("");
+      setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
     }
   }, []);
 
@@ -1391,13 +1449,29 @@ export default function Home() {
     accept: {
       "image/*": [".jpeg", ".jpg", ".png", ".webp"]
     },
-    maxFiles: 1,
-    disabled: isDisplayProcessing
+    maxFiles: 10,
+    disabled: isDisplayProcessing || isDisplayBatchProcessing
   });
 
   const onBoosterDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
-      const selectedFile = acceptedFiles[0];
+      let filesToProcess = acceptedFiles;
+      if (acceptedFiles.length > 10) {
+        alert("Maximal 10 Bilder auf einmal erlaubt. Nur die ersten 10 Bilder werden hinzugefügt.");
+        filesToProcess = acceptedFiles.slice(0, 10);
+      }
+
+      const newItems = filesToProcess.map(file => ({
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        name: file.name.replace(/\.[^/.]+$/, ""),
+        status: "pending" as const,
+        isSaved: false
+      }));
+      setBoosterBatchItems(newItems);
+
+      const selectedFile = filesToProcess[0];
       setBoosterFile(selectedFile);
       setBoosterPreviewUrl(URL.createObjectURL(selectedFile));
       setBoosterResultUrl(null);
@@ -1407,7 +1481,7 @@ export default function Home() {
       setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
       setBoosterElapsedTime(0);
       setBoosterActiveStepMessage("");
-      setNewArtworkName("");
+      setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
     }
   }, []);
 
@@ -1420,8 +1494,8 @@ export default function Home() {
     accept: {
       "image/*": [".jpeg", ".jpg", ".png", ".webp"]
     },
-    maxFiles: 1,
-    disabled: isBoosterProcessing
+    maxFiles: 10,
+    disabled: isBoosterProcessing || isBoosterBatchProcessing
   });
 
   const onLibraryDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -1565,8 +1639,9 @@ export default function Home() {
     );
   };
 
-  const handleProcessImage = async () => {
-    if (!file) return;
+  const handleProcessImage = async (customFile?: File | unknown) => {
+    const fileToProcess = (customFile instanceof File) ? customFile : file;
+    if (!fileToProcess) return;
     
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -1587,7 +1662,7 @@ export default function Home() {
       setActiveStepMessage("Locating artwork bounding box...");
       
       const cropFormData = new FormData();
-      cropFormData.append("cardImage", file);
+      cropFormData.append("cardImage", fileToProcess);
       cropFormData.append("skipCardCrop", String(!shouldCropCard));
 
       const cropResponse = await fetch("/api/pipeline/crop", {
@@ -1673,11 +1748,19 @@ export default function Home() {
       setResultImageUrl(resultImageUrl);
       setActiveStepMessage("Completed!");
 
+      return {
+        success: true,
+        resultImageUrl,
+        trimmedCard: cropTrimmedCard || trimmedCard,
+        backgroundImage,
+        detectedName: detectedName || cardName || ""
+      };
+
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         setErrorMessage("Die Bildgenerierung wurde abgebrochen.");
         setSteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
-        return;
+        throw error;
       }
       const message = getErrorMessage(error);
       console.error("Pipeline error:", error);
@@ -1691,13 +1774,15 @@ export default function Home() {
         }
         return prev;
       });
+      throw error;
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleProcessDisplayImage = async () => {
-    if (!displayFile) return;
+  const handleProcessDisplayImage = async (customFile?: File | unknown) => {
+    const fileToProcess = (customFile instanceof File) ? customFile : displayFile;
+    if (!fileToProcess) return;
     setIsDisplayProcessing(true);
     setDisplayErrorMessage(null);
     setDisplayResultUrl(null);
@@ -1717,7 +1802,7 @@ export default function Home() {
       setDisplayActiveStepMessage("Locating display box boundary...");
       
       const cropFormData = new FormData();
-      cropFormData.append("displayImage", displayFile);
+      cropFormData.append("displayImage", fileToProcess);
 
       const cropResponse = await fetch("/api/pipeline/display-crop", {
         method: "POST",
@@ -1764,7 +1849,14 @@ export default function Home() {
           prev.map(s => s.id === "OUTPAINT" || s.id === "MERGE" ? { ...s, status: "success" } : s)
         );
         setDisplayActiveStepMessage("Completed transparent cutout!");
-        return;
+        
+        return {
+          success: true,
+          resultImageUrl: cutoutImage || null,
+          cutoutImageUrl: cutoutImage || null,
+          backgroundImageUrl: null,
+          detectedName: detectedName || displayName || ""
+        };
       }
 
       console.log("[Display Studio] Starting Outpaint step with mode:", displayBgMode);
@@ -1826,11 +1918,19 @@ export default function Home() {
       setDisplayResultUrl(resultImageUrl || null);
       setDisplayActiveStepMessage("Completed!");
 
+      return {
+        success: true,
+        resultImageUrl: resultImageUrl || cutoutImage || null,
+        cutoutImageUrl: cutoutImage || null,
+        backgroundImageUrl: backgroundImage || null,
+        detectedName: detectedName || displayName || ""
+      };
+
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         setDisplayErrorMessage("Die Bildgenerierung wurde abgebrochen.");
         setDisplaySteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
-        return;
+        throw error;
       }
       const message = getErrorMessage(error);
       console.error("[Display Studio] Display pipeline error:", error);
@@ -1844,13 +1944,15 @@ export default function Home() {
         }
         return prev;
       });
+      throw error;
     } finally {
       setIsDisplayProcessing(false);
     }
   };
 
-  const handleProcessBoosterImage = async () => {
-    if (!boosterFile) return;
+  const handleProcessBoosterImage = async (customFile?: File | unknown) => {
+    const fileToProcess = (customFile instanceof File) ? customFile : boosterFile;
+    if (!fileToProcess) return;
     setIsBoosterProcessing(true);
     setBoosterErrorMessage(null);
     setBoosterResultUrl(null);
@@ -1870,7 +1972,7 @@ export default function Home() {
       setBoosterActiveStepMessage("Locating booster pack boundary...");
       
       const cropFormData = new FormData();
-      cropFormData.append("boosterImage", boosterFile);
+      cropFormData.append("boosterImage", fileToProcess);
 
       const cropResponse = await fetch("/api/pipeline/booster-crop", {
         method: "POST",
@@ -1917,7 +2019,14 @@ export default function Home() {
           prev.map(s => s.id === "OUTPAINT" || s.id === "MERGE" ? { ...s, status: "success" } : s)
         );
         setBoosterActiveStepMessage("Completed transparent cutout!");
-        return;
+        
+        return {
+          success: true,
+          resultImageUrl: cutoutImage || null,
+          cutoutImageUrl: cutoutImage || null,
+          backgroundImageUrl: null,
+          detectedName: detectedName || displayName || ""
+        };
       }
 
       console.log("[Booster Studio] Starting Outpaint step with mode:", boosterBgMode);
@@ -1979,11 +2088,19 @@ export default function Home() {
       setBoosterResultUrl(resultImageUrl || null);
       setBoosterActiveStepMessage("Completed!");
 
+      return {
+        success: true,
+        resultImageUrl: resultImageUrl || cutoutImage || null,
+        cutoutImageUrl: cutoutImage || null,
+        backgroundImageUrl: backgroundImage || null,
+        detectedName: detectedName || displayName || ""
+      };
+
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         setBoosterErrorMessage("Die Bildgenerierung wurde abgebrochen.");
         setBoosterSteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
-        return;
+        throw error;
       }
       const message = getErrorMessage(error);
       console.error("[Booster Studio] Booster pipeline error:", error);
@@ -1997,13 +2114,624 @@ export default function Home() {
         }
         return prev;
       });
+      throw error;
     } finally {
       setIsBoosterProcessing(false);
     }
   };
 
+  const startCardBatchProcessing = async () => {
+    if (cardBatchItems.length === 0 || isCardBatchProcessing) return;
+    setIsCardBatchProcessing(true);
+    cancelBatchRef.current = false;
+
+    setCardBatchItems(prev => prev.map(item => ({ ...item, status: "pending", error: undefined })));
+
+    const items = [...cardBatchItems];
+    for (let i = 0; i < items.length; i++) {
+      if (cancelBatchRef.current) {
+        setCardBatchItems(prev => 
+          prev.map((item, idx) => idx >= i ? { ...item, status: "pending" } : item)
+        );
+        break;
+      }
+
+      const item = items[i];
+      setCardBatchItems(prev => 
+        prev.map(it => it.id === item.id ? { ...it, status: "processing" } : it)
+      );
+
+      setFile(item.file);
+      setPreviewUrl(item.previewUrl);
+      setResultImageUrl(null);
+      setBackgroundImageUrl(null);
+      setErrorMessage(null);
+      setUsedAmbientFallback(false);
+      setUsedCropFallback(false);
+      setTrimmedCard(null);
+      setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
+      setElapsedTime(0);
+      setActiveStepMessage("");
+      setNewArtworkName(item.name);
+
+      try {
+        const result = await handleProcessImage(item.file);
+        if (result && result.success) {
+          setCardBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { 
+              ...it, 
+              status: "completed", 
+              resultImageUrl: result.resultImageUrl || undefined,
+              originalCardUrl: result.trimmedCard || undefined,
+              backgroundImageUrl: result.backgroundImage || undefined,
+              name: result.detectedName || it.name
+            } : it)
+          );
+        } else {
+          throw new Error("Generierung unvollständig.");
+        }
+      } catch (err) {
+        if (cancelBatchRef.current) {
+          setCardBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : it)
+          );
+          break;
+        }
+        const errorMsg = getErrorMessage(err);
+        setCardBatchItems(prev => 
+          prev.map(it => it.id === item.id ? { 
+            ...it, 
+            status: "failed", 
+            error: errorMsg 
+          } : it)
+        );
+      }
+    }
+    setIsCardBatchProcessing(false);
+  };
+
+  const startDisplayBatchProcessing = async () => {
+    if (displayBatchItems.length === 0 || isDisplayBatchProcessing) return;
+    setIsDisplayBatchProcessing(true);
+    cancelBatchRef.current = false;
+
+    setDisplayBatchItems(prev => prev.map(item => ({ ...item, status: "pending", error: undefined })));
+
+    const items = [...displayBatchItems];
+    for (let i = 0; i < items.length; i++) {
+      if (cancelBatchRef.current) {
+        setDisplayBatchItems(prev => 
+          prev.map((item, idx) => idx >= i ? { ...item, status: "pending" } : item)
+        );
+        break;
+      }
+
+      const item = items[i];
+      setDisplayBatchItems(prev => 
+        prev.map(it => it.id === item.id ? { ...it, status: "processing" } : it)
+      );
+
+      setDisplayFile(item.file);
+      setDisplayPreviewUrl(item.previewUrl);
+      setDisplayResultUrl(null);
+      setDisplayCutoutUrl(null);
+      setDisplayBgUrl(null);
+      setDisplayErrorMessage(null);
+      setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
+      setDisplayElapsedTime(0);
+      setDisplayActiveStepMessage("");
+      setNewArtworkName(item.name);
+
+      try {
+        const result = await handleProcessDisplayImage(item.file);
+        if (result && result.success) {
+          setDisplayBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { 
+              ...it, 
+              status: "completed", 
+              resultImageUrl: result.resultImageUrl || undefined,
+              cutoutImageUrl: result.cutoutImageUrl || undefined,
+              backgroundImageUrl: result.backgroundImageUrl || undefined,
+              name: result.detectedName || it.name
+            } : it)
+          );
+        } else {
+          throw new Error("Generierung unvollständig.");
+        }
+      } catch (err) {
+        if (cancelBatchRef.current) {
+          setDisplayBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : it)
+          );
+          break;
+        }
+        const errorMsg = getErrorMessage(err);
+        setDisplayBatchItems(prev => 
+          prev.map(it => it.id === item.id ? { 
+            ...it, 
+            status: "failed", 
+            error: errorMsg 
+          } : it)
+        );
+      }
+    }
+    setIsDisplayBatchProcessing(false);
+  };
+
+  const startBoosterBatchProcessing = async () => {
+    if (boosterBatchItems.length === 0 || isBoosterBatchProcessing) return;
+    setIsBoosterBatchProcessing(true);
+    cancelBatchRef.current = false;
+
+    setBoosterBatchItems(prev => prev.map(item => ({ ...item, status: "pending", error: undefined })));
+
+    const items = [...boosterBatchItems];
+    for (let i = 0; i < items.length; i++) {
+      if (cancelBatchRef.current) {
+        setBoosterBatchItems(prev => 
+          prev.map((item, idx) => idx >= i ? { ...item, status: "pending" } : item)
+        );
+        break;
+      }
+
+      const item = items[i];
+      setBoosterBatchItems(prev => 
+        prev.map(it => it.id === item.id ? { ...it, status: "processing" } : it)
+      );
+
+      setBoosterFile(item.file);
+      setBoosterPreviewUrl(item.previewUrl);
+      setBoosterResultUrl(null);
+      setBoosterCutoutUrl(null);
+      setBoosterBgUrl(null);
+      setBoosterErrorMessage(null);
+      setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+      setBoosterElapsedTime(0);
+      setBoosterActiveStepMessage("");
+      setNewArtworkName(item.name);
+
+      try {
+        const result = await handleProcessBoosterImage(item.file);
+        if (result && result.success) {
+          setBoosterBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { 
+              ...it, 
+              status: "completed", 
+              resultImageUrl: result.resultImageUrl || undefined,
+              cutoutImageUrl: result.cutoutImageUrl || undefined,
+              backgroundImageUrl: result.backgroundImageUrl || undefined,
+              name: result.detectedName || it.name
+            } : it)
+          );
+        } else {
+          throw new Error("Generierung unvollständig.");
+        }
+      } catch (err) {
+        if (cancelBatchRef.current) {
+          setBoosterBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : it)
+          );
+          break;
+        }
+        const errorMsg = getErrorMessage(err);
+        setBoosterBatchItems(prev => 
+          prev.map(it => it.id === item.id ? { 
+            ...it, 
+            status: "failed", 
+            error: errorMsg 
+          } : it)
+        );
+      }
+    }
+    setIsBoosterBatchProcessing(false);
+  };
+
+  const handleSaveBatchItem = async (item: BatchItem, studioType: 'card' | 'display' | 'booster') => {
+    if (!item.resultImageUrl) return;
+
+    const artId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
+    const timestamp = Date.now();
+
+    let imageUrl = item.resultImageUrl;
+    let originalCardUrl = item.previewUrl;
+    let backgroundUrl = item.backgroundImageUrl || undefined;
+    let cardOnlyUrl = studioType === 'card' ? (item.originalCardUrl || undefined) :
+                      studioType === 'display' ? (item.cutoutImageUrl || undefined) :
+                      (item.cutoutImageUrl || undefined);
+
+    setIsSaving(true);
+    if (!isLocalMode && currentSpace) {
+      setIsLoginLoading(true);
+      try {
+        if (imageUrl.startsWith("data:image/")) {
+          imageUrl = await uploadBase64ToSupabase(imageUrl, `spaces/${currentSpace.id}/${artId}/final.png`);
+        }
+        if (originalCardUrl && originalCardUrl.startsWith("blob:")) {
+          const response = await fetch(originalCardUrl);
+          const blob = await response.blob();
+          const filename = studioType === "card" ? "card.png" : 
+                           studioType === "display" ? "display_original.png" : "booster_original.png";
+          const path = `spaces/${currentSpace.id}/${artId}/${filename}`;
+          const { error: uploadError } = await supabase.storage
+            .from("tcg-artworks")
+            .upload(path, blob, { contentType: blob.type, upsert: true });
+          if (!uploadError) {
+            const { data: { publicUrl } } = supabase.storage
+              .from("tcg-artworks")
+              .getPublicUrl(path);
+            originalCardUrl = publicUrl;
+          }
+        }
+        if (backgroundUrl && backgroundUrl.startsWith("data:image/")) {
+          backgroundUrl = await uploadBase64ToSupabase(backgroundUrl, `spaces/${currentSpace.id}/${artId}/bg.png`);
+        }
+        if (cardOnlyUrl && cardOnlyUrl.startsWith("data:image/")) {
+          const filename = studioType === "card" ? "card_only.png" : 
+                           studioType === "display" ? "display_cutout.png" : "booster_cutout.png";
+          cardOnlyUrl = await uploadBase64ToSupabase(cardOnlyUrl, `spaces/${currentSpace.id}/${artId}/${filename}`);
+        }
+
+        if (originalCardUrl && cardOnlyUrl) {
+          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}${
+            studioType === "display" ? "&is_display=true" : 
+            studioType === "booster" ? "&is_booster=true" : ""
+          }`;
+        }
+
+        const { error } = await supabase
+          .from("artworks")
+          .insert({
+            id: artId,
+            space_id: currentSpace.id,
+            name: item.name.trim(),
+            image_url: imageUrl,
+            original_card_url: originalCardUrl || null,
+            background_url: backgroundUrl || null,
+            aspect_ratio: studioType === "card" ? aspectRatio :
+                          studioType === "display" ? displayAspectRatio :
+                          boosterAspectRatio,
+            timestamp: timestamp
+          });
+
+        if (error) throw error;
+      } catch (err) {
+        const message = getErrorMessage(err);
+        alert("Fehler beim Speichern in der Datenbank: " + message);
+        setIsLoginLoading(false);
+        setIsSaving(false);
+        return;
+      } finally {
+        setIsLoginLoading(false);
+      }
+    } else {
+      const localArtwork: SavedArtwork = {
+        id: artId,
+        name: item.name.trim(),
+        imageUrl: imageUrl,
+        originalCardUrl: originalCardUrl,
+        backgroundUrl: backgroundUrl,
+        cardOnlyUrl: cardOnlyUrl,
+        aspectRatio: studioType === "card" ? aspectRatio :
+                     studioType === "display" ? displayAspectRatio :
+                     boosterAspectRatio,
+        timestamp: timestamp,
+        isCase: false,
+        isDisplay: studioType === "display",
+        isBooster: studioType === "booster"
+      };
+
+      try {
+        await saveArtwork(localArtwork);
+      } catch (err) {
+        const message = getErrorMessage(err);
+        alert("Fehler beim lokalen Speichern: " + message);
+        setIsSaving(false);
+        return;
+      }
+    }
+
+    setIsSaving(false);
+    
+    if (studioType === "card") {
+      setCardBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, isSaved: true } : it));
+    } else if (studioType === "display") {
+      setDisplayBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, isSaved: true } : it));
+    } else if (studioType === "booster") {
+      setBoosterBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, isSaved: true } : it));
+    }
+
+    try {
+      const artworks = await getSavedArtworks();
+      setSavedArtworks(artworks);
+    } catch (e) {
+      console.error("Failed to load artworks:", e);
+    }
+  };
+
+  const handleSaveAllBatchItems = async (studioType: 'card' | 'display' | 'booster') => {
+    const items = studioType === "card" ? cardBatchItems :
+                  studioType === "display" ? displayBatchItems :
+                  boosterBatchItems;
+    
+    const completedItems = items.filter(it => it.status === "completed" && !it.isSaved);
+    if (completedItems.length === 0) return;
+
+    for (const item of completedItems) {
+      await handleSaveBatchItem(item, studioType);
+    }
+  };
+
+  const downloadAllBatchItems = async (studioType: 'card' | 'display' | 'booster') => {
+    const items = studioType === "card" ? cardBatchItems :
+                  studioType === "display" ? displayBatchItems :
+                  boosterBatchItems;
+    
+    const completedItems = items.filter(it => it.status === "completed" && it.resultImageUrl);
+    if (completedItems.length === 0) return;
+
+    if (completedItems.length === 1) {
+      const item = completedItems[0];
+      if (item.resultImageUrl) {
+        triggerDownload(item.resultImageUrl, `TCG_${item.name}.png`);
+      }
+      return;
+    }
+
+    const filesToDownload = completedItems.map((item, idx) => ({
+      url: item.resultImageUrl!,
+      filename: `TCG_${item.name || `bild_${idx + 1}`}.png`
+    }));
+
+    await triggerZipDownload(filesToDownload, `TCG_Batch_Export_${Date.now()}.zip`);
+  };
+
+  const renderBatchUI = (studioType: 'card' | 'display' | 'booster') => {
+    const items = studioType === 'card' ? cardBatchItems :
+                  studioType === 'display' ? displayBatchItems :
+                  boosterBatchItems;
+    
+    const isProcessingBatch = studioType === 'card' ? isCardBatchProcessing :
+                              studioType === 'display' ? isDisplayBatchProcessing :
+                              isBoosterBatchProcessing;
+
+    const startProcessing = studioType === 'card' ? startCardBatchProcessing :
+                            studioType === 'display' ? startDisplayBatchProcessing :
+                            startBoosterBatchProcessing;
+
+    const resetBatch = () => {
+      if (studioType === 'card') {
+        setCardBatchItems([]);
+        setFile(null);
+        setPreviewUrl(null);
+        setResultImageUrl(null);
+        setErrorMessage(null);
+      } else if (studioType === 'display') {
+        setDisplayBatchItems([]);
+        setDisplayFile(null);
+        setDisplayPreviewUrl(null);
+        setDisplayResultUrl(null);
+        setDisplayErrorMessage(null);
+      } else {
+        setBoosterBatchItems([]);
+        setBoosterFile(null);
+        setBoosterPreviewUrl(null);
+        setBoosterResultUrl(null);
+        setBoosterErrorMessage(null);
+      }
+    };
+
+    if (items.length === 0) return null;
+
+    const completedCount = items.filter(it => it.status === "completed").length;
+    const failedCount = items.filter(it => it.status === "failed").length;
+    const processingCount = items.filter(it => it.status === "processing").length;
+    const pendingCount = items.filter(it => it.status === "pending").length;
+
+    return (
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl mt-4 w-full animate-in fade-in duration-300">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-zinc-800 pb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Package className="w-5 h-5 text-purple-400" />
+              Stapelverarbeitung ({items.length} {items.length === 1 ? "Bild" : "Bilder"})
+            </h2>
+            <p className="text-xs text-zinc-500 mt-1">
+              Verarbeite bis zu 10 Bilder nacheinander. Status: {completedCount} abgeschlossen, {failedCount} fehlgeschlagen, {pendingCount} wartend.
+            </p>
+          </div>
+          
+          <div className="flex flex-wrap gap-2">
+            {pendingCount > 0 && !isProcessingBatch && (
+              <button
+                type="button"
+                onClick={startProcessing}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(147,51,234,0.3)] cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4" />
+                Stapelverarbeitung starten
+              </button>
+            )}
+            
+            {isProcessingBatch && (
+              <button
+                type="button"
+                onClick={() => {
+                  cancelBatchRef.current = true;
+                  if (studioType === 'card') handleCancelProcessing();
+                  else if (studioType === 'display') handleCancelDisplayProcessing();
+                  else handleCancelBoosterProcessing();
+                }}
+                className="px-4 py-2 rounded-xl border border-red-500/30 hover:border-red-500/50 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                Verarbeitung abbrechen
+              </button>
+            )}
+
+            {completedCount > 0 && !isProcessingBatch && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => downloadAllBatchItems(studioType)}
+                  className="px-4 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-purple-400" />
+                  Alle herunterladen (ZIP)
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => handleSaveAllBatchItems(studioType)}
+                  className="px-4 py-2 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-955/10 text-purple-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                >
+                  <Bookmark className="w-4 h-4 text-purple-400" />
+                  Alle in Bibliothek speichern
+                </button>
+              </>
+            )}
+
+            {!isProcessingBatch && (
+              <button
+                type="button"
+                onClick={resetBatch}
+                className="px-4 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/20 text-zinc-400 hover:text-zinc-200 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Liste zurücksetzen
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-1">
+          {items.map((item, idx) => {
+            const isPending = item.status === "pending";
+            const isProcessingItem = item.status === "processing";
+            const isCompleted = item.status === "completed";
+            const isFailed = item.status === "failed";
+
+            return (
+              <div 
+                key={item.id}
+                className={`p-3 rounded-xl border flex gap-4 items-center bg-zinc-955/20 transition-all ${
+                  isProcessingItem 
+                    ? "border-purple-500 bg-purple-500/5 shadow-[0_0_15px_rgba(168,85,247,0.1)]" 
+                    : isCompleted 
+                    ? "border-emerald-500/20 bg-emerald-500/5" 
+                    : isFailed 
+                    ? "border-red-500/20 bg-red-500/5" 
+                    : "border-zinc-800"
+                }`}
+              >
+                <div className="w-14 h-20 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0 relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={item.previewUrl}
+                    alt={item.name}
+                    className="w-full h-full object-cover"
+                  />
+                  {isProcessingItem && (
+                    <div className="absolute inset-0 bg-purple-955/40 flex items-center justify-center backdrop-blur-[1px]">
+                      <RefreshCw className="w-5 h-5 text-purple-400 animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-zinc-500 font-mono">#{idx + 1}</span>
+                    <h3 className="text-xs font-semibold text-zinc-200 truncate" title={item.name}>
+                      {item.name}
+                    </h3>
+                  </div>
+                  
+                  <div className="mt-1 flex items-center gap-1.5">
+                    {isPending && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-zinc-900 border border-zinc-805 text-zinc-400">
+                        Ausstehend
+                      </span>
+                    )}
+                    {isProcessingItem && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-purple-955/50 border border-purple-500/30 text-purple-300 animate-pulse">
+                        Verarbeite...
+                      </span>
+                    )}
+                    {isCompleted && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-955/50 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5" />
+                        Erfolgreich
+                      </span>
+                    )}
+                    {isFailed && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-955/50 border border-red-500/30 text-red-400 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        Fehlgeschlagen
+                      </span>
+                    )}
+                  </div>
+                  
+                  {isFailed && item.error && (
+                    <p className="text-[10px] text-red-400 mt-1 truncate max-w-[200px]" title={item.error}>
+                      {item.error}
+                    </p>
+                  )}
+                </div>
+
+                {isCompleted && item.resultImageUrl && (
+                  <div className="flex items-center gap-2">
+                    <div 
+                      className="w-10 h-14 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0 cursor-pointer hover:border-purple-500 transition-colors"
+                      onClick={() => setLightboxImage({ url: item.resultImageUrl!, title: item.name })}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.resultImageUrl}
+                        alt="Result"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => triggerDownload(item.resultImageUrl!, `TCG_${item.name}.png`)}
+                        className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                        title="Herunterladen"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                      
+                      <button
+                        type="button"
+                        disabled={item.isSaved || isSaving}
+                        onClick={() => handleSaveBatchItem(item, studioType)}
+                        className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                          item.isSaved 
+                            ? "border-emerald-500/30 bg-emerald-955/20 text-emerald-400" 
+                            : "border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-300 hover:text-white"
+                        }`}
+                        title={item.isSaved ? "Gespeichert" : "In Bibliothek speichern"}
+                      >
+                        {item.isSaved ? (
+                          <Check className="w-3.5 h-3.5" />
+                        ) : (
+                          <Bookmark className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const handleReset = () => {
     setFile(null);
+    setCardBatchItems([]);
     setPreviewUrl(null);
     setResultImageUrl(null);
     setBackgroundImageUrl(null);
@@ -2029,6 +2757,7 @@ export default function Home() {
 
     // Reset Display Studio states
     setDisplayFile(null);
+    setDisplayBatchItems([]);
     setDisplayPreviewUrl(null);
     setDisplayResultUrl(null);
     setDisplayCutoutUrl(null);
@@ -2041,6 +2770,7 @@ export default function Home() {
 
     // Reset Booster Studio states
     setBoosterFile(null);
+    setBoosterBatchItems([]);
     setBoosterPreviewUrl(null);
     setBoosterResultUrl(null);
     setBoosterCutoutUrl(null);
@@ -2321,7 +3051,8 @@ export default function Home() {
             </div>
 
             {activeStudioSubTab === "card" ? (
-              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              <div className="flex flex-col gap-6 w-full animate-in fade-in duration-300">
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
           {/* Left panel - Controls & Source */}
           <section className="lg:col-span-7 flex flex-col gap-6">
@@ -2447,7 +3178,7 @@ export default function Home() {
             </div>
 
             {/* Run Button */}
-            {file && !resultImageUrl && !errorMessage && (
+            {file && !resultImageUrl && !errorMessage && cardBatchItems.length <= 1 && (
               <button
                 type="button"
                 disabled={isProcessing}
@@ -2780,9 +3511,12 @@ export default function Home() {
 
           </section>
 
-        </div>
+                </div>
+                {renderBatchUI("card")}
+              </div>
             ) : activeStudioSubTab === "display" ? (
-              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              <div className="flex flex-col gap-6 w-full animate-in fade-in duration-300">
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left panel - Controls & Source */}
             <section className="lg:col-span-7 flex flex-col gap-6">
               
@@ -2974,7 +3708,7 @@ export default function Home() {
                     )}
                   </div>
 
-                  {displayFile && (
+                  {displayFile && displayBatchItems.length <= 1 && (
                     <div className="mt-4 flex gap-2">
                       <button
                         type="button"
@@ -3261,9 +3995,12 @@ export default function Home() {
                 </div>
               ) : null}
             </section>
-          </div>
+                </div>
+                {renderBatchUI("display")}
+              </div>
             ) : (
-              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in fade-in duration-300">
+              <div className="flex flex-col gap-6 w-full animate-in fade-in duration-300">
+                <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left panel - Controls & Source */}
                 <section className="lg:col-span-7 flex flex-col gap-6">
                   {/* Aspect Ratio & Control Card */}
@@ -3513,7 +4250,7 @@ export default function Home() {
                       )}
                     </div>
 
-                    {boosterFile && !boosterResultUrl && (
+                    {boosterFile && !boosterResultUrl && boosterBatchItems.length <= 1 && (
                       <div className="mt-4">
                         <button
                           type="button"
@@ -3616,6 +4353,8 @@ export default function Home() {
                     </div>
                   ) : null}
                 </section>
+                </div>
+                {renderBatchUI("booster")}
               </div>
             )}
           </>
