@@ -356,6 +356,136 @@ export default function Home() {
 
   const cancelBatchRef = useRef<boolean>(false);
 
+  const appendCardBatchFiles = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      setCardBatchItems(prev => {
+        const currentCount = prev.length;
+        if (currentCount >= 10) {
+          alert("Maximal 10 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+          return prev;
+        }
+
+        let filesToAdd = acceptedFiles;
+        if (currentCount + acceptedFiles.length > 10) {
+          alert(`Es können nur noch ${10 - currentCount} Bilder hinzugefügt werden (Maximal 10 insgesamt).`);
+          filesToAdd = acceptedFiles.slice(0, 10 - currentCount);
+        }
+
+        const newItems = filesToAdd.map(file => ({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          file,
+          previewUrl: URL.createObjectURL(file),
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          status: "pending" as const,
+          isSaved: false
+        }));
+
+        if (prev.length === 0) {
+          const selectedFile = filesToAdd[0];
+          setFile(selectedFile);
+          setPreviewUrl(URL.createObjectURL(selectedFile));
+          setResultImageUrl(null);
+          setErrorMessage(null);
+          setUsedAmbientFallback(false);
+          setUsedCropFallback(false);
+          setTrimmedCard(null);
+          setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
+          setElapsedTime(0);
+          setActiveStepMessage("");
+          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+        }
+
+        return [...prev, ...newItems];
+      });
+    }
+  }, []);
+
+  const appendDisplayBatchFiles = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      setDisplayBatchItems(prev => {
+        const currentCount = prev.length;
+        if (currentCount >= 10) {
+          alert("Maximal 10 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+          return prev;
+        }
+
+        let filesToAdd = acceptedFiles;
+        if (currentCount + acceptedFiles.length > 10) {
+          alert(`Es können nur noch ${10 - currentCount} Bilder hinzugefügt werden (Maximal 10 insgesamt).`);
+          filesToAdd = acceptedFiles.slice(0, 10 - currentCount);
+        }
+
+        const newItems = filesToAdd.map(file => ({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          file,
+          previewUrl: URL.createObjectURL(file),
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          status: "pending" as const,
+          isSaved: false
+        }));
+
+        if (prev.length === 0) {
+          const selectedFile = filesToAdd[0];
+          setDisplayFile(selectedFile);
+          setDisplayPreviewUrl(URL.createObjectURL(selectedFile));
+          setDisplayResultUrl(null);
+          setDisplayCutoutUrl(null);
+          setDisplayBgUrl(null);
+          setDisplayErrorMessage(null);
+          setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
+          setDisplayElapsedTime(0);
+          setDisplayActiveStepMessage("");
+          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+        }
+
+        return [...prev, ...newItems];
+      });
+    }
+  }, []);
+
+  const appendBoosterBatchFiles = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      setBoosterBatchItems(prev => {
+        const currentCount = prev.length;
+        if (currentCount >= 10) {
+          alert("Maximal 10 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+          return prev;
+        }
+
+        let filesToAdd = acceptedFiles;
+        if (currentCount + acceptedFiles.length > 10) {
+          alert(`Es können nur noch ${10 - currentCount} Bilder hinzugefügt werden (Maximal 10 insgesamt).`);
+          filesToAdd = acceptedFiles.slice(0, 10 - currentCount);
+        }
+
+        const newItems = filesToAdd.map(file => ({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          file,
+          previewUrl: URL.createObjectURL(file),
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          status: "pending" as const,
+          isSaved: false
+        }));
+
+        if (prev.length === 0) {
+          const selectedFile = filesToAdd[0];
+          setBoosterFile(selectedFile);
+          setBoosterPreviewUrl(URL.createObjectURL(selectedFile));
+          setBoosterResultUrl(null);
+          setBoosterCutoutUrl(null);
+          setBoosterBgUrl(null);
+          setBoosterErrorMessage(null);
+          setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+          setBoosterElapsedTime(0);
+          setBoosterActiveStepMessage("");
+          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+        }
+
+        return [...prev, ...newItems];
+      });
+    }
+  }, []);
+
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -1366,38 +1496,7 @@ export default function Home() {
     };
   }, [isBoosterProcessing]);
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    if (acceptedFiles && acceptedFiles.length > 0) {
-      let filesToProcess = acceptedFiles;
-      if (acceptedFiles.length > 10) {
-        alert("Maximal 10 Bilder auf einmal erlaubt. Nur die ersten 10 Bilder werden hinzugefügt.");
-        filesToProcess = acceptedFiles.slice(0, 10);
-      }
-
-      const newItems = filesToProcess.map(file => ({
-        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-        file,
-        previewUrl: URL.createObjectURL(file),
-        name: file.name.replace(/\.[^/.]+$/, ""),
-        status: "pending" as const,
-        isSaved: false
-      }));
-      setCardBatchItems(newItems);
-
-      const selectedFile = filesToProcess[0];
-      setFile(selectedFile);
-      setPreviewUrl(URL.createObjectURL(selectedFile));
-      setResultImageUrl(null);
-      setErrorMessage(null);
-      setUsedAmbientFallback(false);
-      setUsedCropFallback(false);
-      setTrimmedCard(null);
-      setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
-      setElapsedTime(0);
-      setActiveStepMessage("");
-      setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-    }
-  }, []);
+  const onDrop = appendCardBatchFiles;
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -1408,37 +1507,7 @@ export default function Home() {
     disabled: isProcessing || isCardBatchProcessing
   });
 
-  const onDisplayDrop = useCallback((acceptedFiles: File[]) => {
-    if (acceptedFiles && acceptedFiles.length > 0) {
-      let filesToProcess = acceptedFiles;
-      if (acceptedFiles.length > 10) {
-        alert("Maximal 10 Bilder auf einmal erlaubt. Nur die ersten 10 Bilder werden hinzugefügt.");
-        filesToProcess = acceptedFiles.slice(0, 10);
-      }
-
-      const newItems = filesToProcess.map(file => ({
-        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-        file,
-        previewUrl: URL.createObjectURL(file),
-        name: file.name.replace(/\.[^/.]+$/, ""),
-        status: "pending" as const,
-        isSaved: false
-      }));
-      setDisplayBatchItems(newItems);
-
-      const selectedFile = filesToProcess[0];
-      setDisplayFile(selectedFile);
-      setDisplayPreviewUrl(URL.createObjectURL(selectedFile));
-      setDisplayResultUrl(null);
-      setDisplayCutoutUrl(null);
-      setDisplayBgUrl(null);
-      setDisplayErrorMessage(null);
-      setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
-      setDisplayElapsedTime(0);
-      setDisplayActiveStepMessage("");
-      setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-    }
-  }, []);
+  const onDisplayDrop = appendDisplayBatchFiles;
 
   const {
     getRootProps: getDisplayRootProps,
@@ -1453,37 +1522,7 @@ export default function Home() {
     disabled: isDisplayProcessing || isDisplayBatchProcessing
   });
 
-  const onBoosterDrop = useCallback((acceptedFiles: File[]) => {
-    if (acceptedFiles && acceptedFiles.length > 0) {
-      let filesToProcess = acceptedFiles;
-      if (acceptedFiles.length > 10) {
-        alert("Maximal 10 Bilder auf einmal erlaubt. Nur die ersten 10 Bilder werden hinzugefügt.");
-        filesToProcess = acceptedFiles.slice(0, 10);
-      }
-
-      const newItems = filesToProcess.map(file => ({
-        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-        file,
-        previewUrl: URL.createObjectURL(file),
-        name: file.name.replace(/\.[^/.]+$/, ""),
-        status: "pending" as const,
-        isSaved: false
-      }));
-      setBoosterBatchItems(newItems);
-
-      const selectedFile = filesToProcess[0];
-      setBoosterFile(selectedFile);
-      setBoosterPreviewUrl(URL.createObjectURL(selectedFile));
-      setBoosterResultUrl(null);
-      setBoosterCutoutUrl(null);
-      setBoosterBgUrl(null);
-      setBoosterErrorMessage(null);
-      setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
-      setBoosterElapsedTime(0);
-      setBoosterActiveStepMessage("");
-      setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-    }
-  }, []);
+  const onBoosterDrop = appendBoosterBatchFiles;
 
   const {
     getRootProps: getBoosterRootProps,
@@ -1554,6 +1593,48 @@ export default function Home() {
       "image/*": [".jpeg", ".jpg", ".png", ".webp"]
     },
     maxFiles: 1,
+    noClick: true
+  });
+
+  const { 
+    getRootProps: getCardBatchDropProps, 
+    getInputProps: getCardBatchInputProps, 
+    isDragActive: isCardBatchDragActive 
+  } = useDropzone({
+    onDrop: appendCardBatchFiles,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 10,
+    disabled: isProcessing || isCardBatchProcessing,
+    noClick: true
+  });
+
+  const { 
+    getRootProps: getDisplayBatchDropProps, 
+    getInputProps: getDisplayBatchInputProps, 
+    isDragActive: isDisplayBatchDragActive 
+  } = useDropzone({
+    onDrop: appendDisplayBatchFiles,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 10,
+    disabled: isDisplayProcessing || isDisplayBatchProcessing,
+    noClick: true
+  });
+
+  const { 
+    getRootProps: getBoosterBatchDropProps, 
+    getInputProps: getBoosterBatchInputProps, 
+    isDragActive: isBoosterBatchDragActive 
+  } = useDropzone({
+    onDrop: appendBoosterBatchFiles,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 10,
+    disabled: isBoosterProcessing || isBoosterBatchProcessing,
     noClick: true
   });
 
@@ -2120,6 +2201,8 @@ export default function Home() {
     }
   };
 
+
+
   const startCardBatchProcessing = async () => {
     if (cardBatchItems.length === 0 || isCardBatchProcessing) return;
     setIsCardBatchProcessing(true);
@@ -2527,8 +2610,34 @@ export default function Home() {
     const processingCount = items.filter(it => it.status === "processing").length;
     const pendingCount = items.filter(it => it.status === "pending").length;
 
+    const batchDropProps = studioType === 'card' ? getCardBatchDropProps :
+                          studioType === 'display' ? getDisplayBatchDropProps :
+                          getBoosterBatchDropProps;
+    
+    const batchInputProps = studioType === 'card' ? getCardBatchInputProps :
+                           studioType === 'display' ? getDisplayBatchInputProps :
+                           getBoosterBatchInputProps;
+    
+    const isBatchDragActive = studioType === 'card' ? isCardBatchDragActive :
+                             studioType === 'display' ? isDisplayBatchDragActive :
+                             isBoosterBatchDragActive;
+
     return (
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl mt-4 w-full animate-in fade-in duration-300">
+      <div 
+        {...batchDropProps()}
+        className={`rounded-2xl border backdrop-blur-xl p-6 shadow-2xl mt-4 w-full animate-in fade-in duration-300 relative transition-all duration-300 ${
+          isBatchDragActive 
+            ? "border-purple-500 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.2)]" 
+            : "border-zinc-800 bg-zinc-900/40"
+        }`}
+      >
+        <input {...batchInputProps()} />
+        {isBatchDragActive && (
+          <div className="absolute inset-0 bg-zinc-950/80 rounded-2xl flex flex-col items-center justify-center z-10 border border-purple-500/50 backdrop-blur-[2px]">
+            <Upload className="w-8 h-8 text-purple-400 animate-bounce mb-2" />
+            <p className="text-sm font-semibold text-purple-300">Bilder hierher ziehen, um sie dem Stapel hinzuzufügen...</p>
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-zinc-800 pb-4">
           <div>
             <h2 className="text-lg font-semibold text-white flex items-center gap-2">
