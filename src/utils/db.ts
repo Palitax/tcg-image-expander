@@ -13,6 +13,7 @@ export interface SavedArtwork {
   timestamp: number;
   isCase?: boolean;
   isDisplay?: boolean;
+  isBooster?: boolean;
 }
 
 export function initDB(): Promise<IDBDatabase> {

@@ -21,7 +21,9 @@ import {
   Pencil,
   X,
   ChevronDown,
-  Package
+  Package,
+  Activity,
+  Check
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -61,6 +63,13 @@ const INITIAL_STEPS: ProgressStep[] = [
 
 const DISPLAY_STEPS: ProgressStep[] = [
   { id: "LAYOUT", label: "Display-Erkennung", description: "Gemini verfolgt die Begrenzung des Display-Rahmens", status: "idle" },
+  { id: "CROP", label: "Ausschnitt & Zuschnitt", description: "Sharp extrahiert und schneidet den transparenten Ausschnitt zu", status: "idle" },
+  { id: "OUTPAINT", label: "Hintergrund-Generierung", description: "Imagen 3 generiert eine passende thematische Szene", status: "idle" },
+  { id: "MERGE", label: "3D-Komposition", description: "Komposition des Ausschnitts mit weichem Schattenwurf auf den Hintergrund", status: "idle" }
+];
+
+const BOOSTER_STEPS: ProgressStep[] = [
+  { id: "LAYOUT", label: "Booster-Erkennung", description: "Gemini verfolgt die Begrenzung der Booster-Folie", status: "idle" },
   { id: "CROP", label: "Ausschnitt & Zuschnitt", description: "Sharp extrahiert und schneidet den transparenten Ausschnitt zu", status: "idle" },
   { id: "OUTPAINT", label: "Hintergrund-Generierung", description: "Imagen 3 generiert eine passende thematische Szene", status: "idle" },
   { id: "MERGE", label: "3D-Komposition", description: "Komposition des Ausschnitts mit weichem Schattenwurf auf den Hintergrund", status: "idle" }
@@ -335,16 +344,17 @@ export default function Home() {
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("outpaint");
   const [shouldCropCard, setShouldCropCard] = useState<boolean>(true);
 
-  const [activeTab, setActiveTab] = useState<"generate" | "case" | "library" | "display">("generate");
+  const [activeTab, setActiveTab] = useState<"generate" | "case" | "library">("generate");
+  const [activeStudioSubTab, setActiveStudioSubTab] = useState<"card" | "display" | "booster">("card");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload" | "display">("generate");
+  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload" | "display" | "booster">("generate");
   const [newArtworkName, setNewArtworkName] = useState<string>("");
   const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
   const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [libraryCategory, setLibraryCategory] = useState<"all" | "cards" | "displays">("all");
+  const [libraryCategory, setLibraryCategory] = useState<"all" | "cards" | "displays" | "boosters">("all");
   const [libraryCardSubCategory, setLibraryCardSubCategory] = useState<"all" | "case" | "noCase">("all");
 
   // Card renaming states
@@ -398,6 +408,21 @@ export default function Home() {
   const [displayElapsedTime, setDisplayElapsedTime] = useState<number>(0);
   const [displayActiveStepMessage, setDisplayActiveStepMessage] = useState<string>("");
   const [isDisplayDownloadOpen, setIsDisplayDownloadOpen] = useState<boolean>(false);
+
+  // Booster Studio states
+  const [boosterFile, setBoosterFile] = useState<File | null>(null);
+  const [boosterPreviewUrl, setBoosterPreviewUrl] = useState<string | null>(null);
+  const [boosterResultUrl, setBoosterResultUrl] = useState<string | null>(null);
+  const [boosterCutoutUrl, setBoosterCutoutUrl] = useState<string | null>(null);
+  const [boosterBgUrl, setBoosterBgUrl] = useState<string | null>(null);
+  const [isBoosterProcessing, setIsBoosterProcessing] = useState<boolean>(false);
+  const [boosterErrorMessage, setBoosterErrorMessage] = useState<string | null>(null);
+  const [boosterAspectRatio, setBoosterAspectRatio] = useState<string>("3:4");
+  const [boosterBgMode, setBoosterBgMode] = useState<"outpaint" | "ambient" | "transparent">("transparent");
+  const [boosterSteps, setBoosterSteps] = useState<ProgressStep[]>(BOOSTER_STEPS);
+  const [boosterElapsedTime, setBoosterElapsedTime] = useState<number>(0);
+  const [boosterActiveStepMessage, setBoosterActiveStepMessage] = useState<string>("");
+  const [isBoosterDownloadOpen, setIsBoosterDownloadOpen] = useState<boolean>(false);
 
   // Watermark logo states
   const [watermarkFile, setWatermarkFile] = useState<File | null>(null);
@@ -535,6 +560,7 @@ export default function Home() {
             let originalCardUrl = dbOriginalCardUrl;
             let cardOnlyUrl: string | undefined = undefined;
             let isDisplay = false;
+            let isBooster = false;
 
             if (dbOriginalCardUrl && dbOriginalCardUrl.includes("?card_only=")) {
               const parts = dbOriginalCardUrl.split("?card_only=");
@@ -543,6 +569,9 @@ export default function Home() {
               if (queryPart.includes("&is_display=true")) {
                 isDisplay = true;
                 cardOnlyUrl = decodeURIComponent(queryPart.replace("&is_display=true", ""));
+              } else if (queryPart.includes("&is_booster=true")) {
+                isBooster = true;
+                cardOnlyUrl = decodeURIComponent(queryPart.replace("&is_booster=true", ""));
               } else {
                 cardOnlyUrl = decodeURIComponent(queryPart);
               }
@@ -567,7 +596,8 @@ export default function Home() {
               aspectRatio: row.aspect_ratio,
               timestamp: Number(row.timestamp),
               isCase: isCase,
-              isDisplay: isDisplay
+              isDisplay: isDisplay,
+              isBooster: isBooster
             };
           });
           setSavedArtworks(formatted);
@@ -647,6 +677,7 @@ export default function Home() {
           let originalCardUrl = dbOriginalCardUrl;
           let cardOnlyUrl: string | undefined = undefined;
           let isDisplay = false;
+          let isBooster = false;
 
           if (dbOriginalCardUrl && dbOriginalCardUrl.includes("?card_only=")) {
             const parts = dbOriginalCardUrl.split("?card_only=");
@@ -655,6 +686,9 @@ export default function Home() {
             if (queryPart.includes("&is_display=true")) {
               isDisplay = true;
               cardOnlyUrl = decodeURIComponent(queryPart.replace("&is_display=true", ""));
+            } else if (queryPart.includes("&is_booster=true")) {
+              isBooster = true;
+              cardOnlyUrl = decodeURIComponent(queryPart.replace("&is_booster=true", ""));
             } else {
               cardOnlyUrl = decodeURIComponent(queryPart);
             }
@@ -679,7 +713,8 @@ export default function Home() {
             aspectRatio: row.aspect_ratio,
             timestamp: Number(row.timestamp),
             isCase: isCase,
-            isDisplay: isDisplay
+            isDisplay: isDisplay,
+            isBooster: isBooster
           };
         });
         setSavedArtworks(formatted);
@@ -878,6 +913,7 @@ export default function Home() {
       saveTarget === "case" ? caseResultUrl : 
       saveTarget === "upload" ? libraryUploadDataUrl : 
       saveTarget === "display" ? displayResultUrl :
+      saveTarget === "booster" ? boosterResultUrl :
       resultImageUrl;
 
     if (!targetUrl || !newArtworkName.trim()) return;
@@ -889,11 +925,13 @@ export default function Home() {
       saveTarget === "generate" ? (trimmedCard || undefined) : 
       saveTarget === "case" ? (caseWithCardUrl || caseCardImage || undefined) : 
       saveTarget === "display" ? (displayPreviewUrl || undefined) :
+      saveTarget === "booster" ? (boosterPreviewUrl || undefined) :
       undefined;
     let backgroundUrl = 
       saveTarget === "generate" ? (backgroundImageUrl || undefined) : 
       saveTarget === "case" ? (caseBgResultUrl || caseBgImage || undefined) : 
       saveTarget === "display" ? (displayBgUrl || undefined) :
+      saveTarget === "booster" ? (boosterBgUrl || undefined) :
       undefined;
 
     const timestamp = Date.now();
@@ -910,6 +948,17 @@ export default function Home() {
           const { error: uploadError } = await supabase.storage
             .from("tcg-artworks")
             .upload(path, displayFile, { contentType: displayFile.type, upsert: true });
+          if (!uploadError) {
+            const { data: { publicUrl } } = supabase.storage
+              .from("tcg-artworks")
+              .getPublicUrl(path);
+            originalCardUrl = publicUrl;
+          }
+        } else if (saveTarget === "booster" && boosterFile) {
+          const path = `spaces/${currentSpace.id}/${artId}/booster_original.png`;
+          const { error: uploadError } = await supabase.storage
+            .from("tcg-artworks")
+            .upload(path, boosterFile, { contentType: boosterFile.type, upsert: true });
           if (!uploadError) {
             const { data: { publicUrl } } = supabase.storage
               .from("tcg-artworks")
@@ -953,10 +1002,17 @@ export default function Home() {
           if (displayCutoutUrl.startsWith("data:image/")) {
             cardOnlyUrl = await uploadBase64ToSupabase(displayCutoutUrl, `spaces/${currentSpace.id}/${artId}/display_cutout.png`);
           }
+        } else if (saveTarget === "booster" && boosterCutoutUrl) {
+          if (boosterCutoutUrl.startsWith("data:image/")) {
+            cardOnlyUrl = await uploadBase64ToSupabase(boosterCutoutUrl, `spaces/${currentSpace.id}/${artId}/booster_cutout.png`);
+          }
         }
 
-        if ((saveTarget === "case" || saveTarget === "display") && originalCardUrl && cardOnlyUrl) {
-          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}${saveTarget === "display" ? "&is_display=true" : ""}`;
+        if ((saveTarget === "case" || saveTarget === "display" || saveTarget === "booster") && originalCardUrl && cardOnlyUrl) {
+          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}${
+            saveTarget === "display" ? "&is_display=true" : 
+            saveTarget === "booster" ? "&is_booster=true" : ""
+          }`;
         }
 
         const { error } = await supabase
@@ -971,6 +1027,7 @@ export default function Home() {
             aspect_ratio: 
               saveTarget === "upload" ? libraryUploadAspectRatio : 
               saveTarget === "display" ? displayAspectRatio : 
+              saveTarget === "booster" ? boosterAspectRatio :
               aspectRatio,
             timestamp: timestamp
           });
@@ -995,14 +1052,17 @@ export default function Home() {
         cardOnlyUrl: 
           saveTarget === "case" ? (caseCardImage || undefined) : 
           saveTarget === "display" ? (displayCutoutUrl || undefined) : 
+          saveTarget === "booster" ? (boosterCutoutUrl || undefined) :
           undefined,
         aspectRatio: 
           saveTarget === "upload" ? libraryUploadAspectRatio : 
           saveTarget === "display" ? displayAspectRatio : 
+          saveTarget === "booster" ? boosterAspectRatio :
           aspectRatio,
         timestamp: timestamp,
         isCase: saveTarget === "case",
-        isDisplay: saveTarget === "display"
+        isDisplay: saveTarget === "display",
+        isBooster: saveTarget === "booster"
       };
 
       try {
@@ -1018,7 +1078,7 @@ export default function Home() {
     // Reconstruct cardOnlyUrl in memory for the updated state (either local or supabase-predicted)
     let finalCardOnlyUrl: string | undefined = undefined;
     let finalOriginalCardUrl = originalCardUrl;
-    if (saveTarget === "case" || saveTarget === "display") {
+    if (saveTarget === "case" || saveTarget === "display" || saveTarget === "booster") {
       if (!isLocalMode && currentSpace) {
         if (originalCardUrl && originalCardUrl.includes("?card_only=")) {
           const parts = originalCardUrl.split("?card_only=");
@@ -1026,16 +1086,24 @@ export default function Home() {
           const queryPart = parts[1];
           if (queryPart.includes("&is_display=true")) {
             finalCardOnlyUrl = decodeURIComponent(queryPart.replace("&is_display=true", ""));
+          } else if (queryPart.includes("&is_booster=true")) {
+            finalCardOnlyUrl = decodeURIComponent(queryPart.replace("&is_booster=true", ""));
           } else {
             finalCardOnlyUrl = decodeURIComponent(queryPart);
           }
         } else if (originalCardUrl && originalCardUrl.includes("case_with_card.png")) {
           finalCardOnlyUrl = originalCardUrl.replace("case_with_card.png", "card_only.png");
         } else {
-          finalCardOnlyUrl = saveTarget === "case" ? (caseCardImage || undefined) : (displayCutoutUrl || undefined);
+          finalCardOnlyUrl = 
+            saveTarget === "case" ? (caseCardImage || undefined) : 
+            saveTarget === "display" ? (displayCutoutUrl || undefined) :
+            (boosterCutoutUrl || undefined);
         }
       } else {
-        finalCardOnlyUrl = saveTarget === "case" ? (caseCardImage || undefined) : (displayCutoutUrl || undefined);
+        finalCardOnlyUrl = 
+          saveTarget === "case" ? (caseCardImage || undefined) : 
+          saveTarget === "display" ? (displayCutoutUrl || undefined) :
+          (boosterCutoutUrl || undefined);
       }
     }
 
@@ -1049,10 +1117,12 @@ export default function Home() {
       aspectRatio: 
         saveTarget === "upload" ? libraryUploadAspectRatio : 
         saveTarget === "display" ? displayAspectRatio : 
+        saveTarget === "booster" ? boosterAspectRatio :
         aspectRatio,
       timestamp: timestamp,
       isCase: saveTarget === "case",
-      isDisplay: saveTarget === "display"
+      isDisplay: saveTarget === "display",
+      isBooster: saveTarget === "booster"
     };
 
     const updated = [newArtworkRecord, ...savedArtworks];
@@ -1196,6 +1266,22 @@ export default function Home() {
     }
   };
 
+  const abortDisplayControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancelDisplayProcessing = () => {
+    if (abortDisplayControllerRef.current) {
+      abortDisplayControllerRef.current.abort();
+    }
+  };
+
+  const abortBoosterControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancelBoosterProcessing = () => {
+    if (abortBoosterControllerRef.current) {
+      abortBoosterControllerRef.current.abort();
+    }
+  };
+
   useEffect(() => {
     if (isProcessing) {
       const startTime = Date.now();
@@ -1233,6 +1319,26 @@ export default function Home() {
       }
     };
   }, [isDisplayProcessing]);
+
+  const boosterTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (isBoosterProcessing) {
+      const startTime = Date.now();
+      boosterTimerRef.current = setInterval(() => {
+        setBoosterElapsedTime((Date.now() - startTime) / 1000);
+      }, 100);
+    } else {
+      if (boosterTimerRef.current) {
+        clearInterval(boosterTimerRef.current);
+      }
+    }
+    return () => {
+      if (boosterTimerRef.current) {
+        clearInterval(boosterTimerRef.current);
+      }
+    };
+  }, [isBoosterProcessing]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
@@ -1287,6 +1393,35 @@ export default function Home() {
     },
     maxFiles: 1,
     disabled: isDisplayProcessing
+  });
+
+  const onBoosterDrop = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      const selectedFile = acceptedFiles[0];
+      setBoosterFile(selectedFile);
+      setBoosterPreviewUrl(URL.createObjectURL(selectedFile));
+      setBoosterResultUrl(null);
+      setBoosterCutoutUrl(null);
+      setBoosterBgUrl(null);
+      setBoosterErrorMessage(null);
+      setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+      setBoosterElapsedTime(0);
+      setBoosterActiveStepMessage("");
+      setNewArtworkName("");
+    }
+  }, []);
+
+  const {
+    getRootProps: getBoosterRootProps,
+    getInputProps: getBoosterInputProps,
+    isDragActive: isBoosterDragActive
+  } = useDropzone({
+    onDrop: onBoosterDrop,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 1,
+    disabled: isBoosterProcessing
   });
 
   const onLibraryDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -1360,12 +1495,18 @@ export default function Home() {
           if (pastedFile) {
             e.preventDefault();
             if (activeTab === "generate") {
-              if (!isProcessing) {
-                onDrop([pastedFile]);
-              }
-            } else if (activeTab === "display") {
-              if (!isDisplayProcessing) {
-                onDisplayDrop([pastedFile]);
+              if (activeStudioSubTab === "card") {
+                if (!isProcessing) {
+                  onDrop([pastedFile]);
+                }
+              } else if (activeStudioSubTab === "display") {
+                if (!isDisplayProcessing) {
+                  onDisplayDrop([pastedFile]);
+                }
+              } else if (activeStudioSubTab === "booster") {
+                if (!isBoosterProcessing) {
+                  onBoosterDrop([pastedFile]);
+                }
               }
             } else if (activeTab === "library") {
               onLibraryDrop([pastedFile]);
@@ -1380,7 +1521,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-  }, [activeTab, isProcessing, isDisplayProcessing, onDrop, onDisplayDrop, onLibraryDrop]);
+  }, [activeTab, activeStudioSubTab, isProcessing, isDisplayProcessing, isBoosterProcessing, onDrop, onDisplayDrop, onBoosterDrop, onLibraryDrop]);
 
   const updateStepStatus = (stepId: string, status: "running" | "success" | "error") => {
     setSteps(prev => 
@@ -1398,6 +1539,20 @@ export default function Home() {
 
   const updateDisplayStepStatus = (stepId: string, status: "running" | "success" | "error") => {
     setDisplaySteps(prev => 
+      prev.map(step => {
+        if (step.id === stepId) {
+          return { ...step, status };
+        }
+        if (status === "success" && prev.findIndex(s => s.id === stepId) > prev.findIndex(s => s.id === step.id)) {
+          return { ...step, status: "success" };
+        }
+        return step;
+      })
+    );
+  };
+
+  const updateBoosterStepStatus = (stepId: string, status: "running" | "success" | "error") => {
+    setBoosterSteps(prev => 
       prev.map(step => {
         if (step.id === stepId) {
           return { ...step, status };
@@ -1551,6 +1706,10 @@ export default function Home() {
     setDisplayElapsedTime(0);
     setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
 
+    const controller = new AbortController();
+    abortDisplayControllerRef.current = controller;
+    const signal = controller.signal;
+
     try {
       console.log("[Display Studio] Starting Layout & Crop step...");
       // STEP 1 & 2: Bounding Box/Polygon Detection & Crop
@@ -1562,7 +1721,8 @@ export default function Home() {
 
       const cropResponse = await fetch("/api/pipeline/display-crop", {
         method: "POST",
-        body: cropFormData
+        body: cropFormData,
+        signal
       });
 
       const { 
@@ -1622,7 +1782,8 @@ export default function Home() {
             aspectRatio: displayAspectRatio, 
             mode: displayBgMode,
             isDisplay: true
-          })
+          }),
+          signal
         },
         2,
         1500,
@@ -1652,7 +1813,8 @@ export default function Home() {
           watermarkPosition,
           watermarkOpacity,
           watermarkScale
-        })
+        }),
+        signal
       });
 
       const { resultImageUrl } = await parseResponseData(
@@ -1665,6 +1827,11 @@ export default function Home() {
       setDisplayActiveStepMessage("Completed!");
 
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        setDisplayErrorMessage("Die Bildgenerierung wurde abgebrochen.");
+        setDisplaySteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
+        return;
+      }
       const message = getErrorMessage(error);
       console.error("[Display Studio] Display pipeline error:", error);
       setDisplayErrorMessage(message || "An unexpected error occurred during processing.");
@@ -1679,6 +1846,159 @@ export default function Home() {
       });
     } finally {
       setIsDisplayProcessing(false);
+    }
+  };
+
+  const handleProcessBoosterImage = async () => {
+    if (!boosterFile) return;
+    setIsBoosterProcessing(true);
+    setBoosterErrorMessage(null);
+    setBoosterResultUrl(null);
+    setBoosterCutoutUrl(null);
+    setBoosterBgUrl(null);
+    setBoosterElapsedTime(0);
+    setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+
+    const controller = new AbortController();
+    abortBoosterControllerRef.current = controller;
+    const signal = controller.signal;
+
+    try {
+      console.log("[Booster Studio] Starting Layout & Crop step...");
+      // STEP 1 & 2: Bounding Box/Polygon Detection & Crop
+      updateBoosterStepStatus("LAYOUT", "running");
+      setBoosterActiveStepMessage("Locating booster pack boundary...");
+      
+      const cropFormData = new FormData();
+      cropFormData.append("boosterImage", boosterFile);
+
+      const cropResponse = await fetch("/api/pipeline/booster-crop", {
+        method: "POST",
+        body: cropFormData,
+        signal
+      });
+
+      const { 
+        cutoutImage, 
+        croppedImage, 
+        displayName,
+        displaySeries,
+        coords,
+        usedFallback
+      } = await parseResponseData(
+        cropResponse,
+        "Failed to analyze and cutout booster pack."
+      );
+      
+      console.log("[Booster Studio] Layout & Crop success:", { displayName, displaySeries, usedFallback, coords });
+      setBoosterCutoutUrl(cutoutImage || null);
+      updateBoosterStepStatus("LAYOUT", "success");
+      updateBoosterStepStatus("CROP", "success");
+
+      // Auto-populate booster name detected by Gemini
+      let detectedName = "";
+      if (displayName && displayName.trim()) {
+        detectedName += displayName.trim();
+      }
+      if (displaySeries && displaySeries.trim()) {
+        if (detectedName) detectedName += " - ";
+        detectedName += displaySeries.trim();
+      }
+      if (detectedName) {
+        setNewArtworkName(detectedName);
+      }
+
+      if (boosterBgMode === "transparent") {
+        console.log("[Booster Studio] Transparent mode selected. Skipping background generation and merge steps.");
+        setBoosterResultUrl(cutoutImage || null);
+        
+        // Mark remaining steps as success
+        setBoosterSteps(prev => 
+          prev.map(s => s.id === "OUTPAINT" || s.id === "MERGE" ? { ...s, status: "success" } : s)
+        );
+        setBoosterActiveStepMessage("Completed transparent cutout!");
+        return;
+      }
+
+      console.log("[Booster Studio] Starting Outpaint step with mode:", boosterBgMode);
+      // STEP 3: Outpainting with style analysis & Imagen 3
+      updateBoosterStepStatus("OUTPAINT", "running");
+      setBoosterActiveStepMessage("Analyzing booster theme with Gemini...");
+
+      const outpaintResponse = await fetchWithRetry(
+        "/api/pipeline/outpaint",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            croppedImage: cutoutImage, // Use the clean transparent cutout as style reference
+            aspectRatio: boosterAspectRatio, 
+            mode: boosterBgMode,
+            isDisplay: true
+          }),
+          signal
+        },
+        2,
+        1500,
+        (msg) => setBoosterActiveStepMessage(msg)
+      );
+
+      const { backgroundImage } = await parseResponseData(
+        outpaintResponse,
+        "Failed to generate themed backdrop."
+      );
+      console.log("[Booster Studio] Outpaint background generated successfully.");
+      setBoosterBgUrl(backgroundImage || null);
+      updateBoosterStepStatus("OUTPAINT", "success");
+
+      console.log("[Booster Studio] Starting Merge step...");
+      // STEP 4: Merge booster cutout + shadow over background
+      updateBoosterStepStatus("MERGE", "running");
+      setBoosterActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
+
+      const mergeResponse = await fetch("/api/pipeline/display-merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          displayCutout: cutoutImage, 
+          backgroundImage,
+          watermarkImage: watermarkPreviewUrl,
+          watermarkPosition,
+          watermarkOpacity,
+          watermarkScale
+        }),
+        signal
+      });
+
+      const { resultImageUrl } = await parseResponseData(
+        mergeResponse,
+        "Failed to merge booster cutout and background."
+      );
+      console.log("[Booster Studio] Merge completed successfully.");
+      updateBoosterStepStatus("MERGE", "success");
+      setBoosterResultUrl(resultImageUrl || null);
+      setBoosterActiveStepMessage("Completed!");
+
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        setBoosterErrorMessage("Die Bildgenerierung wurde abgebrochen.");
+        setBoosterSteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
+        return;
+      }
+      const message = getErrorMessage(error);
+      console.error("[Booster Studio] Booster pipeline error:", error);
+      setBoosterErrorMessage(message || "An unexpected error occurred during processing.");
+      
+      // Mark current running step as error
+      setBoosterSteps(prev => {
+        const runningIdx = prev.findIndex(s => s.status === "running" || s.status === "idle");
+        if (runningIdx !== -1) {
+          return prev.map((s, idx) => idx === runningIdx ? { ...s, status: "error" } : s);
+        }
+        return prev;
+      });
+    } finally {
+      setIsBoosterProcessing(false);
     }
   };
 
@@ -1718,6 +2038,18 @@ export default function Home() {
     setDisplayElapsedTime(0);
     setDisplayActiveStepMessage("");
     setIsDisplayDownloadOpen(false);
+
+    // Reset Booster Studio states
+    setBoosterFile(null);
+    setBoosterPreviewUrl(null);
+    setBoosterResultUrl(null);
+    setBoosterCutoutUrl(null);
+    setBoosterBgUrl(null);
+    setBoosterErrorMessage(null);
+    setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+    setBoosterElapsedTime(0);
+    setBoosterActiveStepMessage("");
+    setIsBoosterDownloadOpen(false);
   };
 
   const filteredArtworks = savedArtworks.filter(art => {
@@ -1726,8 +2058,10 @@ export default function Home() {
 
     if (libraryCategory === "displays") {
       return !!art.isDisplay;
+    } else if (libraryCategory === "boosters") {
+      return !!art.isBooster;
     } else if (libraryCategory === "cards") {
-      const isCard = !art.isDisplay;
+      const isCard = !art.isDisplay && !art.isBooster;
       if (!isCard) return false;
       if (libraryCardSubCategory === "case") {
         return !!art.isCase;
@@ -1900,18 +2234,6 @@ export default function Home() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("display")}
-              className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
-                activeTab === "display"
-                  ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
-                  : "border border-transparent text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              <Package className="w-4 h-4" />
-              Display-Studio
-            </button>
-            <button
-              type="button"
               onClick={() => setActiveTab("case")}
               className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
                 activeTab === "case"
@@ -1955,7 +2277,51 @@ export default function Home() {
         </div>
 
         {activeTab === "generate" ? (
-          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <>
+            {/* Sub-tabs switch */}
+            <div className="flex justify-center mb-6">
+              <div className="flex p-1 rounded-xl bg-zinc-950/60 border border-zinc-850 backdrop-blur-xl">
+                <button
+                  type="button"
+                  onClick={() => setActiveStudioSubTab("card")}
+                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                    activeStudioSubTab === "card"
+                      ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-md animate-in fade-in duration-200"
+                      : "border border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Karten-Studio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveStudioSubTab("display")}
+                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                    activeStudioSubTab === "display"
+                      ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-md animate-in fade-in duration-200"
+                      : "border border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  Display-Studio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveStudioSubTab("booster")}
+                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                    activeStudioSubTab === "booster"
+                      ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-md animate-in fade-in duration-200"
+                      : "border border-transparent text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  Booster-Studio
+                </button>
+              </div>
+            </div>
+
+            {activeStudioSubTab === "card" ? (
+              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
           {/* Left panel - Controls & Source */}
           <section className="lg:col-span-7 flex flex-col gap-6">
@@ -2378,7 +2744,7 @@ export default function Home() {
                           className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
                         >
                           <Bookmark className="w-4 h-4" />
-                          In Bibliothek speichern
+                          Speichern
                         </button>
                       </div>
                       <button
@@ -2415,8 +2781,8 @@ export default function Home() {
           </section>
 
         </div>
-        ) : activeTab === "display" ? (
-          <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            ) : activeStudioSubTab === "display" ? (
+              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left panel - Controls & Source */}
             <section className="lg:col-span-7 flex flex-col gap-6">
               
@@ -2774,7 +3140,7 @@ export default function Home() {
                         className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         <Bookmark className="w-3.5 h-3.5" />
-                        In Bibliothek speichern
+                        Speichern
                       </button>
                     </div>
                   )}
@@ -2896,6 +3262,363 @@ export default function Home() {
               ) : null}
             </section>
           </div>
+            ) : (
+              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in fade-in duration-300">
+                {/* Left panel - Controls & Source */}
+                <section className="lg:col-span-7 flex flex-col gap-6">
+                  {/* Aspect Ratio & Control Card */}
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
+                    <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <Layers className="w-5 h-5 text-purple-400" />
+                      1. Konfiguration
+                    </h2>
+                    
+                    <div className="flex flex-col gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">Hintergrund-Modus</label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { value: "transparent", label: "Transparenter Ausschnitt", desc: "Nur der Booster" },
+                            { value: "outpaint", label: "Umgebung erweitern", desc: "Thematische Erweiterung" },
+                            { value: "ambient", label: "Weicher Schein", desc: "Einfacher farbiger Hintergrund" }
+                          ].map((mode) => (
+                            <button
+                              key={mode.value}
+                              type="button"
+                              onClick={() => setBoosterBgMode(mode.value as any)}
+                              disabled={isBoosterProcessing}
+                              className={`p-3 rounded-xl border text-left transition-all ${
+                                boosterBgMode === mode.value
+                                  ? "border-purple-500 bg-purple-500/5 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.05)]"
+                                  : "border-zinc-800 hover:border-zinc-700 bg-zinc-955/40 text-zinc-400 hover:text-zinc-200"
+                              } ${isBoosterProcessing ? "opacity-50 pointer-events-none" : "cursor-pointer"}`}
+                            >
+                              <div className="text-xs font-bold">{mode.label}</div>
+                              <div className="text-[10px] text-zinc-500 mt-1 leading-normal">{mode.desc}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {boosterBgMode !== "transparent" && (
+                        <div>
+                          <label className="block text-sm font-medium text-zinc-300 mb-2">Ziel-Seitenverhältnis</label>
+                          <div className="grid grid-cols-4 gap-2">
+                            {[
+                              { value: "3:4", label: "Porträt 3:4", desc: "Klassisch" },
+                              { value: "9:16", label: "Story 9:16", desc: "Vertikal" },
+                              { value: "1:1", label: "Quadrat 1:1", desc: "Raster" },
+                              { value: "16:9", label: "Querformat 16:9", desc: "Banner" }
+                            ].map((ratio) => (
+                              <button
+                                key={ratio.value}
+                                type="button"
+                                onClick={() => setBoosterAspectRatio(ratio.value)}
+                                disabled={isBoosterProcessing}
+                                className={`p-3 rounded-xl border text-left transition-all ${
+                                  boosterAspectRatio === ratio.value
+                                    ? "border-purple-500 bg-purple-500/5 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.05)]"
+                                    : "border-zinc-800 hover:border-zinc-700 bg-zinc-955/40 text-zinc-400 hover:text-zinc-200"
+                                } ${isBoosterProcessing ? "opacity-50 pointer-events-none" : "cursor-pointer"}`}
+                              >
+                                <div className="text-xs font-bold">{ratio.label}</div>
+                                <div className="text-[10px] text-zinc-500 mt-1 leading-normal">{ratio.desc}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Input Source Image Card */}
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex-1 flex flex-col min-h-[360px]">
+                    <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                        <Upload className="w-5 h-5 text-purple-400" />
+                        2. Booster hochladen
+                      </h2>
+                      {boosterFile && !isBoosterProcessing && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBoosterFile(null);
+                            setBoosterPreviewUrl(null);
+                            setBoosterResultUrl(null);
+                            setBoosterCutoutUrl(null);
+                            setBoosterBgUrl(null);
+                            setBoosterErrorMessage(null);
+                            setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+                          }}
+                          className="px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors text-xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          Zurücksetzen
+                        </button>
+                      )}
+                    </div>
+
+                    {!boosterFile ? (
+                      <div
+                        {...getBoosterRootProps()}
+                        className={`flex-1 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center p-8 text-center transition-all ${
+                          isBoosterDragActive
+                            ? "border-purple-500 bg-purple-600/5 shadow-[inset_0_0_20px_rgba(168,85,247,0.05)]"
+                            : "border-zinc-800 hover:border-zinc-700 bg-zinc-955/40"
+                        } ${isBoosterProcessing ? "opacity-50 pointer-events-none" : "cursor-pointer"}`}
+                      >
+                        <input {...getBoosterInputProps()} />
+                        <div className="w-16 h-16 rounded-2xl bg-purple-600/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-4 shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
+                          <Upload className="w-8 h-8" />
+                        </div>
+                        <p className="text-sm font-semibold text-zinc-200">
+                          Ziehe dein Boosterpack-Bild hierher
+                        </p>
+                        <p className="text-xs text-zinc-550 mt-1.5 max-w-sm">
+                          Unterstützt PNG, JPEG, WEBP. Direkt aus der Zwischenablage einfügen (Strg+V / Cmd+V).
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex-1 relative rounded-xl border border-zinc-850 bg-zinc-955/60 overflow-hidden flex items-center justify-center p-4">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={boosterPreviewUrl || ""}
+                          alt="Source booster"
+                          className="max-h-[380px] w-auto object-contain rounded-lg shadow-2xl"
+                        />
+                        {!isBoosterProcessing && (
+                          <button
+                            onClick={handleReset}
+                            className="absolute top-4 right-4 p-2 rounded-xl bg-black/60 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-black/80 transition-all cursor-pointer shadow-lg"
+                            title="Bild entfernen"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {/* Right panel - Result & Progress */}
+                <section className="lg:col-span-5 flex flex-col gap-6 h-full">
+                  {/* Output Preview */}
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col flex-1 min-h-[500px]">
+                    <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                        <Sparkles className="w-5 h-5 text-purple-400" />
+                        Vorschau der Ausgabe
+                      </h2>
+                      
+                      {boosterResultUrl && (
+                        <div className="flex gap-2">
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() => setIsBoosterDownloadOpen(!isBoosterDownloadOpen)}
+                              className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              Herunterladen
+                              <ChevronDown className="w-3 h-3" />
+                            </button>
+                            
+                            {isBoosterDownloadOpen && (
+                              <>
+                                <div className="fixed inset-0 z-20" onClick={() => setIsBoosterDownloadOpen(false)} />
+                                <div className="absolute right-0 mt-1 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsBoosterDownloadOpen(false);
+                                      triggerDownload(boosterResultUrl, `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}.png`);
+                                    }}
+                                    className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                  >
+                                    <ImageIcon className="w-3.5 h-3.5 text-zinc-400" />
+                                    <span>Als PNG herunterladen</span>
+                                  </button>
+                                  {boosterBgUrl && boosterBgMode !== "transparent" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsBoosterDownloadOpen(false);
+                                        const filesToDownload = [
+                                          { url: boosterBgUrl, filename: `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_background.png` },
+                                          { url: boosterCutoutUrl || boosterResultUrl, filename: `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_cutout.png` }
+                                        ];
+                                        triggerZipDownload(filesToDownload, `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_split.zip`);
+                                      }}
+                                      className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
+                                    >
+                                      <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
+                                        <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
+                                      </div>
+                                      <span>Hintergrund & Ausschnitt trennen</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSaveTarget("booster");
+                              setIsSaveModalOpen(true);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Bookmark className="w-3.5 h-3.5" />
+                            Speichern
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex-1 border border-zinc-850 bg-zinc-950/80 rounded-xl relative overflow-hidden min-h-[420px] flex flex-col items-center justify-center p-6">
+                      {boosterResultUrl ? (
+                        <div className="w-full flex flex-col items-center animate-in fade-in duration-300">
+                          <div 
+                            className="relative rounded-lg overflow-hidden w-full max-w-[440px] cursor-pointer group transition-all duration-300"
+                            style={{ aspectRatio: boosterAspectRatio.replace(":", "/") }}
+                            onClick={() => setLightboxImage({ url: boosterResultUrl, title: newArtworkName || "Merged Booster Box" })}
+                            title="Größere Ansicht (Klicken)"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={boosterResultUrl}
+                              alt="Result showcase"
+                              className={`w-full h-full ${boosterBgMode === "transparent" ? "object-contain" : "object-cover"} transition-transform duration-500 group-hover:scale-[1.02]`}
+                            />
+                            {/* Click to zoom overlay */}
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                              <div className="p-3 rounded-full bg-black/60 border border-zinc-850 text-white backdrop-blur-md scale-90 group-hover:scale-100 transition-all duration-300">
+                                <Maximize2 className="w-5 h-5" />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center p-8 flex flex-col items-center max-w-sm">
+                          <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-555 flex items-center justify-center mb-3">
+                            <Sparkles className="w-5 h-5" />
+                          </div>
+                          <h3 className="font-semibold text-zinc-350 text-sm">Noch kein Booster generiert</h3>
+                          <p className="text-xs text-zinc-555 mt-1">
+                            Konfiguriere Layout-Optionen, lade ein Bild eines Boosterpacks hoch und klicke auf Generieren.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {boosterFile && !boosterResultUrl && (
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={handleProcessBoosterImage}
+                          disabled={isBoosterProcessing}
+                          className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-purple-800 disabled:to-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                        >
+                          {isBoosterProcessing ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              Generierung läuft...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              Booster freistellen
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Active Step status card */}
+                  {isBoosterProcessing || boosterResultUrl || boosterErrorMessage ? (
+                    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-5 shadow-2xl">
+                      <div className="flex justify-between items-center mb-4 pb-3 border-b border-zinc-800/60">
+                        <div className="flex items-center gap-2">
+                          <Activity className="w-4 h-4 text-purple-400" />
+                          <span className="text-sm font-semibold text-zinc-300">Generierungs-Status</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-xs text-zinc-400 bg-zinc-950 px-2.5 py-1 rounded-md border border-zinc-800/80">
+                            {boosterElapsedTime.toFixed(1)}s
+                          </span>
+                          {isBoosterProcessing && (
+                            <button
+                              type="button"
+                              onClick={handleCancelBoosterProcessing}
+                              className="px-2.5 py-1 rounded bg-rose-600/10 border border-rose-500/30 text-[10px] font-extrabold tracking-wider uppercase text-rose-400 hover:bg-rose-600/25 transition-all cursor-pointer"
+                            >
+                              Abbrechen
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-3">
+                        {boosterSteps.map((step) => {
+                          const isRunning = step.status === "running";
+                          const isSuccess = step.status === "success";
+                          const isError = step.status === "error";
+
+                          return (
+                            <div
+                              key={step.id}
+                              className={`flex items-start gap-3 p-2.5 rounded-xl transition-colors ${
+                                isRunning ? "bg-purple-600/5 border border-purple-500/10" : ""
+                              }`}
+                            >
+                              <div className="mt-0.5 shrink-0">
+                                {isRunning ? (
+                                  <div className="w-4 h-4 rounded-full border border-purple-500/30 border-t-purple-500 animate-spin" />
+                                ) : isSuccess ? (
+                                  <div className="w-4 h-4 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
+                                    <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                  </div>
+                                ) : isError ? (
+                                  <div className="w-4 h-4 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center">
+                                    <AlertCircle className="w-2.5 h-2.5 text-rose-400" />
+                                  </div>
+                                ) : (
+                                  <div className="w-4 h-4 rounded-full border border-zinc-800 bg-zinc-950 flex items-center justify-center">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-zinc-700" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p
+                                  className={`text-xs font-semibold leading-normal ${
+                                    isRunning ? "text-purple-400" : isSuccess ? "text-zinc-300" : isError ? "text-rose-400" : "text-zinc-500"
+                                  }`}
+                                >
+                                  {step.label}
+                                </p>
+                                <p className="text-[10px] text-zinc-550 mt-1 leading-normal">
+                                  {step.description}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {boosterErrorMessage && (
+                        <div className="mt-4 p-3 rounded-xl border border-rose-500/20 bg-rose-600/10 text-xs font-semibold text-rose-400 flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>{boosterErrorMessage}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </section>
+              </div>
+            )}
+          </>
         ) : activeTab === "case" ? (
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left panel - Case configuration & library selection */}
@@ -3212,7 +3935,7 @@ export default function Home() {
                           className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
                         >
                           <Bookmark className="w-4 h-4" />
-                          In Bibliothek speichern
+                          Speichern
                         </button>
                       </div>
                     </div>
