@@ -3375,6 +3375,19 @@ export default function Home() {
                         {art.aspectRatio || "3:4"}
                       </span>
 
+                      {/* Delete Button (visible on hover) */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteArtwork(art.id);
+                        }}
+                        className="absolute top-2 right-12 p-1.5 rounded bg-black/60 hover:bg-rose-950/80 border border-zinc-800 text-zinc-400 hover:text-rose-400 transition-all z-10 opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Aus Bibliothek löschen"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+
                       {/* Type Badge */}
                       <span className={`absolute top-2 left-2 px-2 py-0.5 rounded border text-[10px] font-bold z-10 ${
                         art.isDisplay 
@@ -3383,7 +3396,7 @@ export default function Home() {
                           ? "bg-indigo-950/80 border-indigo-800 text-indigo-300"
                           : "bg-blue-950/80 border-blue-800 text-blue-300"
                       }`}>
-                        {art.isDisplay ? "Display" : art.isCase ? "Case" : "Card"}
+                        {art.isDisplay ? "Display" : art.isCase ? "Case" : "Karte"}
                       </span>
                     </div>
 
@@ -3400,18 +3413,18 @@ export default function Home() {
                       })}
                     </p>
 
-                    <div className="flex gap-2 mt-auto pt-2 border-t border-zinc-850/50">
-                      <div className="flex-1 relative">
+                    <div className="flex items-center justify-between mt-auto pt-3 border-t border-zinc-850/50 gap-2">
+                      <div className="relative">
                         <div className="flex rounded-lg bg-zinc-800 border border-zinc-700 divide-x divide-zinc-750 transition-all overflow-hidden">
                           <button
                             type="button"
                             onClick={() => {
                               triggerDownload(art.imageUrl, `TCG_${art.name.replace(/\s+/g, "_")}.png`);
                             }}
-                            className="flex-1 py-2 px-3 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                            className="py-2 px-2.5 hover:bg-zinc-700 text-white flex items-center justify-center transition-colors"
+                            title="Herunterladen"
                           >
                             <Download className="w-3.5 h-3.5" />
-                            Herunterladen
                           </button>
                           <button
                             type="button"
@@ -3430,7 +3443,7 @@ export default function Home() {
                               className="fixed inset-0 z-20" 
                               onClick={() => setOpenLibraryDownloadId(null)} 
                             />
-                            <div className="absolute right-0 bottom-full mb-1.5 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5">
+                            <div className="absolute left-0 bottom-full mb-1.5 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3516,52 +3529,47 @@ export default function Home() {
                           </>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleFindCardName(art)}
-                        disabled={identifyingArtworkId === art.id}
-                        className={`p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors ${
-                          identifyingArtworkId === art.id ? "cursor-wait opacity-65" : ""
-                        }`}
-                        title="Kartenname finden"
-                      >
-                        {identifyingArtworkId === art.id ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
-                        ) : (
-                          <Sparkles className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRenamingArtwork(art);
-                          setRenameValue(art.name);
-                          setIsRenameModalOpen(true);
-                        }}
-                        className="p-2 rounded-lg border border-zinc-855 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
-                        title="Karte umbenennen"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleSelectArtworkForCase(art.id);
-                          setActiveTab("case");
-                        }}
-                        className="p-2 rounded-lg border border-zinc-855 bg-zinc-955 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
-                        title="Case-Showroom erstellen"
-                      >
-                        <Layers className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteArtwork(art.id)}
-                        className="p-2 rounded-lg border border-zinc-855 bg-zinc-955 text-zinc-500 hover:text-red-400 hover:border-red-500/30 transition-colors"
-                        title="Aus Bibliothek löschen"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleFindCardName(art)}
+                          disabled={identifyingArtworkId === art.id}
+                          className={`p-2 rounded-lg border border-zinc-850 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors ${
+                            identifyingArtworkId === art.id ? "cursor-wait opacity-65" : ""
+                          }`}
+                          title="Kartenname finden"
+                        >
+                          {identifyingArtworkId === art.id ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRenamingArtwork(art);
+                            setRenameValue(art.name);
+                            setIsRenameModalOpen(true);
+                          }}
+                          className="p-2 rounded-lg border border-zinc-855 bg-zinc-950 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
+                          title="Karte umbenennen"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectArtworkForCase(art.id);
+                            setActiveTab("case");
+                          }}
+                          className="p-2 rounded-lg border border-zinc-855 bg-zinc-955 text-zinc-500 hover:text-purple-400 hover:border-purple-500/30 transition-colors"
+                          title="Case-Showroom erstellen"
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
