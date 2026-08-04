@@ -23,7 +23,10 @@ import {
   ChevronDown,
   Package,
   Activity,
-  Check
+  Check,
+  FileSpreadsheet,
+  FileText,
+  Loader2
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -222,6 +225,147 @@ const getAdjustedFilename = (filename: string, mimeType: string): string => {
   return filename;
 };
 
+interface CsvRowItem {
+  url: string;
+  name?: string;
+}
+
+const parseCsvFile = async (file: File): Promise<CsvRowItem[]> => {
+  const text = await file.text();
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length === 0) return [];
+
+  const headerLine = lines[0];
+  let separator = ",";
+  if (headerLine.includes(";")) separator = ";";
+  else if (headerLine.includes("\t")) separator = "\t";
+
+  const rows = lines.map(line => {
+    const cells: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"' || char === "'") {
+        inQuotes = !inQuotes;
+      } else if (char === separator && !inQuotes) {
+        cells.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    cells.push(current.trim());
+    return cells;
+  });
+
+  if (rows.length === 0) return [];
+
+  const firstRow = rows[0].map(c => c.toLowerCase().replace(/['"]/g, ""));
+  let urlColIdx = -1;
+  let nameColIdx = -1;
+
+  firstRow.forEach((col, idx) => {
+    if (["url", "image_url", "image", "bild", "link", "src", "bild_url", "imageurl"].includes(col)) {
+      urlColIdx = idx;
+    }
+    if (["name", "titel", "title", "karten_name", "card_name", "kartenname", "label", "bezeichnung"].includes(col)) {
+      nameColIdx = idx;
+    }
+  });
+
+  const startIndex = (urlColIdx !== -1 || nameColIdx !== -1) ? 1 : 0;
+  const items: CsvRowItem[] = [];
+
+  for (let i = startIndex; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.length === 0) continue;
+
+    let foundUrl = "";
+    let foundName = "";
+
+    if (urlColIdx !== -1 && row[urlColIdx]) {
+      foundUrl = row[urlColIdx].replace(/^["']|["']$/g, "");
+    } else {
+      const urlCell = row.find(cell => {
+        const cleaned = cell.replace(/^["']|["']$/g, "");
+        return cleaned.startsWith("http://") || cleaned.startsWith("https://") || cleaned.startsWith("data:image");
+      });
+      if (urlCell) foundUrl = urlCell.replace(/^["']|["']$/g, "");
+    }
+
+    if (nameColIdx !== -1 && row[nameColIdx]) {
+      foundName = row[nameColIdx].replace(/^["']|["']$/g, "");
+    } else {
+      if (row.length > 1 && !row[0].startsWith("http") && !row[0].startsWith("data:")) {
+        foundName = row[0].replace(/^["']|["']$/g, "");
+      }
+    }
+
+    if (foundUrl) {
+      items.push({ url: foundUrl, name: foundName || undefined });
+    }
+  }
+
+  return items;
+};
+
+const fetchImageAsFile = async (url: string, defaultName: string): Promise<File> => {
+  let blob: Blob | null = null;
+  let mimeType = "image/png";
+
+  if (url.startsWith("data:image/")) {
+    const res = await fetch(url);
+    blob = await res.blob();
+    mimeType = blob.type || "image/png";
+  } else {
+    try {
+      const response = await fetch("/api/fetch-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      if (response.ok) {
+        blob = await response.blob();
+        mimeType = response.headers.get("content-type") || blob.type || "image/png";
+      }
+    } catch (e) {
+      console.warn("Proxy fetch failed, attempting direct fetch:", e);
+    }
+
+    if (!blob) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Bild konnte nicht abgerufen werden (HTTP ${response.status})`);
+      }
+      blob = await response.blob();
+      mimeType = blob.type || "image/png";
+    }
+  }
+
+  const ext = mimeType.includes("jpeg") || mimeType.includes("jpg") ? "jpg" 
+            : mimeType.includes("webp") ? "webp" 
+            : "png";
+
+  const sanitizedName = defaultName.replace(/[/\\?%*:|"<>]/g, "_").trim();
+  const filename = sanitizedName.toLowerCase().endsWith(`.${ext}`) ? sanitizedName : `${sanitizedName}.${ext}`;
+  return new File([blob], filename, { type: mimeType });
+};
+
+const downloadSampleCsv = () => {
+  const content = "Name,BildURL\nGlurak,https://images.pokemontcg.io/base1/4.png\nBisasam,https://images.pokemontcg.io/base1/44.png\nGlumanda,https://images.pokemontcg.io/base1/46.png";
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", "muster_tcg_bilder.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+
 const fetchAndProcessImage = async (
   url: string,
   filename: string,
@@ -353,22 +497,34 @@ export default function Home() {
 
   const [boosterBatchItems, setBoosterBatchItems] = useState<BatchItem[]>([]);
   const [isBoosterBatchProcessing, setIsBoosterBatchProcessing] = useState<boolean>(false);
+  const [isCsvLoading, setIsCsvLoading] = useState<boolean>(false);
+  const [csvStatusMsg, setCsvStatusMsg] = useState<string>("");
 
   const cancelBatchRef = useRef<boolean>(false);
 
-  const appendCardBatchFiles = useCallback((acceptedFiles: File[]) => {
+  const appendCardBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
+      if (!skipCsvCheck) {
+        const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
+        if (csvFile) {
+          handleCsvImport(csvFile, "card");
+        }
+      }
+
+      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      if (imageFiles.length === 0) return;
+
       setCardBatchItems(prev => {
         const currentCount = prev.length;
-        if (currentCount >= 10) {
-          alert("Maximal 10 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+        if (currentCount >= 50) {
+          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
           return prev;
         }
 
-        let filesToAdd = acceptedFiles;
-        if (currentCount + acceptedFiles.length > 10) {
-          alert(`Es können nur noch ${10 - currentCount} Bilder hinzugefügt werden (Maximal 10 insgesamt).`);
-          filesToAdd = acceptedFiles.slice(0, 10 - currentCount);
+        let filesToAdd = imageFiles;
+        if (currentCount + imageFiles.length > 50) {
+          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
+          filesToAdd = imageFiles.slice(0, 50 - currentCount);
         }
 
         const newItems = filesToAdd.map(file => ({
@@ -400,19 +556,29 @@ export default function Home() {
     }
   }, []);
 
-  const appendDisplayBatchFiles = useCallback((acceptedFiles: File[]) => {
+  const appendDisplayBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
+      if (!skipCsvCheck) {
+        const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
+        if (csvFile) {
+          handleCsvImport(csvFile, "display");
+        }
+      }
+
+      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      if (imageFiles.length === 0) return;
+
       setDisplayBatchItems(prev => {
         const currentCount = prev.length;
-        if (currentCount >= 10) {
-          alert("Maximal 10 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+        if (currentCount >= 50) {
+          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
           return prev;
         }
 
-        let filesToAdd = acceptedFiles;
-        if (currentCount + acceptedFiles.length > 10) {
-          alert(`Es können nur noch ${10 - currentCount} Bilder hinzugefügt werden (Maximal 10 insgesamt).`);
-          filesToAdd = acceptedFiles.slice(0, 10 - currentCount);
+        let filesToAdd = imageFiles;
+        if (currentCount + imageFiles.length > 50) {
+          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
+          filesToAdd = imageFiles.slice(0, 50 - currentCount);
         }
 
         const newItems = filesToAdd.map(file => ({
@@ -443,20 +609,31 @@ export default function Home() {
     }
   }, []);
 
-  const appendBoosterBatchFiles = useCallback((acceptedFiles: File[]) => {
+  const appendBoosterBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
+      if (!skipCsvCheck) {
+        const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
+        if (csvFile) {
+          handleCsvImport(csvFile, "booster");
+        }
+      }
+
+      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      if (imageFiles.length === 0) return;
+
       setBoosterBatchItems(prev => {
         const currentCount = prev.length;
-        if (currentCount >= 10) {
-          alert("Maximal 10 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+        if (currentCount >= 50) {
+          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
           return prev;
         }
 
-        let filesToAdd = acceptedFiles;
-        if (currentCount + acceptedFiles.length > 10) {
-          alert(`Es können nur noch ${10 - currentCount} Bilder hinzugefügt werden (Maximal 10 insgesamt).`);
-          filesToAdd = acceptedFiles.slice(0, 10 - currentCount);
+        let filesToAdd = imageFiles;
+        if (currentCount + imageFiles.length > 50) {
+          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
+          filesToAdd = imageFiles.slice(0, 50 - currentCount);
         }
+
 
         const newItems = filesToAdd.map(file => ({
           id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
@@ -485,6 +662,58 @@ export default function Home() {
       });
     }
   }, []);
+
+  const handleCsvImport = useCallback(async (csvFile: File, studioType: 'card' | 'display' | 'booster') => {
+    setIsCsvLoading(true);
+    setCsvStatusMsg("CSV-Datei wird analysiert...");
+
+    try {
+      const csvRows = await parseCsvFile(csvFile);
+      if (csvRows.length === 0) {
+        alert("Keine gültigen Bild-URLs in der CSV-Datei gefunden. Bitte verwende das Format: Name, BildURL");
+        setIsCsvLoading(false);
+        setCsvStatusMsg("");
+        return;
+      }
+
+      const downloadedFiles: File[] = [];
+      let successCount = 0;
+      let failCount = 0;
+
+      for (let i = 0; i < csvRows.length; i++) {
+        const row = csvRows[i];
+        setCsvStatusMsg(`Lade Bild ${i + 1} von ${csvRows.length} aus CSV... (${row.name || 'Kartenausschnitt'})`);
+        try {
+          const defaultName = row.name || `csv_bild_${i + 1}`;
+          const file = await fetchImageAsFile(row.url, defaultName);
+          downloadedFiles.push(file);
+          successCount++;
+        } catch (err) {
+          console.error(`Fehler beim Laden von Bild ${i + 1} (${row.url}):`, err);
+          failCount++;
+        }
+      }
+
+      if (downloadedFiles.length > 0) {
+        if (studioType === "card") appendCardBatchFiles(downloadedFiles, true);
+        else if (studioType === "display") appendDisplayBatchFiles(downloadedFiles, true);
+        else if (studioType === "booster") appendBoosterBatchFiles(downloadedFiles, true);
+      }
+
+      if (failCount > 0) {
+        alert(`${successCount} Bilder erfolgreich geladen. ${failCount} Bild-URLs konnten nicht abgerufen werden.`);
+      } else {
+        setCsvStatusMsg(`✅ ${successCount} Bilder erfolgreich aus CSV geladen!`);
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      alert(`Fehler beim Verarbeiten der CSV-Datei: ${msg}`);
+    } finally {
+      setIsCsvLoading(false);
+      setTimeout(() => setCsvStatusMsg(""), 4000);
+    }
+  }, [appendCardBatchFiles, appendDisplayBatchFiles, appendBoosterBatchFiles]);
+
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<string>("16:9");
@@ -1501,9 +1730,11 @@ export default function Home() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
     },
-    maxFiles: 10,
+    maxFiles: 50,
     disabled: isProcessing || isCardBatchProcessing
   });
 
@@ -1516,9 +1747,11 @@ export default function Home() {
   } = useDropzone({
     onDrop: onDisplayDrop,
     accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
     },
-    maxFiles: 10,
+    maxFiles: 50,
     disabled: isDisplayProcessing || isDisplayBatchProcessing
   });
 
@@ -1531,9 +1764,11 @@ export default function Home() {
   } = useDropzone({
     onDrop: onBoosterDrop,
     accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
     },
-    maxFiles: 10,
+    maxFiles: 50,
     disabled: isBoosterProcessing || isBoosterBatchProcessing
   });
 
@@ -1603,9 +1838,11 @@ export default function Home() {
   } = useDropzone({
     onDrop: appendCardBatchFiles,
     accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
     },
-    maxFiles: 10,
+    maxFiles: 50,
     disabled: isProcessing || isCardBatchProcessing,
     noClick: true
   });
@@ -1617,9 +1854,11 @@ export default function Home() {
   } = useDropzone({
     onDrop: appendDisplayBatchFiles,
     accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
     },
-    maxFiles: 10,
+    maxFiles: 50,
     disabled: isDisplayProcessing || isDisplayBatchProcessing,
     noClick: true
   });
@@ -1631,9 +1870,11 @@ export default function Home() {
   } = useDropzone({
     onDrop: appendBoosterBatchFiles,
     accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
     },
-    maxFiles: 10,
+    maxFiles: 50,
     disabled: isBoosterProcessing || isBoosterBatchProcessing,
     noClick: true
   });
@@ -2645,7 +2886,7 @@ export default function Home() {
               Stapelverarbeitung ({items.length} {items.length === 1 ? "Bild" : "Bilder"})
             </h2>
             <p className="text-xs text-zinc-500 mt-1">
-              Verarbeite bis zu 10 Bilder nacheinander. Status: {completedCount} abgeschlossen, {failedCount} fehlgeschlagen, {pendingCount} wartend.
+              Verarbeite bis zu 50 Bilder nacheinander. Status: {completedCount} abgeschlossen, {failedCount} fehlgeschlagen, {pendingCount} wartend.
             </p>
           </div>
           
@@ -2675,6 +2916,37 @@ export default function Home() {
                 <X className="w-4 h-4" />
                 Verarbeitung abbrechen
               </button>
+            )}
+
+            {!isProcessingBatch && (
+              <>
+                <label className="px-3.5 py-2 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-950/20 hover:bg-purple-950/40 text-purple-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer">
+                  <FileSpreadsheet className="w-4 h-4 text-purple-400" />
+                  CSV importieren
+                  <input
+                    type="file"
+                    accept=".csv,text/csv,text/plain"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        handleCsvImport(file, studioType);
+                        e.target.value = "";
+                      }
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={downloadSampleCsv}
+                  className="px-3 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 text-zinc-400 hover:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="Muster-CSV Vorlage herunterladen"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Muster-CSV
+                </button>
+              </>
             )}
 
             {completedCount > 0 && !isProcessingBatch && (
@@ -2711,6 +2983,17 @@ export default function Home() {
             )}
           </div>
         </div>
+
+        {(isCsvLoading || csvStatusMsg) && (
+          <div className="mb-4 p-3.5 rounded-xl border border-purple-500/30 bg-purple-950/30 text-purple-200 text-xs font-medium flex items-center gap-3 animate-in fade-in">
+            {isCsvLoading ? (
+              <Loader2 className="w-4 h-4 text-purple-400 animate-spin flex-shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            )}
+            <span>{csvStatusMsg}</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-1">
           {items.map((item, idx) => {
@@ -3226,7 +3509,7 @@ export default function Home() {
                     Ziehe dein Kartenbild hierher oder klicke auf <span className="text-purple-400">Durchsuchen</span>
                   </p>
                   <p className="text-xs text-zinc-500 mt-2 text-center">
-                    Unterstützt PNG, JPG, JPEG, WEBP (bis zu 10MB)
+                    Unterstützt PNG, JPG, JPEG, WEBP oder CSV (für Bulk-Erstellung)
                   </p>
                 </div>
               ) : (
