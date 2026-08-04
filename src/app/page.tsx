@@ -231,15 +231,28 @@ interface CsvRowItem {
 }
 
 const parseCsvFile = async (file: File): Promise<CsvRowItem[]> => {
-  const text = await file.text();
+  let text = await file.text();
+  // Strip UTF-8 BOM if present (\uFEFF)
+  text = text.replace(/^\uFEFF/, "").trim();
+  if (!text) return [];
+
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
   if (lines.length === 0) return [];
 
+  // Auto-detect delimiter based on frequency in header line
   const headerLine = lines[0];
-  let separator = ",";
-  if (headerLine.includes(";")) separator = ";";
-  else if (headerLine.includes("\t")) separator = "\t";
+  const commaCount = (headerLine.match(/,/g) || []).length;
+  const semiCount = (headerLine.match(/;/g) || []).length;
+  const tabCount = (headerLine.match(/\t/g) || []).length;
+  const pipeCount = (headerLine.match(/\|/g) || []).length;
 
+  let separator = ",";
+  let max = commaCount;
+  if (semiCount > max) { separator = ";"; max = semiCount; }
+  if (tabCount > max) { separator = "\t"; max = tabCount; }
+  if (pipeCount > max) { separator = "|"; max = pipeCount; }
+
+  // Split lines into cells handling quoted strings
   const rows = lines.map(line => {
     const cells: string[] = [];
     let current = "";
@@ -261,50 +274,107 @@ const parseCsvFile = async (file: File): Promise<CsvRowItem[]> => {
 
   if (rows.length === 0) return [];
 
-  const firstRow = rows[0].map(c => c.toLowerCase().replace(/['"]/g, ""));
+  const normalizeHeader = (str: string) => str.toLowerCase().replace(/[\uFEFF"'\s\-_]/g, "");
+  const firstRowNormalized = rows[0].map(c => normalizeHeader(c));
+
+  const urlHeaders = [
+    "url", "imageurl", "image", "bild", "link", "src", "bildurl", "bildpfad", 
+    "pfad", "file", "datei", "photo", "foto", "cardurl", "kartenurl", "media", 
+    "img", "imagepath", "bildlink"
+  ];
+  const nameHeaders = [
+    "name", "titel", "title", "kartenname", "cardname", "label", "bezeichnung", 
+    "id", "card", "karte"
+  ];
+
   let urlColIdx = -1;
   let nameColIdx = -1;
 
-  firstRow.forEach((col, idx) => {
-    if (["url", "image_url", "image", "bild", "link", "src", "bild_url", "imageurl"].includes(col)) {
+  firstRowNormalized.forEach((col, idx) => {
+    if (urlHeaders.includes(col)) {
       urlColIdx = idx;
     }
-    if (["name", "titel", "title", "karten_name", "card_name", "kartenname", "label", "bezeichnung"].includes(col)) {
+    if (nameHeaders.includes(col)) {
       nameColIdx = idx;
     }
   });
 
-  const startIndex = (urlColIdx !== -1 || nameColIdx !== -1) ? 1 : 0;
+  const extractUrl = (cell: string): string => {
+    if (!cell) return "";
+    let cleaned = cell.trim().replace(/^["']|["']$/g, "").trim();
+    if (!cleaned) return "";
+    if (cleaned.startsWith("//")) return "https:" + cleaned;
+    if (cleaned.startsWith("www.")) return "https://" + cleaned;
+    if (cleaned.startsWith("http://") || cleaned.startsWith("https://") || cleaned.startsWith("data:image/")) {
+      return cleaned;
+    }
+    const httpMatch = cleaned.match(/(https?:\/\/[^\s"',]+)/i);
+    if (httpMatch) return httpMatch[1];
+    
+    if (/\.(png|jpg|jpeg|webp|gif|svg)(\?.*)?$/i.test(cleaned)) {
+      if (!cleaned.startsWith("http")) return "https://" + cleaned;
+      return cleaned;
+    }
+    return "";
+  };
+
+  // Determine if row 0 contains actual URL data vs headers
+  const row0HasUrl = rows[0].some(cell => !!extractUrl(cell));
+  const isRow0Header = (urlColIdx !== -1 || nameColIdx !== -1) && !row0HasUrl;
+  const startIndex = isRow0Header ? 1 : 0;
+
   const items: CsvRowItem[] = [];
 
   for (let i = startIndex; i < rows.length; i++) {
     const row = rows[i];
-    if (row.length === 0) continue;
+    if (row.length === 0 || (row.length === 1 && !row[0])) continue;
 
     let foundUrl = "";
     let foundName = "";
 
     if (urlColIdx !== -1 && row[urlColIdx]) {
-      foundUrl = row[urlColIdx].replace(/^["']|["']$/g, "");
-    } else {
-      const urlCell = row.find(cell => {
-        const cleaned = cell.replace(/^["']|["']$/g, "");
-        return cleaned.startsWith("http://") || cleaned.startsWith("https://") || cleaned.startsWith("data:image");
-      });
-      if (urlCell) foundUrl = urlCell.replace(/^["']|["']$/g, "");
+      foundUrl = extractUrl(row[urlColIdx]);
     }
 
-    if (nameColIdx !== -1 && row[nameColIdx]) {
-      foundName = row[nameColIdx].replace(/^["']|["']$/g, "");
-    } else {
-      if (row.length > 1 && !row[0].startsWith("http") && !row[0].startsWith("data:")) {
-        foundName = row[0].replace(/^["']|["']$/g, "");
+    if (!foundUrl) {
+      for (let c = 0; c < row.length; c++) {
+        const candidate = extractUrl(row[c]);
+        if (candidate) {
+          foundUrl = candidate;
+          break;
+        }
       }
     }
 
-    if (foundUrl) {
-      items.push({ url: foundUrl, name: foundName || undefined });
+    if (!foundUrl) continue;
+
+    if (nameColIdx !== -1 && row[nameColIdx]) {
+      foundName = row[nameColIdx].replace(/^["']|["']$/g, "").trim();
     }
+
+    if (!foundName) {
+      const nonUrlCell = row.find(cell => {
+        const cleaned = cell.replace(/^["']|["']$/g, "").trim();
+        return cleaned.length > 0 && extractUrl(cleaned) !== foundUrl;
+      });
+      if (nonUrlCell) {
+        foundName = nonUrlCell.replace(/^["']|["']$/g, "").trim();
+      }
+    }
+
+    if (!foundName) {
+      try {
+        const urlObj = new URL(foundUrl);
+        const pathSegments = urlObj.pathname.split("/").filter(Boolean);
+        if (pathSegments.length > 0) {
+          foundName = pathSegments[pathSegments.length - 1].replace(/\.[^/.]+$/, "");
+        }
+      } catch {
+        foundName = `bild_${i + 1}`;
+      }
+    }
+
+    items.push({ url: foundUrl, name: foundName || `bild_${i + 1}` });
   }
 
   return items;
@@ -670,7 +740,11 @@ export default function Home() {
     try {
       const csvRows = await parseCsvFile(csvFile);
       if (csvRows.length === 0) {
-        alert("Keine gültigen Bild-URLs in der CSV-Datei gefunden. Bitte verwende das Format: Name, BildURL");
+        alert(
+          "Keine gültigen Bild-URLs in der CSV-Datei gefunden.\n\n" +
+          "Stelle sicher, dass deine CSV vollständige Bild-URLs enthält (z.B. https://domain.com/bild.png).\n" +
+          "Klicke auf 'Muster-CSV', um eine passende Beispiel-Vorlage herunterzuladen."
+        );
         setIsCsvLoading(false);
         setCsvStatusMsg("");
         return;
