@@ -88,7 +88,7 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64"); // Send original image to Gemini so it has full context of backgrounds
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
+    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
     let layoutText = "";
     let lastError;
 
@@ -173,7 +173,6 @@ export async function POST(request: Request) {
       } catch (e: any) {
         console.warn(`[Crop API] Model ${model} failed: ${e.message}`);
         lastError = e;
-        // If it's a safety block or validation/schema structure issue, stop and throw immediately
         if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
           throw e;
         }
@@ -198,6 +197,23 @@ export async function POST(request: Request) {
           isCleanCardImage = !!parsed.isCleanCardImage;
           cardName = parsed.cardName || "";
           cardNumber = parsed.cardNumber || "";
+
+          // Scale normalized 0-1000 coordinates if Gemini returned them on large images
+          if (cardCoords.x2 <= 1000 && cardCoords.y2 <= 1000 && (width > 1050 || height > 1050)) {
+            console.log("[Crop API] Scaling Gemini 0-1000 normalized card coordinates to image size.");
+            cardCoords.x1 = Math.round((cardCoords.x1 / 1000) * width);
+            cardCoords.x2 = Math.round((cardCoords.x2 / 1000) * width);
+            cardCoords.y1 = Math.round((cardCoords.y1 / 1000) * height);
+            cardCoords.y2 = Math.round((cardCoords.y2 / 1000) * height);
+          }
+
+          if (illustrationCoords.x2 <= 1000 && illustrationCoords.y2 <= 1000 && (width > 1050 || height > 1050)) {
+            illustrationCoords.x1 = Math.round((illustrationCoords.x1 / 1000) * width);
+            illustrationCoords.x2 = Math.round((illustrationCoords.x2 / 1000) * width);
+            illustrationCoords.y1 = Math.round((illustrationCoords.y1 / 1000) * height);
+            illustrationCoords.y2 = Math.round((illustrationCoords.y2 / 1000) * height);
+          }
+
           console.log("[Crop API] AI successfully detected layout:", parsed);
         } else {
           throw new Error("Missing card or illustration coordinates in model response.");
@@ -210,7 +226,6 @@ export async function POST(request: Request) {
     if (skipCardCrop || isCleanCardImage) {
       console.log(`[Crop API] Using full image dimensions for card coordinates (skipCardCrop: ${skipCardCrop}, isCleanCardImage: ${isCleanCardImage}).`);
       cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
-      // If we don't have illustration coords yet, calculate a safe default illustration area (e.g. 70% centered box)
       if (!illustrationCoords) {
         illustrationCoords = {
           x1: Math.round(width * 0.15),
@@ -227,12 +242,11 @@ export async function POST(request: Request) {
       
       let tWidth = trimmedWidth;
       let tHeight = trimmedHeight;
-      let cx1 = trimmedWidth === width ? 0 : (width - trimmedWidth) / 2; // approximation if trim was not used
+      let cx1 = trimmedWidth === width ? 0 : (width - trimmedWidth) / 2;
       let cy1 = trimmedHeight === height ? 0 : (height - trimmedHeight) / 2;
       let cx2 = cx1 + trimmedWidth;
       let cy2 = cy1 + trimmedHeight;
 
-      // Programmatic backup trim to refine card borders
       try {
         const trimmed = await sharp(originalImageBuffer)
           .trim()
@@ -260,9 +274,9 @@ export async function POST(request: Request) {
 
       cardCoords = { x1: cx1, y1: cy1, x2: cx2, y2: cy2 };
       illustrationCoords = {
-        x1: cx1 + Math.round(tWidth * 0.20),
-        y1: cy1 + Math.round(tHeight * 0.22),
-        x2: cx1 + Math.round(tWidth * 0.80),
+        x1: cx1 + Math.round(tWidth * 0.15),
+        y1: cy1 + Math.round(tHeight * 0.18),
+        x2: cx1 + Math.round(tWidth * 0.85),
         y2: cy1 + Math.round(tHeight * 0.58)
       };
     }
@@ -272,11 +286,10 @@ export async function POST(request: Request) {
     if (hasSampleWatermark) {
       console.log("[Crop API] Watermark 'SAMPLE' detected. Attempting to remove it...");
       try {
-        const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
+        const imageModels = ["gemini-2.5-flash-image", "gemini-2.0-flash-exp"];
         let cleanedBase64 = "";
         let lastCleanError;
 
-        // Determine best aspect ratio for editing
         let editAspectRatio = "3:4";
         const ratio = width / height;
         if (Math.abs(ratio - 1) < 0.15) {
@@ -323,7 +336,6 @@ export async function POST(request: Request) {
 
             if (cleanedBase64) {
               const cleanedBuf = Buffer.from(cleanedBase64, "base64");
-              // Resize back to original image dimensions to maintain coordinate alignment
               workingImageBuffer = await sharp(cleanedBuf)
                 .resize(width, height)
                 .toBuffer();
@@ -345,7 +357,6 @@ export async function POST(request: Request) {
     }
 
     // Enforce standard trading card aspect ratio (~0.715) on detected card coordinates
-    // Only apply if we are NOT skipping card crop and NOT using the full clean card image
     if (!skipCardCrop && !isCleanCardImage) {
       const TARGET_RATIO = 0.715;
       const cardW = cardCoords.x2 - cardCoords.x1;
@@ -355,19 +366,14 @@ export async function POST(request: Request) {
         const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
         const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
 
-        // Adjust dimensions to match TARGET_RATIO of 0.715
         if (currentRatio > TARGET_RATIO) {
-          // Too wide (contains white space on sides) - shrink width centered
           const newW = cardH * TARGET_RATIO;
           cardCoords.x1 = centerX - newW / 2;
           cardCoords.x2 = centerX + newW / 2;
-          console.log(`[Crop API] Adjusted card width to match 0.715 aspect ratio: ${cardW.toFixed(1)} -> ${newW.toFixed(1)}`);
         } else if (currentRatio < TARGET_RATIO) {
-          // Too tall/narrow - shrink height centered
           const newH = cardW / TARGET_RATIO;
           cardCoords.y1 = centerY - newH / 2;
           cardCoords.y2 = centerY + newH / 2;
-          console.log(`[Crop API] Adjusted card height to match 0.715 aspect ratio: ${cardH.toFixed(1)} -> ${newH.toFixed(1)}`);
         }
       }
     }
@@ -391,20 +397,23 @@ export async function POST(request: Request) {
     // Validate illustration crop boundaries
     if (cropWidth < 10 || cropHeight < 10) {
       console.warn("[Crop API] Crop area too small. Resetting to fallback.");
-      ix1 = cx1 + Math.round(cardWidth * 0.20);
-      iy1 = cy1 + Math.round(cardHeight * 0.22);
-      ix2 = cx1 + Math.round(cardWidth * 0.80);
-      iy2 = cx1 + Math.round(cardHeight * 0.58);
+      ix1 = cx1 + Math.round(cardWidth * 0.15);
+      iy1 = cy1 + Math.round(cardHeight * 0.18);
+      ix2 = cx1 + Math.round(cardWidth * 0.85);
+      iy2 = cy1 + Math.round(cardHeight * 0.58);
       cropWidth = ix2 - ix1;
       cropHeight = iy2 - iy1;
     }
 
-    // Crop the card itself, downscaling it to a reasonable maximum height (800px) for performance
-    let cardResizeHeight = Math.min(800, cardHeight);
-    let cardResizeWidth = Math.round((cardWidth / cardHeight) * cardResizeHeight);
+    // Ensure strict bounds before Sharp extraction
+    const extractCardWidth = Math.min(cardWidth, width - cx1);
+    const extractCardHeight = Math.min(cardHeight, height - cy1);
+
+    let cardResizeHeight = Math.min(800, extractCardHeight);
+    let cardResizeWidth = Math.round((extractCardWidth / extractCardHeight) * cardResizeHeight);
 
     const cardBuffer = await sharp(workingImageBuffer)
-      .extract({ left: cx1, top: cy1, width: cardWidth, height: cardHeight })
+      .extract({ left: cx1, top: cy1, width: extractCardWidth, height: extractCardHeight })
       .resize(cardResizeWidth, cardResizeHeight)
       .png({ compressionLevel: 7 })
       .toBuffer();
@@ -426,8 +435,11 @@ export async function POST(request: Request) {
     const trimmedCardBase64 = roundedCardBuffer.toString("base64");
 
     // Crop the inner illustration (for outpainting input), resizing to max 512px and compressing as JPEG
+    const extractCropWidth = Math.min(cropWidth, width - ix1);
+    const extractCropHeight = Math.min(cropHeight, height - iy1);
+
     const croppedBuffer = await sharp(workingImageBuffer)
-      .extract({ left: ix1, top: iy1, width: cropWidth, height: cropHeight })
+      .extract({ left: ix1, top: iy1, width: extractCropWidth, height: extractCropHeight })
       .resize(512, 512, { fit: "inside" })
       .jpeg({ quality: 85 })
       .toBuffer();
