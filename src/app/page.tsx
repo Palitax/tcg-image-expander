@@ -134,8 +134,12 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
     try {
       return await response.json();
     } catch {
-      throw new Error("Invalid response format received from server.");
+      throw new Error("Ungültiges Antwortformat vom Server empfangen.");
     }
+  }
+
+  if (response.status === 413) {
+    throw new Error("Die Bilddatei ist zu groß für den Server (über 4.5 MB).");
   }
 
   // Handle error status
@@ -152,6 +156,58 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
     }
   }
   throw new Error(errorMessage);
+};
+
+const optimizeImageFile = async (file: File, maxDimension = 2500): Promise<File> => {
+  if (file.size <= 3 * 1024 * 1024) return file;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const mimeType = file.type === "image/png" ? "image/png" : "image/jpeg";
+      canvas.toBlob(
+        (blob) => {
+          if (blob && blob.size < file.size) {
+            const optimizedFile = new File([blob], file.name, { type: mimeType });
+            console.log(`[Image Optimizer] Reduced file size: ${(file.size / 1024 / 1024).toFixed(2)}MB -> ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
+            resolve(optimizedFile);
+          } else {
+            resolve(file);
+          }
+        },
+        mimeType,
+        0.90
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
+    img.src = url;
+  });
 };
 
 const getErrorMessage = (err: unknown): string => {
@@ -2036,8 +2092,8 @@ export default function Home() {
   };
 
   const handleProcessImage = async (customFile?: File | unknown) => {
-    const fileToProcess = (customFile instanceof File) ? customFile : file;
-    if (!fileToProcess) return;
+    const rawFile = (customFile instanceof File) ? customFile : file;
+    if (!rawFile) return;
     
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -2055,6 +2111,9 @@ export default function Home() {
     try {
       // STEP 1 & 2: Bounding Box Detection & Crop
       updateStepStatus("LAYOUT", "running");
+      setActiveStepMessage("Bildgröße wird für Server optimiert...");
+      
+      const fileToProcess = await optimizeImageFile(rawFile);
       setActiveStepMessage("Locating artwork bounding box...");
       
       const cropFormData = new FormData();
@@ -2177,8 +2236,8 @@ export default function Home() {
   };
 
   const handleProcessDisplayImage = async (customFile?: File | unknown) => {
-    const fileToProcess = (customFile instanceof File) ? customFile : displayFile;
-    if (!fileToProcess) return;
+    const rawFile = (customFile instanceof File) ? customFile : displayFile;
+    if (!rawFile) return;
     setIsDisplayProcessing(true);
     setDisplayErrorMessage(null);
     setDisplayResultUrl(null);
@@ -2195,6 +2254,9 @@ export default function Home() {
       console.log("[Display Studio] Starting Layout & Crop step...");
       // STEP 1 & 2: Bounding Box/Polygon Detection & Crop
       updateDisplayStepStatus("LAYOUT", "running");
+      setDisplayActiveStepMessage("Bildgröße wird für Server optimiert...");
+      
+      const fileToProcess = await optimizeImageFile(rawFile);
       setDisplayActiveStepMessage("Locating display box boundary...");
       
       const cropFormData = new FormData();
@@ -2347,8 +2409,8 @@ export default function Home() {
   };
 
   const handleProcessBoosterImage = async (customFile?: File | unknown) => {
-    const fileToProcess = (customFile instanceof File) ? customFile : boosterFile;
-    if (!fileToProcess) return;
+    const rawFile = (customFile instanceof File) ? customFile : boosterFile;
+    if (!rawFile) return;
     setIsBoosterProcessing(true);
     setBoosterErrorMessage(null);
     setBoosterResultUrl(null);
@@ -2365,6 +2427,9 @@ export default function Home() {
       console.log("[Booster Studio] Starting Layout & Crop step...");
       // STEP 1 & 2: Bounding Box/Polygon Detection & Crop
       updateBoosterStepStatus("LAYOUT", "running");
+      setBoosterActiveStepMessage("Bildgröße wird für Server optimiert...");
+      
+      const fileToProcess = await optimizeImageFile(rawFile);
       setBoosterActiveStepMessage("Locating booster pack boundary...");
       
       const cropFormData = new FormData();
