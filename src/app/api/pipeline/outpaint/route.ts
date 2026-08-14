@@ -63,10 +63,15 @@ export async function POST(request: Request) {
     const base64Data = croppedImage.includes(",") ? croppedImage.split(",")[1] : croppedImage;
     const croppedBuffer = Buffer.from(base64Data, "base64");
 
-    // Get target background dimensions
-    const { width: bgWidth, height: bgHeight } = getDimensionsForRatio(aspectRatio);
+    // Check if dual ratio (16:9 AND 9:16) is requested
+    const isDual = aspectRatio === "both" || aspectRatio === "16:9+9:16" || aspectRatio === "dual";
+
+    // Target background dimensions for single or fallback
+    const { width: bgWidth, height: bgHeight } = getDimensionsForRatio(isDual ? "16:9" : aspectRatio);
+    const { width: bgWidth916, height: bgHeight916 } = getDimensionsForRatio("9:16");
 
     let backgroundImageBase64 = "";
+    let verticalBackgroundImageBase64 = "";
     let usedFallback = false;
     let fallbackReason = "";
 
@@ -128,64 +133,75 @@ export async function POST(request: Request) {
         outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the background environment to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic. Do NOT replicate, extend, or generate any characters, figures, humans, text, play cost symbols, power attributes, or card borders. Focus strictly on extending the background scenery.`;
       }
 
-      // STEP 3B: Generate background with image models fallback chain
-      const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
-      let generatedBase64 = "";
-      let lastImageError;
+      // Helper function to generate single background image for a given aspect ratio
+      const generateBgForRatio = async (targetRatio: string): Promise<string> => {
+        const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
+        let generatedBase64 = "";
+        let lastImageError;
 
-      for (const imgModel of imageModels) {
-        try {
-          console.log(`[Outpaint API] Attempting Gemini Image Generation with model ${imgModel} (mode: ${mode}, isDisplay: ${isDisplay})`);
-          
-          let contentsArray: any[] = [];
-          if (mode === "backdrop" || isDisplay) {
-            // Text-to-Image mode: do not pass the reference image to prevent character/box replication in background
-            contentsArray = [outpaintPrompt];
-          } else {
-            // Outpaint/Image-to-Image mode: pass the reference image to extend it
-            contentsArray = [
-              {
-                inlineData: {
-                  data: base64Data,
-                  mimeType: "image/png"
+        for (const imgModel of imageModels) {
+          try {
+            console.log(`[Outpaint API] Attempting Gemini Image Generation for ratio ${targetRatio} with model ${imgModel} (mode: ${mode}, isDisplay: ${isDisplay})`);
+            
+            let contentsArray: any[] = [];
+            if (mode === "backdrop" || isDisplay) {
+              contentsArray = [outpaintPrompt];
+            } else {
+              contentsArray = [
+                {
+                  inlineData: {
+                    data: base64Data,
+                    mimeType: "image/png"
+                  }
+                },
+                outpaintPrompt
+              ];
+            }
+
+            const imagenResponse = await generateContentWithRetry(ai, {
+              model: imgModel,
+              contents: contentsArray,
+              config: {
+                responseModalities: ["IMAGE"],
+                imageConfig: {
+                  aspectRatio: targetRatio
                 }
-              },
-              outpaintPrompt
-            ];
-          }
+              }
+            });
 
-          const imagenResponse = await generateContentWithRetry(ai, {
-            model: imgModel,
-            contents: contentsArray,
-            config: {
-              responseModalities: ["IMAGE"],
-              imageConfig: {
-                aspectRatio: aspectRatio || "3:4"
+            const parts = imagenResponse.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              if (part.inlineData?.data) {
+                generatedBase64 = part.inlineData.data;
+                break;
               }
             }
-          });
-
-          const parts = imagenResponse.candidates?.[0]?.content?.parts || [];
-          for (const part of parts) {
-            if (part.inlineData?.data) {
-              generatedBase64 = part.inlineData.data;
+            if (generatedBase64) {
+              console.log(`[Outpaint API] Image generated successfully for ratio ${targetRatio} with ${imgModel}`);
               break;
             }
+          } catch (e: any) {
+            console.warn(`[Outpaint API] Image generation for ratio ${targetRatio} with ${imgModel} failed: ${e.message}`);
+            lastImageError = e;
           }
-          if (generatedBase64) {
-            console.log(`[Outpaint API] Image generated successfully with ${imgModel}`);
-            break;
-          }
-        } catch (e: any) {
-          console.warn(`[Outpaint API] Image generation with ${imgModel} failed: ${e.message}`);
-          lastImageError = e;
         }
-      }
 
-      if (generatedBase64) {
-        backgroundImageBase64 = generatedBase64;
+        if (generatedBase64) {
+          return generatedBase64;
+        }
+        throw lastImageError || new Error(`No image bytes returned for ratio ${targetRatio}.`);
+      };
+
+      if (isDual) {
+        // Generate both 16:9 and 9:16 backgrounds
+        const [bg169, bg916] = await Promise.all([
+          generateBgForRatio("16:9"),
+          generateBgForRatio("9:16")
+        ]);
+        backgroundImageBase64 = bg169;
+        verticalBackgroundImageBase64 = bg916;
       } else {
-        throw lastImageError || new Error("No image bytes returned by any Gemini Image model.");
+        backgroundImageBase64 = await generateBgForRatio(aspectRatio || "3:4");
       }
 
     } catch (e: any) {
@@ -202,12 +218,23 @@ export async function POST(request: Request) {
         .toBuffer();
 
       backgroundImageBase64 = blurredBgBuffer.toString("base64");
+
+      if (isDual) {
+        const blurredBgBuffer916 = await sharp(croppedBuffer)
+          .resize(bgWidth916, bgHeight916, { fit: "cover" })
+          .blur(45)
+          .modulate({ brightness: 0.55, saturation: 0.85 })
+          .webp({ quality: 80 })
+          .toBuffer();
+        verticalBackgroundImageBase64 = blurredBgBuffer916.toString("base64");
+      }
     }
 
     const mimeType = usedFallback ? "image/webp" : "image/jpeg";
 
     return NextResponse.json({
       backgroundImage: `data:${mimeType};base64,${backgroundImageBase64}`,
+      verticalBackgroundImage: verticalBackgroundImageBase64 ? `data:${mimeType};base64,${verticalBackgroundImageBase64}` : undefined,
       usedFallback,
       fallbackReason
     });

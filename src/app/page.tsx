@@ -26,7 +26,8 @@ import {
   Check,
   FileSpreadsheet,
   FileText,
-  Loader2
+  Loader2,
+  Smartphone
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -65,8 +66,10 @@ interface BatchItem {
   status: "pending" | "processing" | "completed" | "failed";
   progressMsg?: string;
   resultImageUrl?: string;
+  verticalResultImageUrl?: string;
   originalCardUrl?: string;
   backgroundImageUrl?: string;
+  verticalBackgroundImageUrl?: string;
   cutoutImageUrl?: string;
   error?: string;
   isSaved?: boolean;
@@ -846,16 +849,19 @@ export default function Home() {
 
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<string>("16:9");
+  const [aspectRatio, setAspectRatio] = useState<string>("both");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [steps, setSteps] = useState<ProgressStep[]>(INITIAL_STEPS);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
+  const [verticalResultImageUrl, setVerticalResultImageUrl] = useState<string | null>(null);
   const [usedAmbientFallback, setUsedAmbientFallback] = useState<boolean>(false);
   const [ambientFallbackReason, setAmbientFallbackReason] = useState<string>("");
   const [usedCropFallback, setUsedCropFallback] = useState<boolean>(false);
   const [trimmedCard, setTrimmedCard] = useState<string | null>(null);
   const [backgroundImageUrl, setBackgroundImageUrl] = useState<string | null>(null);
+  const [verticalBackgroundImageUrl, setVerticalBackgroundImageUrl] = useState<string | null>(null);
+  const [activeCardPreviewFormat, setActiveCardPreviewFormat] = useState<"16:9" | "9:16">("16:9");
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("outpaint");
   const [shouldCropCard, setShouldCropCard] = useState<boolean>(true);
 
@@ -913,8 +919,11 @@ export default function Home() {
   const [displayFile, setDisplayFile] = useState<File | null>(null);
   const [displayPreviewUrl, setDisplayPreviewUrl] = useState<string | null>(null);
   const [displayResultUrl, setDisplayResultUrl] = useState<string | null>(null);
+  const [displayVerticalResultUrl, setDisplayVerticalResultUrl] = useState<string | null>(null);
   const [displayCutoutUrl, setDisplayCutoutUrl] = useState<string | null>(null);
   const [displayBgUrl, setDisplayBgUrl] = useState<string | null>(null);
+  const [displayVerticalBgUrl, setDisplayVerticalBgUrl] = useState<string | null>(null);
+  const [activeDisplayPreviewFormat, setActiveDisplayPreviewFormat] = useState<"16:9" | "9:16">("16:9");
   const [isDisplayProcessing, setIsDisplayProcessing] = useState<boolean>(false);
   const [displayErrorMessage, setDisplayErrorMessage] = useState<string | null>(null);
   const [displayAspectRatio, setDisplayAspectRatio] = useState<string>("3:4");
@@ -928,8 +937,11 @@ export default function Home() {
   const [boosterFile, setBoosterFile] = useState<File | null>(null);
   const [boosterPreviewUrl, setBoosterPreviewUrl] = useState<string | null>(null);
   const [boosterResultUrl, setBoosterResultUrl] = useState<string | null>(null);
+  const [boosterVerticalResultUrl, setBoosterVerticalResultUrl] = useState<string | null>(null);
   const [boosterCutoutUrl, setBoosterCutoutUrl] = useState<string | null>(null);
   const [boosterBgUrl, setBoosterBgUrl] = useState<string | null>(null);
+  const [boosterVerticalBgUrl, setBoosterVerticalBgUrl] = useState<string | null>(null);
+  const [activeBoosterPreviewFormat, setActiveBoosterPreviewFormat] = useState<"16:9" | "9:16">("16:9");
   const [isBoosterProcessing, setIsBoosterProcessing] = useState<boolean>(false);
   const [boosterErrorMessage, setBoosterErrorMessage] = useState<string | null>(null);
   const [boosterAspectRatio, setBoosterAspectRatio] = useState<string>("3:4");
@@ -1452,6 +1464,26 @@ export default function Home() {
     const timestamp = Date.now();
     setIsSaving(true);
 
+    const currentRatio = 
+      saveTarget === "upload" ? libraryUploadAspectRatio : 
+      saveTarget === "display" ? displayAspectRatio : 
+      saveTarget === "booster" ? boosterAspectRatio :
+      aspectRatio;
+
+    const vertImageUrl = 
+      saveTarget === "generate" ? (verticalResultImageUrl || undefined) :
+      saveTarget === "display" ? (displayVerticalResultUrl || undefined) :
+      saveTarget === "booster" ? (boosterVerticalResultUrl || undefined) :
+      undefined;
+
+    const vertBgUrl = 
+      saveTarget === "generate" ? (verticalBackgroundImageUrl || undefined) :
+      saveTarget === "display" ? (displayVerticalBgUrl || undefined) :
+      saveTarget === "booster" ? (boosterVerticalBgUrl || undefined) :
+      undefined;
+
+    const isDual = currentRatio === "both" || !!vertImageUrl;
+
     if (!isLocalMode && currentSpace) {
       setIsLoginLoading(true);
       try {
@@ -1535,22 +1567,46 @@ export default function Home() {
           .insert({
             id: artId,
             space_id: currentSpace.id,
-            name: newArtworkName.trim(),
+            name: isDual ? `${newArtworkName.trim()} (16:9)` : newArtworkName.trim(),
             image_url: imageUrl,
             original_card_url: originalCardUrl || null,
             background_url: backgroundUrl || null,
-            aspect_ratio: 
-              saveTarget === "upload" ? libraryUploadAspectRatio : 
-              saveTarget === "display" ? displayAspectRatio : 
-              saveTarget === "booster" ? boosterAspectRatio :
-              aspectRatio,
+            aspect_ratio: isDual ? "16:9" : currentRatio,
             timestamp: timestamp
           });
 
         if (error) throw error;
+
+        // If dual ratio, also save 9:16 mobile version
+        if (isDual && vertImageUrl) {
+          const vertArtId = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + 1).toString();
+          let finalVertImageUrl = vertImageUrl;
+          let finalVertBgUrl = vertBgUrl;
+
+          if (finalVertImageUrl.startsWith("data:image/")) {
+            finalVertImageUrl = await uploadBase64ToSupabase(finalVertImageUrl, `spaces/${currentSpace.id}/${vertArtId}/final.png`);
+          }
+          if (finalVertBgUrl && finalVertBgUrl.startsWith("data:image/")) {
+            finalVertBgUrl = await uploadBase64ToSupabase(finalVertBgUrl, `spaces/${currentSpace.id}/${vertArtId}/bg.png`);
+          }
+
+          await supabase
+            .from("artworks")
+            .insert({
+              id: vertArtId,
+              space_id: currentSpace.id,
+              name: `${newArtworkName.trim()} (Mobil 9:16)`,
+              image_url: finalVertImageUrl,
+              original_card_url: originalCardUrl || null,
+              background_url: finalVertBgUrl || null,
+              aspect_ratio: "9:16",
+              timestamp: timestamp + 1
+            });
+        }
+
       } catch (err) {
         const message = getErrorMessage(err);
-        alert("Failed to save artwork to database: " + message);
+        alert("Fehler beim Speichern in der Datenbank: " + message);
         setIsLoginLoading(false);
         setIsSaving(false);
         return;
@@ -1560,7 +1616,7 @@ export default function Home() {
     } else {
       const localArtwork: SavedArtwork = {
         id: artId,
-        name: newArtworkName.trim(),
+        name: isDual ? `${newArtworkName.trim()} (16:9)` : newArtworkName.trim(),
         imageUrl: imageUrl,
         originalCardUrl: originalCardUrl,
         backgroundUrl: backgroundUrl,
@@ -1569,11 +1625,7 @@ export default function Home() {
           saveTarget === "display" ? (displayCutoutUrl || undefined) : 
           saveTarget === "booster" ? (boosterCutoutUrl || undefined) :
           undefined,
-        aspectRatio: 
-          saveTarget === "upload" ? libraryUploadAspectRatio : 
-          saveTarget === "display" ? displayAspectRatio : 
-          saveTarget === "booster" ? boosterAspectRatio :
-          aspectRatio,
+        aspectRatio: isDual ? "16:9" : currentRatio,
         timestamp: timestamp,
         isCase: saveTarget === "case",
         isDisplay: saveTarget === "display",
@@ -1582,9 +1634,26 @@ export default function Home() {
 
       try {
         await saveArtwork(localArtwork);
+        if (isDual && vertImageUrl) {
+          const vertArtId = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + 1).toString();
+          const localVertArtwork: SavedArtwork = {
+            id: vertArtId,
+            name: `${newArtworkName.trim()} (Mobil 9:16)`,
+            imageUrl: vertImageUrl,
+            originalCardUrl: originalCardUrl,
+            backgroundUrl: vertBgUrl,
+            cardOnlyUrl: localArtwork.cardOnlyUrl,
+            aspectRatio: "9:16",
+            timestamp: timestamp + 1,
+            isCase: saveTarget === "case",
+            isDisplay: saveTarget === "display",
+            isBooster: saveTarget === "booster"
+          };
+          await saveArtwork(localVertArtwork);
+        }
       } catch (err) {
         const message = getErrorMessage(err);
-        alert("Failed to save artwork locally: " + message);
+        alert("Fehler beim lokalen Speichern: " + message);
         setIsSaving(false);
         return;
       }
@@ -1624,23 +1693,37 @@ export default function Home() {
 
     const newArtworkRecord: SavedArtwork = {
       id: artId,
-      name: newArtworkName.trim(),
+      name: isDual ? `${newArtworkName.trim()} (16:9)` : newArtworkName.trim(),
       imageUrl: imageUrl,
       originalCardUrl: finalOriginalCardUrl,
       backgroundUrl: backgroundUrl,
       cardOnlyUrl: finalCardOnlyUrl,
-      aspectRatio: 
-        saveTarget === "upload" ? libraryUploadAspectRatio : 
-        saveTarget === "display" ? displayAspectRatio : 
-        saveTarget === "booster" ? boosterAspectRatio :
-        aspectRatio,
+      aspectRatio: isDual ? "16:9" : currentRatio,
       timestamp: timestamp,
       isCase: saveTarget === "case",
       isDisplay: saveTarget === "display",
       isBooster: saveTarget === "booster"
     };
 
-    const updated = [newArtworkRecord, ...savedArtworks];
+    let updatedArtworks = [newArtworkRecord];
+    if (isDual && vertImageUrl) {
+      const vertArtworkRecord: SavedArtwork = {
+        id: crypto.randomUUID ? crypto.randomUUID() : (Date.now() + 1).toString(),
+        name: `${newArtworkName.trim()} (Mobil 9:16)`,
+        imageUrl: vertImageUrl,
+        originalCardUrl: finalOriginalCardUrl,
+        backgroundUrl: vertBgUrl,
+        cardOnlyUrl: finalCardOnlyUrl,
+        aspectRatio: "9:16",
+        timestamp: timestamp + 1,
+        isCase: saveTarget === "case",
+        isDisplay: saveTarget === "display",
+        isBooster: saveTarget === "booster"
+      };
+      updatedArtworks.push(vertArtworkRecord);
+    }
+
+    const updated = [...updatedArtworks, ...savedArtworks];
     setSavedArtworks(updated);
     setIsSaving(false);
     closeSaveModal();
@@ -2102,6 +2185,9 @@ export default function Home() {
     setIsProcessing(true);
     setErrorMessage(null);
     setResultImageUrl(null);
+    setVerticalResultImageUrl(null);
+    setBackgroundImageUrl(null);
+    setVerticalBackgroundImageUrl(null);
     setUsedAmbientFallback(false);
     setUsedCropFallback(false);
     setTrimmedCard(null);
@@ -2171,11 +2257,12 @@ export default function Home() {
         (msg) => setActiveStepMessage(msg)
       );
 
-      const { backgroundImage, usedFallback, fallbackReason } = await parseResponseData(
+      const { backgroundImage, verticalBackgroundImage, usedFallback, fallbackReason } = await parseResponseData(
         outpaintResponse,
         "Failed to outpaint and extend background."
       );
       setBackgroundImageUrl(backgroundImage);
+      setVerticalBackgroundImageUrl(verticalBackgroundImage || null);
       setUsedAmbientFallback(usedFallback || false);
       setAmbientFallbackReason(fallbackReason || "");
       updateStepStatus("OUTPAINT", "success");
@@ -2184,30 +2271,65 @@ export default function Home() {
       updateStepStatus("MERGE", "running");
       setActiveStepMessage("Overlaying card with 3D drop shadow...");
 
-      const mergeResponse = await fetch("/api/pipeline/merge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          originalImage: cropTrimmedCard || trimmedCard, 
-          backgroundImage,
-          isTrimmed: !!(cropTrimmedCard || trimmedCard)
-        }),
-        signal
-      });
+      let finalResult169 = "";
+      let finalResult916 = "";
 
-      const { resultImageUrl } = await parseResponseData(
-        mergeResponse,
-        "Failed to merge card and background."
-      );
+      if (verticalBackgroundImage) {
+        const [merge169Res, merge916Res] = await Promise.all([
+          fetch("/api/pipeline/merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              originalImage: cropTrimmedCard || trimmedCard, 
+              backgroundImage,
+              isTrimmed: !!(cropTrimmedCard || trimmedCard)
+            }),
+            signal
+          }),
+          fetch("/api/pipeline/merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              originalImage: cropTrimmedCard || trimmedCard, 
+              backgroundImage: verticalBackgroundImage,
+              isTrimmed: !!(cropTrimmedCard || trimmedCard)
+            }),
+            signal
+          })
+        ]);
+
+        const data169 = await parseResponseData(merge169Res, "Failed to merge card and 16:9 background.");
+        const data916 = await parseResponseData(merge916Res, "Failed to merge card and 9:16 background.");
+        finalResult169 = data169.resultImageUrl;
+        finalResult916 = data916.resultImageUrl;
+      } else {
+        const mergeResponse = await fetch("/api/pipeline/merge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            originalImage: cropTrimmedCard || trimmedCard, 
+            backgroundImage,
+            isTrimmed: !!(cropTrimmedCard || trimmedCard)
+          }),
+          signal
+        });
+
+        const data = await parseResponseData(mergeResponse, "Failed to merge card and background.");
+        finalResult169 = data.resultImageUrl;
+      }
+
       updateStepStatus("MERGE", "success");
-      setResultImageUrl(resultImageUrl);
+      setResultImageUrl(finalResult169);
+      setVerticalResultImageUrl(finalResult916 || null);
       setActiveStepMessage("Completed!");
 
       return {
         success: true,
-        resultImageUrl,
+        resultImageUrl: finalResult169,
+        verticalResultImageUrl: finalResult916 || undefined,
         trimmedCard: cropTrimmedCard || trimmedCard,
         backgroundImage,
+        verticalBackgroundImage: verticalBackgroundImage || undefined,
         detectedName: detectedName || cardName || ""
       };
 
@@ -2241,8 +2363,10 @@ export default function Home() {
     setIsDisplayProcessing(true);
     setDisplayErrorMessage(null);
     setDisplayResultUrl(null);
+    setDisplayVerticalResultUrl(null);
     setDisplayCutoutUrl(null);
     setDisplayBgUrl(null);
+    setDisplayVerticalBgUrl(null);
     setDisplayElapsedTime(0);
     setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
 
@@ -2270,7 +2394,6 @@ export default function Home() {
 
       const { 
         cutoutImage, 
-        croppedImage, 
         displayName,
         displaySeries,
         coords,
@@ -2301,6 +2424,7 @@ export default function Home() {
       if (displayBgMode === "transparent") {
         console.log("[Display Studio] Transparent mode selected. Skipping background generation and merge steps.");
         setDisplayResultUrl(cutoutImage || null);
+        setDisplayVerticalResultUrl(null);
         
         // Mark remaining steps as success
         setDisplaySteps(prev => 
@@ -2311,8 +2435,10 @@ export default function Home() {
         return {
           success: true,
           resultImageUrl: cutoutImage || null,
+          verticalResultImageUrl: undefined,
           cutoutImageUrl: cutoutImage || null,
           backgroundImageUrl: null,
+          verticalBackgroundImageUrl: undefined,
           detectedName: detectedName || displayName || ""
         };
       }
@@ -2340,12 +2466,13 @@ export default function Home() {
         (msg) => setDisplayActiveStepMessage(msg)
       );
 
-      const { backgroundImage } = await parseResponseData(
+      const { backgroundImage, verticalBackgroundImage } = await parseResponseData(
         outpaintResponse,
         "Failed to generate themed backdrop."
       );
       console.log("[Display Studio] Outpaint background generated successfully.");
       setDisplayBgUrl(backgroundImage || null);
+      setDisplayVerticalBgUrl(verticalBackgroundImage || null);
       updateDisplayStepStatus("OUTPAINT", "success");
 
       console.log("[Display Studio] Starting Merge step...");
@@ -2353,34 +2480,75 @@ export default function Home() {
       updateDisplayStepStatus("MERGE", "running");
       setDisplayActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
 
-      const mergeResponse = await fetch("/api/pipeline/display-merge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          displayCutout: cutoutImage, 
-          backgroundImage,
-          watermarkImage: watermarkPreviewUrl,
-          watermarkPosition,
-          watermarkOpacity,
-          watermarkScale
-        }),
-        signal
-      });
+      let finalDisplayResult169 = "";
+      let finalDisplayResult916 = "";
 
-      const { resultImageUrl } = await parseResponseData(
-        mergeResponse,
-        "Failed to merge display cutout and background."
-      );
+      if (verticalBackgroundImage) {
+        const [merge169Res, merge916Res] = await Promise.all([
+          fetch("/api/pipeline/display-merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              displayCutout: cutoutImage, 
+              backgroundImage,
+              watermarkImage: watermarkPreviewUrl,
+              watermarkPosition,
+              watermarkOpacity,
+              watermarkScale
+            }),
+            signal
+          }),
+          fetch("/api/pipeline/display-merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              displayCutout: cutoutImage, 
+              backgroundImage: verticalBackgroundImage,
+              watermarkImage: watermarkPreviewUrl,
+              watermarkPosition,
+              watermarkOpacity,
+              watermarkScale
+            }),
+            signal
+          })
+        ]);
+
+        const data169 = await parseResponseData(merge169Res, "Failed to merge display cutout and 16:9 background.");
+        const data916 = await parseResponseData(merge916Res, "Failed to merge display cutout and 9:16 background.");
+        finalDisplayResult169 = data169.resultImageUrl;
+        finalDisplayResult916 = data916.resultImageUrl;
+      } else {
+        const mergeResponse = await fetch("/api/pipeline/display-merge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            displayCutout: cutoutImage, 
+            backgroundImage,
+            watermarkImage: watermarkPreviewUrl,
+            watermarkPosition,
+            watermarkOpacity,
+            watermarkScale
+          }),
+          signal
+        });
+
+        const data = await parseResponseData(mergeResponse, "Failed to merge display cutout and background.");
+        finalDisplayResult169 = data.resultImageUrl;
+      }
+
       console.log("[Display Studio] Merge completed successfully.");
       updateDisplayStepStatus("MERGE", "success");
-      setDisplayResultUrl(resultImageUrl || null);
+      setDisplayResultUrl(finalDisplayResult169 || null);
+      setDisplayVerticalResultUrl(finalDisplayResult916 || null);
       setDisplayActiveStepMessage("Completed!");
 
       return {
         success: true,
-        resultImageUrl: resultImageUrl || cutoutImage || null,
+        resultImageUrl: finalDisplayResult169 || cutoutImage || null,
+        verticalResultImageUrl: finalDisplayResult916 || undefined,
         cutoutImageUrl: cutoutImage || null,
         backgroundImageUrl: backgroundImage || null,
+        verticalBackgroundImageUrl: verticalBackgroundImage || undefined,
         detectedName: detectedName || displayName || ""
       };
 
@@ -2414,8 +2582,10 @@ export default function Home() {
     setIsBoosterProcessing(true);
     setBoosterErrorMessage(null);
     setBoosterResultUrl(null);
+    setBoosterVerticalResultUrl(null);
     setBoosterCutoutUrl(null);
     setBoosterBgUrl(null);
+    setBoosterVerticalBgUrl(null);
     setBoosterElapsedTime(0);
     setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
 
@@ -2443,7 +2613,6 @@ export default function Home() {
 
       const { 
         cutoutImage, 
-        croppedImage, 
         displayName,
         displaySeries,
         coords,
@@ -2474,6 +2643,7 @@ export default function Home() {
       if (boosterBgMode === "transparent") {
         console.log("[Booster Studio] Transparent mode selected. Skipping background generation and merge steps.");
         setBoosterResultUrl(cutoutImage || null);
+        setBoosterVerticalResultUrl(null);
         
         // Mark remaining steps as success
         setBoosterSteps(prev => 
@@ -2484,8 +2654,10 @@ export default function Home() {
         return {
           success: true,
           resultImageUrl: cutoutImage || null,
+          verticalResultImageUrl: undefined,
           cutoutImageUrl: cutoutImage || null,
           backgroundImageUrl: null,
+          verticalBackgroundImageUrl: undefined,
           detectedName: detectedName || displayName || ""
         };
       }
@@ -2513,12 +2685,13 @@ export default function Home() {
         (msg) => setBoosterActiveStepMessage(msg)
       );
 
-      const { backgroundImage } = await parseResponseData(
+      const { backgroundImage, verticalBackgroundImage } = await parseResponseData(
         outpaintResponse,
         "Failed to generate themed backdrop."
       );
       console.log("[Booster Studio] Outpaint background generated successfully.");
       setBoosterBgUrl(backgroundImage || null);
+      setBoosterVerticalBgUrl(verticalBackgroundImage || null);
       updateBoosterStepStatus("OUTPAINT", "success");
 
       console.log("[Booster Studio] Starting Merge step...");
@@ -2526,34 +2699,75 @@ export default function Home() {
       updateBoosterStepStatus("MERGE", "running");
       setBoosterActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
 
-      const mergeResponse = await fetch("/api/pipeline/display-merge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          displayCutout: cutoutImage, 
-          backgroundImage,
-          watermarkImage: watermarkPreviewUrl,
-          watermarkPosition,
-          watermarkOpacity,
-          watermarkScale
-        }),
-        signal
-      });
+      let finalBoosterResult169 = "";
+      let finalBoosterResult916 = "";
 
-      const { resultImageUrl } = await parseResponseData(
-        mergeResponse,
-        "Failed to merge booster cutout and background."
-      );
+      if (verticalBackgroundImage) {
+        const [merge169Res, merge916Res] = await Promise.all([
+          fetch("/api/pipeline/display-merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              displayCutout: cutoutImage, 
+              backgroundImage,
+              watermarkImage: watermarkPreviewUrl,
+              watermarkPosition,
+              watermarkOpacity,
+              watermarkScale
+            }),
+            signal
+          }),
+          fetch("/api/pipeline/display-merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              displayCutout: cutoutImage, 
+              backgroundImage: verticalBackgroundImage,
+              watermarkImage: watermarkPreviewUrl,
+              watermarkPosition,
+              watermarkOpacity,
+              watermarkScale
+            }),
+            signal
+          })
+        ]);
+
+        const data169 = await parseResponseData(merge169Res, "Failed to merge booster cutout and 16:9 background.");
+        const data916 = await parseResponseData(merge916Res, "Failed to merge booster cutout and 9:16 background.");
+        finalBoosterResult169 = data169.resultImageUrl;
+        finalBoosterResult916 = data916.resultImageUrl;
+      } else {
+        const mergeResponse = await fetch("/api/pipeline/display-merge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            displayCutout: cutoutImage, 
+            backgroundImage,
+            watermarkImage: watermarkPreviewUrl,
+            watermarkPosition,
+            watermarkOpacity,
+            watermarkScale
+          }),
+          signal
+        });
+
+        const data = await parseResponseData(mergeResponse, "Failed to merge booster cutout and background.");
+        finalBoosterResult169 = data.resultImageUrl;
+      }
+
       console.log("[Booster Studio] Merge completed successfully.");
       updateBoosterStepStatus("MERGE", "success");
-      setBoosterResultUrl(resultImageUrl || null);
+      setBoosterResultUrl(finalBoosterResult169 || null);
+      setBoosterVerticalResultUrl(finalBoosterResult916 || null);
       setBoosterActiveStepMessage("Completed!");
 
       return {
         success: true,
-        resultImageUrl: resultImageUrl || cutoutImage || null,
+        resultImageUrl: finalBoosterResult169 || cutoutImage || null,
+        verticalResultImageUrl: finalBoosterResult916 || undefined,
         cutoutImageUrl: cutoutImage || null,
         backgroundImageUrl: backgroundImage || null,
+        verticalBackgroundImageUrl: verticalBackgroundImage || undefined,
         detectedName: detectedName || displayName || ""
       };
 
@@ -2625,8 +2839,10 @@ export default function Home() {
               ...it, 
               status: "completed", 
               resultImageUrl: result.resultImageUrl || undefined,
+              verticalResultImageUrl: result.verticalResultImageUrl || undefined,
               originalCardUrl: result.trimmedCard || undefined,
               backgroundImageUrl: result.backgroundImage || undefined,
+              verticalBackgroundImageUrl: result.verticalBackgroundImage || undefined,
               name: result.detectedName || it.name
             } : it)
           );
@@ -2636,7 +2852,7 @@ export default function Home() {
       } catch (err) {
         if (cancelBatchRef.current) {
           setCardBatchItems(prev => 
-            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : it)
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : item)
           );
           break;
         }
@@ -2677,8 +2893,10 @@ export default function Home() {
       setDisplayFile(item.file);
       setDisplayPreviewUrl(item.previewUrl);
       setDisplayResultUrl(null);
+      setDisplayVerticalResultUrl(null);
       setDisplayCutoutUrl(null);
       setDisplayBgUrl(null);
+      setDisplayVerticalBgUrl(null);
       setDisplayErrorMessage(null);
       setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
       setDisplayElapsedTime(0);
@@ -2693,8 +2911,10 @@ export default function Home() {
               ...it, 
               status: "completed", 
               resultImageUrl: result.resultImageUrl || undefined,
+              verticalResultImageUrl: result.verticalResultImageUrl || undefined,
               cutoutImageUrl: result.cutoutImageUrl || undefined,
               backgroundImageUrl: result.backgroundImageUrl || undefined,
+              verticalBackgroundImageUrl: result.verticalBackgroundImageUrl || undefined,
               name: result.detectedName || it.name
             } : it)
           );
@@ -2704,7 +2924,7 @@ export default function Home() {
       } catch (err) {
         if (cancelBatchRef.current) {
           setDisplayBatchItems(prev => 
-            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : it)
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : item)
           );
           break;
         }
@@ -2745,8 +2965,10 @@ export default function Home() {
       setBoosterFile(item.file);
       setBoosterPreviewUrl(item.previewUrl);
       setBoosterResultUrl(null);
+      setBoosterVerticalResultUrl(null);
       setBoosterCutoutUrl(null);
       setBoosterBgUrl(null);
+      setBoosterVerticalBgUrl(null);
       setBoosterErrorMessage(null);
       setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
       setBoosterElapsedTime(0);
@@ -2761,8 +2983,10 @@ export default function Home() {
               ...it, 
               status: "completed", 
               resultImageUrl: result.resultImageUrl || undefined,
+              verticalResultImageUrl: result.verticalResultImageUrl || undefined,
               cutoutImageUrl: result.cutoutImageUrl || undefined,
               backgroundImageUrl: result.backgroundImageUrl || undefined,
+              verticalBackgroundImageUrl: result.verticalBackgroundImageUrl || undefined,
               name: result.detectedName || it.name
             } : it)
           );
@@ -2772,7 +2996,7 @@ export default function Home() {
       } catch (err) {
         if (cancelBatchRef.current) {
           setBoosterBatchItems(prev => 
-            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : it)
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : item)
           );
           break;
         }
@@ -2794,6 +3018,12 @@ export default function Home() {
 
     const artId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
     const timestamp = Date.now();
+
+    const currentRatio = studioType === "card" ? aspectRatio :
+                         studioType === "display" ? displayAspectRatio :
+                         boosterAspectRatio;
+
+    const isDual = currentRatio === "both" || !!item.verticalResultImageUrl;
 
     let imageUrl = item.resultImageUrl;
     let originalCardUrl = item.previewUrl;
@@ -2846,17 +3076,43 @@ export default function Home() {
           .insert({
             id: artId,
             space_id: currentSpace.id,
-            name: item.name.trim(),
+            name: isDual ? `${item.name.trim()} (16:9)` : item.name.trim(),
             image_url: imageUrl,
             original_card_url: originalCardUrl || null,
             background_url: backgroundUrl || null,
-            aspect_ratio: studioType === "card" ? aspectRatio :
-                          studioType === "display" ? displayAspectRatio :
-                          boosterAspectRatio,
+            aspect_ratio: isDual ? "16:9" : currentRatio,
             timestamp: timestamp
           });
 
         if (error) throw error;
+
+        // If dual ratio, also save 9:16 mobile version to Supabase
+        if (isDual && item.verticalResultImageUrl) {
+          const vertArtId = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + 1).toString();
+          let finalVertImageUrl = item.verticalResultImageUrl;
+          let finalVertBgUrl = item.verticalBackgroundImageUrl;
+
+          if (finalVertImageUrl.startsWith("data:image/")) {
+            finalVertImageUrl = await uploadBase64ToSupabase(finalVertImageUrl, `spaces/${currentSpace.id}/${vertArtId}/final.png`);
+          }
+          if (finalVertBgUrl && finalVertBgUrl.startsWith("data:image/")) {
+            finalVertBgUrl = await uploadBase64ToSupabase(finalVertBgUrl, `spaces/${currentSpace.id}/${vertArtId}/bg.png`);
+          }
+
+          await supabase
+            .from("artworks")
+            .insert({
+              id: vertArtId,
+              space_id: currentSpace.id,
+              name: `${item.name.trim()} (Mobil 9:16)`,
+              image_url: finalVertImageUrl,
+              original_card_url: originalCardUrl || null,
+              background_url: finalVertBgUrl || null,
+              aspect_ratio: "9:16",
+              timestamp: timestamp + 1
+            });
+        }
+
       } catch (err) {
         const message = getErrorMessage(err);
         alert("Fehler beim Speichern in der Datenbank: " + message);
@@ -2869,14 +3125,12 @@ export default function Home() {
     } else {
       const localArtwork: SavedArtwork = {
         id: artId,
-        name: item.name.trim(),
+        name: isDual ? `${item.name.trim()} (16:9)` : item.name.trim(),
         imageUrl: imageUrl,
         originalCardUrl: originalCardUrl,
         backgroundUrl: backgroundUrl,
         cardOnlyUrl: cardOnlyUrl,
-        aspectRatio: studioType === "card" ? aspectRatio :
-                     studioType === "display" ? displayAspectRatio :
-                     boosterAspectRatio,
+        aspectRatio: isDual ? "16:9" : currentRatio,
         timestamp: timestamp,
         isCase: false,
         isDisplay: studioType === "display",
@@ -2885,6 +3139,23 @@ export default function Home() {
 
       try {
         await saveArtwork(localArtwork);
+        if (isDual && item.verticalResultImageUrl) {
+          const vertArtId = crypto.randomUUID ? crypto.randomUUID() : (Date.now() + 1).toString();
+          const localVertArtwork: SavedArtwork = {
+            id: vertArtId,
+            name: `${item.name.trim()} (Mobil 9:16)`,
+            imageUrl: item.verticalResultImageUrl,
+            originalCardUrl: originalCardUrl,
+            backgroundUrl: item.verticalBackgroundImageUrl,
+            cardOnlyUrl: cardOnlyUrl,
+            aspectRatio: "9:16",
+            timestamp: timestamp + 1,
+            isCase: false,
+            isDisplay: studioType === "display",
+            isBooster: studioType === "booster"
+          };
+          await saveArtwork(localVertArtwork);
+        }
       } catch (err) {
         const message = getErrorMessage(err);
         alert("Fehler beim lokalen Speichern: " + message);
@@ -2932,20 +3203,37 @@ export default function Home() {
     const completedItems = items.filter(it => it.status === "completed" && it.resultImageUrl);
     if (completedItems.length === 0) return;
 
-    if (completedItems.length === 1) {
+    const prefix = studioType === "card" ? "TCG" : studioType === "display" ? "Display" : "Booster";
+
+    if (completedItems.length === 1 && !completedItems[0].verticalResultImageUrl) {
       const item = completedItems[0];
       if (item.resultImageUrl) {
-        triggerDownload(item.resultImageUrl, `TCG_${item.name}.png`);
+        triggerDownload(item.resultImageUrl, `${prefix}_${item.name}.png`);
       }
       return;
     }
 
-    const filesToDownload = completedItems.map((item, idx) => ({
-      url: item.resultImageUrl!,
-      filename: `TCG_${item.name || `bild_${idx + 1}`}.png`
-    }));
+    const filesToDownload: { url: string; filename: string }[] = [];
+    completedItems.forEach((item, idx) => {
+      const baseName = item.name || `bild_${idx + 1}`;
+      if (item.verticalResultImageUrl) {
+        filesToDownload.push({
+          url: item.resultImageUrl!,
+          filename: `${prefix}_${baseName}_16x9.png`
+        });
+        filesToDownload.push({
+          url: item.verticalResultImageUrl,
+          filename: `${prefix}_${baseName}_9x16_mobil.png`
+        });
+      } else {
+        filesToDownload.push({
+          url: item.resultImageUrl!,
+          filename: `${prefix}_${baseName}.png`
+        });
+      }
+    });
 
-    await triggerZipDownload(filesToDownload, `TCG_Batch_Export_${Date.now()}.zip`);
+    await triggerZipDownload(filesToDownload, `${prefix}_Batch_Export_${Date.now()}.zip`);
   };
 
   const renderBatchUI = (studioType: 'card' | 'display' | 'booster') => {
@@ -3597,12 +3885,13 @@ export default function Home() {
               <div className="flex flex-col gap-4">
                 <div>
                   <label className="block text-sm font-medium text-zinc-300 mb-2">Ziel-Seitenverhältnis</label>
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                     {[
-                      { value: "3:4", label: "Porträt 3:4", desc: "Klassische Präsentation" },
-                      { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild" },
-                      { value: "1:1", label: "Quadrat 1:1", desc: "Raster/Instagram" },
-                      { value: "16:9", label: "Querformat 16:9", desc: "Banner/Hintergrund" }
+                      { value: "both", label: "Beide (16:9 & 9:16)", desc: "Horizontal & Vertikal (Mobil)" },
+                      { value: "16:9", label: "Querformat 16:9", desc: "Banner / Desktop" },
+                      { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild (Mobil)" },
+                      { value: "3:4", label: "Porträt 3:4", desc: "Klassische Ansicht" },
+                      { value: "1:1", label: "Quadrat 1:1", desc: "Raster / Instagram" }
                     ].map((ratio) => (
                       <button
                         key={ratio.value}
@@ -3615,7 +3904,7 @@ export default function Home() {
                             : "border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                         } disabled:opacity-50 disabled:pointer-events-none`}
                       >
-                        <span className="font-semibold text-sm">{ratio.label}</span>
+                        <span className="font-semibold text-xs">{ratio.label}</span>
                         <span className="text-[10px] text-zinc-500 mt-1">{ratio.desc}</span>
                       </button>
                     ))}
@@ -3859,15 +4148,57 @@ export default function Home() {
               <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950/80 rounded-xl border border-zinc-850 p-4 relative min-h-[350px]">
                 {resultImageUrl ? (
                   <div className="w-full flex flex-col items-center">
+                    {/* Format Switcher when dual formats are available */}
+                    {verticalResultImageUrl && (
+                      <div className="flex items-center gap-1.5 p-1 rounded-xl bg-zinc-900/90 border border-zinc-800 mb-4 shadow-lg">
+                        <button
+                          type="button"
+                          onClick={() => setActiveCardPreviewFormat("16:9")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeCardPreviewFormat === "16:9"
+                              ? "bg-purple-600 text-white shadow"
+                              : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
+                          }`}
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                          <span>Horizontal 16:9</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveCardPreviewFormat("9:16")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeCardPreviewFormat === "9:16"
+                              ? "bg-purple-600 text-white shadow"
+                              : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
+                          }`}
+                        >
+                          <Smartphone className="w-3.5 h-3.5" />
+                          <span>Vertikal 9:16 (Mobil)</span>
+                        </button>
+                      </div>
+                    )}
+
                     <div 
                       className="relative rounded-lg overflow-hidden border border-zinc-850 shadow-2xl w-full max-w-[340px] cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
-                      style={{ aspectRatio: aspectRatio.replace(":", "/") }}
-                      onClick={() => setLightboxImage({ url: resultImageUrl, title: file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Expanded Card" })}
+                      style={{ 
+                        aspectRatio: (activeCardPreviewFormat === "9:16" && verticalResultImageUrl) 
+                          ? "9/16" 
+                          : (aspectRatio === "both" ? "16/9" : aspectRatio.replace(":", "/")) 
+                      }}
+                      onClick={() => {
+                        const currentImg = (activeCardPreviewFormat === "9:16" && verticalResultImageUrl) 
+                          ? verticalResultImageUrl 
+                          : resultImageUrl;
+                        setLightboxImage({ 
+                          url: currentImg, 
+                          title: file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Expanded Card" 
+                        });
+                      }}
                       title="Größere Ansicht (Klicken)"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={resultImageUrl}
+                        src={(activeCardPreviewFormat === "9:16" && verticalResultImageUrl) ? verticalResultImageUrl : resultImageUrl}
                         alt="Final expanded trading card display"
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
                       />
@@ -3909,14 +4240,18 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() => {
-                                if (resultImageUrl) {
+                                const currentImg = (activeCardPreviewFormat === "9:16" && verticalResultImageUrl) 
+                                  ? verticalResultImageUrl 
+                                  : resultImageUrl;
+                                const suffix = (activeCardPreviewFormat === "9:16" && verticalResultImageUrl) ? "_9x16_mobil" : (verticalResultImageUrl ? "_16x9" : "");
+                                if (currentImg) {
                                   triggerDownload(
-                                    resultImageUrl,
-                                    `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
+                                    currentImg,
+                                    `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}${suffix}.png`
                                   );
                                 }
                               }}
-                              className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all"
+                              className="flex-1 px-4 py-3 hover:bg-zinc-800 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
                             >
                               <Download className="w-4 h-4" />
                               Herunterladen
@@ -3924,7 +4259,7 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() => setIsGenDownloadOpen(!isGenDownloadOpen)}
-                              className="px-3 hover:bg-zinc-800 text-white flex items-center justify-center transition-all"
+                              className="px-3 hover:bg-zinc-800 text-white flex items-center justify-center transition-all cursor-pointer"
                               aria-haspopup="true"
                               aria-expanded={isGenDownloadOpen}
                             >
@@ -3938,24 +4273,72 @@ export default function Home() {
                                 className="fixed inset-0 z-20" 
                                 onClick={() => setIsGenDownloadOpen(false)} 
                               />
-                              <div className="absolute right-0 bottom-full mb-2 w-56 rounded-xl border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1.5 shadow-2xl z-30 flex flex-col gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsGenDownloadOpen(false);
-                                    if (resultImageUrl) {
-                                      triggerDownload(
-                                        resultImageUrl,
-                                        `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
-                                      );
-                                    }
-                                  }}
-                                  className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors"
-                                >
-                                  <Layers className="w-4 h-4 text-purple-400" />
-                                  <span>Zusammengefügte Karte (Einzelbild)</span>
-                                </button>
-                                {(trimmedCard || previewUrl) && (
+                              <div className="absolute right-0 bottom-full mb-2 w-64 rounded-xl border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1.5 shadow-2xl z-30 flex flex-col gap-1">
+                                {verticalResultImageUrl ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsGenDownloadOpen(false);
+                                        const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
+                                        const filesToDownload = [
+                                          { url: resultImageUrl, filename: `TCG_${nameBase}_16x9.png` },
+                                          { url: verticalResultImageUrl, filename: `TCG_${nameBase}_9x16_mobil.png` }
+                                        ];
+                                        triggerZipDownload(filesToDownload, `TCG_${nameBase}_16x9_und_9x16.zip`);
+                                      }}
+                                      className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-purple-300 font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+                                    >
+                                      <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                                        <span className="text-[10px] font-bold text-purple-400">ZIP</span>
+                                      </div>
+                                      <span>Beide Formate (16:9 & 9:16)</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsGenDownloadOpen(false);
+                                        const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
+                                        triggerDownload(resultImageUrl, `TCG_${nameBase}_16x9.png`);
+                                      }}
+                                      className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer border-t border-zinc-800"
+                                    >
+                                      <Maximize2 className="w-4 h-4 text-zinc-400" />
+                                      <span>16:9 Horizontal (Desktop)</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsGenDownloadOpen(false);
+                                        const nameBase = file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded";
+                                        triggerDownload(verticalResultImageUrl, `TCG_${nameBase}_9x16_mobil.png`);
+                                      }}
+                                      className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                    >
+                                      <Smartphone className="w-4 h-4 text-zinc-400" />
+                                      <span>9:16 Vertikal (Mobil)</span>
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsGenDownloadOpen(false);
+                                      if (resultImageUrl) {
+                                        triggerDownload(
+                                          resultImageUrl,
+                                          `TCG_${file?.name ? file.name.replace(/\.[^/.]+$/, "") : "expanded"}.png`
+                                        );
+                                      }
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                  >
+                                    <Layers className="w-4 h-4 text-purple-400" />
+                                    <span>Zusammengefügte Karte (Einzelbild)</span>
+                                  </button>
+                                )}
+
+                                {(trimmedCard || previewUrl || backgroundImageUrl) && (
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -3965,7 +4348,13 @@ export default function Home() {
                                       if (backgroundImageUrl) {
                                         filesToDownload.push({
                                           url: backgroundImageUrl,
-                                          filename: `TCG_${nameBase}_background.png`
+                                          filename: `TCG_${nameBase}_background_16x9.png`
+                                        });
+                                      }
+                                      if (verticalBackgroundImageUrl) {
+                                        filesToDownload.push({
+                                          url: verticalBackgroundImageUrl,
+                                          filename: `TCG_${nameBase}_background_9x16.png`
                                         });
                                       }
                                       const cardUrl = trimmedCard || previewUrl;
@@ -3982,12 +4371,12 @@ export default function Home() {
                                         triggerDownload(filesToDownload[0].url, filesToDownload[0].filename);
                                       }
                                     }}
-                                    className="w-full px-3 py-2.5 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800"
+                                    className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
                                   >
                                     <div className="w-4 h-4 flex items-center justify-center shrink-0">
                                       <span className="text-[10px] font-bold text-indigo-400">ZIP</span>
                                     </div>
-                                    <span>Komponenten trennen (Hintergrund + Karte)</span>
+                                    <span>Komponenten trennen (Hintergründe + Karte)</span>
                                   </button>
                                 )}
                               </div>
@@ -4003,7 +4392,7 @@ export default function Home() {
                             }
                             setIsSaveModalOpen(true);
                           }}
-                          className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)]"
+                          className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(147,51,234,0.2)] cursor-pointer"
                         >
                           <Bookmark className="w-4 h-4" />
                           Speichern
@@ -4019,7 +4408,7 @@ export default function Home() {
                           setCaseErrorMessage(null);
                           setActiveTab("case");
                         }}
-                        className="w-full py-3 rounded-xl bg-purple-600/15 border border-purple-500/30 hover:bg-purple-600/25 text-purple-400 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(168,85,247,0.05)]"
+                        className="w-full py-3 rounded-xl bg-purple-600/15 border border-purple-500/30 hover:bg-purple-600/25 text-purple-400 font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_4px_20px_rgba(168,85,247,0.05)] cursor-pointer"
                       >
                         <Layers className="w-4 h-4" />
                         Case-Showcase erstellen
@@ -4061,25 +4450,27 @@ export default function Home() {
                 <div className="flex flex-col gap-4">
                   <div>
                     <label className="block text-sm font-medium text-zinc-300 mb-2">Ziel-Seitenverhältnis</label>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                       {[
-                        { value: "3:4", label: "Porträt 3:4", desc: "Klassische Präsentation" },
-                        { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild" },
-                        { value: "1:1", label: "Quadrat 1:1", desc: "Raster/Instagram" },
-                        { value: "16:9", label: "Querformat 16:9", desc: "Banner/Hintergrund" }
+                        { value: "both", label: "Beide (16:9 & 9:16)", desc: "Horizontal & Vertikal (Mobil)" },
+                        { value: "16:9", label: "Querformat 16:9", desc: "Banner / Desktop" },
+                        { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild (Mobil)" },
+                        { value: "3:4", label: "Porträt 3:4", desc: "Klassische Ansicht" },
+                        { value: "1:1", label: "Quadrat 1:1", desc: "Raster / Instagram" }
                       ].map((ratio) => (
                         <button
                           key={ratio.value}
                           type="button"
+                          disabled={isDisplayProcessing}
                           onClick={() => setDisplayAspectRatio(ratio.value)}
-                          className={`p-3 rounded-xl border text-left transition-all ${
+                          className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all cursor-pointer ${
                             displayAspectRatio === ratio.value
-                              ? "bg-purple-600/10 border-purple-500 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.05)]"
-                              : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
-                          }`}
+                              ? "border-purple-500 bg-purple-500/10 text-white shadow-[0_0_15px_rgba(168,85,247,0.15)]"
+                              : "border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                          } disabled:opacity-50 disabled:pointer-events-none`}
                         >
-                          <div className="font-semibold text-xs">{ratio.label}</div>
-                          <div className="text-[10px] text-zinc-500 mt-0.5">{ratio.desc}</div>
+                          <span className="font-semibold text-xs">{ratio.label}</span>
+                          <span className="text-[10px] text-zinc-500 mt-1">{ratio.desc}</span>
                         </button>
                       ))}
                     </div>
@@ -4332,7 +4723,36 @@ export default function Home() {
                   </h2>
                   
                   {displayResultUrl && (
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
+                      {displayVerticalResultUrl && (
+                        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-800 border border-zinc-700">
+                          <button
+                            type="button"
+                            onClick={() => setActiveDisplayPreviewFormat("16:9")}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                              activeDisplayPreviewFormat === "16:9"
+                                ? "bg-purple-600 text-white shadow"
+                                : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            <Maximize2 className="w-3 h-3" />
+                            <span>16:9</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveDisplayPreviewFormat("9:16")}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                              activeDisplayPreviewFormat === "9:16"
+                                ? "bg-purple-600 text-white shadow"
+                                : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            <Smartphone className="w-3 h-3" />
+                            <span>9:16</span>
+                          </button>
+                        </div>
+                      )}
+
                       <div className="relative">
                         <button
                           type="button"
@@ -4347,18 +4767,66 @@ export default function Home() {
                         {isDisplayDownloadOpen && (
                           <>
                             <div className="fixed inset-0 z-20" onClick={() => setIsDisplayDownloadOpen(false)} />
-                            <div className="absolute right-0 mt-1 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsDisplayDownloadOpen(false);
-                                  triggerDownload(displayResultUrl, `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}.png`);
-                                }}
-                                className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
-                              >
-                                <Layers className="w-3.5 h-3.5 text-purple-400" />
-                                <span>Zusammengefügtes Showcase</span>
-                              </button>
+                            <div className="absolute right-0 mt-1 w-60 rounded-xl border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1.5 shadow-2xl z-30 flex flex-col gap-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                              {displayVerticalResultUrl ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsDisplayDownloadOpen(false);
+                                      const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                      const filesToDownload = [
+                                        { url: displayResultUrl, filename: `Display_${baseName}_16x9.png` },
+                                        { url: displayVerticalResultUrl, filename: `Display_${baseName}_9x16_mobil.png` }
+                                      ];
+                                      triggerZipDownload(filesToDownload, `Display_${baseName}_16x9_und_9x16.zip`);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-purple-300 font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+                                  >
+                                    <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                                      <span className="text-[10px] font-bold text-purple-400">ZIP</span>
+                                    </div>
+                                    <span>Beide Formate (16:9 & 9:16)</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsDisplayDownloadOpen(false);
+                                      const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                      triggerDownload(displayResultUrl, `Display_${baseName}_16x9.png`);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer border-t border-zinc-800"
+                                  >
+                                    <Maximize2 className="w-3.5 h-3.5 text-zinc-400" />
+                                    <span>16:9 Horizontal (Desktop)</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsDisplayDownloadOpen(false);
+                                      const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                      triggerDownload(displayVerticalResultUrl, `Display_${baseName}_9x16_mobil.png`);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                  >
+                                    <Smartphone className="w-3.5 h-3.5 text-zinc-400" />
+                                    <span>9:16 Vertikal (Mobil)</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsDisplayDownloadOpen(false);
+                                    triggerDownload(displayResultUrl, `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}.png`);
+                                  }}
+                                  className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                >
+                                  <Layers className="w-3.5 h-3.5 text-purple-400" />
+                                  <span>Zusammengefügtes Showcase</span>
+                                </button>
+                              )}
+
                               {displayCutoutUrl && (
                                 <button
                                   type="button"
@@ -4372,23 +4840,30 @@ export default function Home() {
                                   <span>Nur Display-Ausschnitt</span>
                                 </button>
                               )}
-                              {displayBgUrl && (
+                              {(displayBgUrl || displayVerticalBgUrl) && (
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setIsDisplayDownloadOpen(false);
-                                    const filesToDownload = [
-                                      { url: displayBgUrl, filename: `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_background.png` },
-                                      { url: displayCutoutUrl || displayResultUrl, filename: `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_cutout.png` }
-                                    ];
-                                    triggerZipDownload(filesToDownload, `Display_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_split.zip`);
+                                    const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                    const filesToDownload: { url: string; filename: string }[] = [];
+                                    if (displayBgUrl) {
+                                      filesToDownload.push({ url: displayBgUrl, filename: `Display_${baseName}_background_16x9.png` });
+                                    }
+                                    if (displayVerticalBgUrl) {
+                                      filesToDownload.push({ url: displayVerticalBgUrl, filename: `Display_${baseName}_background_9x16.png` });
+                                    }
+                                    if (displayCutoutUrl || displayResultUrl) {
+                                      filesToDownload.push({ url: (displayCutoutUrl || displayResultUrl)!, filename: `Display_${baseName}_cutout.png` });
+                                    }
+                                    triggerZipDownload(filesToDownload, `Display_${baseName}_split.zip`);
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
                                 >
                                   <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                     <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
                                   </div>
-                                  <span>Hintergrund & Ausschnitt trennen</span>
+                                  <span>Hintergründe & Ausschnitt trennen</span>
                                 </button>
                               )}
                             </div>
@@ -4416,13 +4891,22 @@ export default function Home() {
                     <div className="w-full flex flex-col items-center animate-in fade-in duration-300">
                       <div 
                         className="relative rounded-lg overflow-hidden w-full max-w-[440px] cursor-pointer group transition-all duration-300"
-                        style={{ aspectRatio: displayAspectRatio.replace(":", "/") }}
-                        onClick={() => setLightboxImage({ url: displayResultUrl, title: newArtworkName || "Merged Display Box" })}
+                        style={{ 
+                          aspectRatio: (activeDisplayPreviewFormat === "9:16" && displayVerticalResultUrl) 
+                            ? "9/16" 
+                            : (displayAspectRatio === "both" ? "16/9" : displayAspectRatio.replace(":", "/")) 
+                        }}
+                        onClick={() => {
+                          const currentImg = (activeDisplayPreviewFormat === "9:16" && displayVerticalResultUrl) 
+                            ? displayVerticalResultUrl 
+                            : displayResultUrl;
+                          setLightboxImage({ url: currentImg, title: newArtworkName || "Merged Display Box" });
+                        }}
                         title="Größere Ansicht (Klicken)"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={displayResultUrl}
+                          src={(activeDisplayPreviewFormat === "9:16" && displayVerticalResultUrl) ? displayVerticalResultUrl : displayResultUrl}
                           alt="Result showcase"
                           className={`w-full h-full ${displayBgMode === "transparent" ? "object-contain" : "object-cover"} transition-transform duration-500 group-hover:scale-[1.02]`}
                         />
@@ -4571,26 +5055,27 @@ export default function Home() {
                       {boosterBgMode !== "transparent" && (
                         <div>
                           <label className="block text-sm font-medium text-zinc-300 mb-2">Ziel-Seitenverhältnis</label>
-                          <div className="grid grid-cols-4 gap-2">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                             {[
-                              { value: "3:4", label: "Porträt 3:4", desc: "Klassisch" },
-                              { value: "9:16", label: "Story 9:16", desc: "Vertikal" },
-                              { value: "1:1", label: "Quadrat 1:1", desc: "Raster" },
-                              { value: "16:9", label: "Querformat 16:9", desc: "Banner" }
+                              { value: "both", label: "Beide (16:9 & 9:16)", desc: "Horizontal & Vertikal (Mobil)" },
+                              { value: "16:9", label: "Querformat 16:9", desc: "Banner / Desktop" },
+                              { value: "9:16", label: "Story 9:16", desc: "Vertikal Vollbild (Mobil)" },
+                              { value: "3:4", label: "Porträt 3:4", desc: "Klassische Ansicht" },
+                              { value: "1:1", label: "Quadrat 1:1", desc: "Raster / Instagram" }
                             ].map((ratio) => (
                               <button
                                 key={ratio.value}
                                 type="button"
                                 onClick={() => setBoosterAspectRatio(ratio.value)}
                                 disabled={isBoosterProcessing}
-                                className={`p-3 rounded-xl border text-left transition-all ${
+                                className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all cursor-pointer ${
                                   boosterAspectRatio === ratio.value
-                                    ? "border-purple-500 bg-purple-500/5 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.05)]"
-                                    : "border-zinc-800 hover:border-zinc-700 bg-zinc-955/40 text-zinc-400 hover:text-zinc-200"
+                                    ? "border-purple-500 bg-purple-500/10 text-white shadow-[0_0_15px_rgba(168,85,247,0.15)]"
+                                    : "border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                                 } ${isBoosterProcessing ? "opacity-50 pointer-events-none" : "cursor-pointer"}`}
                               >
-                                <div className="text-xs font-bold">{ratio.label}</div>
-                                <div className="text-[10px] text-zinc-500 mt-1 leading-normal">{ratio.desc}</div>
+                                <span className="font-semibold text-xs">{ratio.label}</span>
+                                <span className="text-[10px] text-zinc-500 mt-1">{ratio.desc}</span>
                               </button>
                             ))}
                           </div>
@@ -4679,7 +5164,36 @@ export default function Home() {
                       </h2>
                       
                       {boosterResultUrl && (
-                        <div className="flex gap-2">
+                        <div className="flex items-center gap-2">
+                          {boosterVerticalResultUrl && (
+                            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-800 border border-zinc-700">
+                              <button
+                                type="button"
+                                onClick={() => setActiveBoosterPreviewFormat("16:9")}
+                                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                                  activeBoosterPreviewFormat === "16:9"
+                                    ? "bg-purple-600 text-white shadow"
+                                    : "text-zinc-400 hover:text-zinc-200"
+                                }`}
+                              >
+                                <Maximize2 className="w-3 h-3" />
+                                <span>16:9</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setActiveBoosterPreviewFormat("9:16")}
+                                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                                  activeBoosterPreviewFormat === "9:16"
+                                    ? "bg-purple-600 text-white shadow"
+                                    : "text-zinc-400 hover:text-zinc-200"
+                                }`}
+                              >
+                                <Smartphone className="w-3 h-3" />
+                                <span>9:16</span>
+                              </button>
+                            </div>
+                          )}
+
                           <div className="relative">
                             <button
                               type="button"
@@ -4694,35 +5208,90 @@ export default function Home() {
                             {isBoosterDownloadOpen && (
                               <>
                                 <div className="fixed inset-0 z-20" onClick={() => setIsBoosterDownloadOpen(false)} />
-                                <div className="absolute right-0 mt-1 w-52 rounded-lg border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1 shadow-2xl z-30 flex flex-col gap-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setIsBoosterDownloadOpen(false);
-                                      triggerDownload(boosterResultUrl, `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}.png`);
-                                    }}
-                                    className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
-                                  >
-                                    <ImageIcon className="w-3.5 h-3.5 text-zinc-400" />
-                                    <span>Als PNG herunterladen</span>
-                                  </button>
-                                  {boosterBgUrl && boosterBgMode !== "transparent" && (
+                                <div className="absolute right-0 mt-1 w-60 rounded-xl border border-zinc-800 bg-zinc-900/95 backdrop-blur-xl p-1.5 shadow-2xl z-30 flex flex-col gap-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                                  {boosterVerticalResultUrl ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setIsBoosterDownloadOpen(false);
+                                          const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                          const filesToDownload = [
+                                            { url: boosterResultUrl, filename: `Booster_${baseName}_16x9.png` },
+                                            { url: boosterVerticalResultUrl, filename: `Booster_${baseName}_9x16_mobil.png` }
+                                          ];
+                                          triggerZipDownload(filesToDownload, `Booster_${baseName}_16x9_und_9x16.zip`);
+                                        }}
+                                        className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-purple-300 font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+                                      >
+                                        <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                                          <span className="text-[10px] font-bold text-purple-400">ZIP</span>
+                                        </div>
+                                        <span>Beide Formate (16:9 & 9:16)</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setIsBoosterDownloadOpen(false);
+                                          const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                          triggerDownload(boosterResultUrl, `Booster_${baseName}_16x9.png`);
+                                        }}
+                                        className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer border-t border-zinc-800"
+                                      >
+                                        <Maximize2 className="w-3.5 h-3.5 text-zinc-400" />
+                                        <span>16:9 Horizontal (Desktop)</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setIsBoosterDownloadOpen(false);
+                                          const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                          triggerDownload(boosterVerticalResultUrl, `Booster_${baseName}_9x16_mobil.png`);
+                                        }}
+                                        className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                      >
+                                        <Smartphone className="w-3.5 h-3.5 text-zinc-400" />
+                                        <span>9:16 Vertikal (Mobil)</span>
+                                      </button>
+                                    </>
+                                  ) : (
                                     <button
                                       type="button"
                                       onClick={() => {
                                         setIsBoosterDownloadOpen(false);
-                                        const filesToDownload = [
-                                          { url: boosterBgUrl, filename: `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_background.png` },
-                                          { url: boosterCutoutUrl || boosterResultUrl, filename: `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_cutout.png` }
-                                        ];
-                                        triggerZipDownload(filesToDownload, `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}_split.zip`);
+                                        triggerDownload(boosterResultUrl, `Booster_${newArtworkName.replace(/\s+/g, "_") || "showcase"}.png`);
+                                      }}
+                                      className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
+                                    >
+                                      <ImageIcon className="w-3.5 h-3.5 text-zinc-400" />
+                                      <span>Als PNG herunterladen</span>
+                                    </button>
+                                  )}
+
+                                  {(boosterBgUrl || boosterVerticalBgUrl) && boosterBgMode !== "transparent" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsBoosterDownloadOpen(false);
+                                        const baseName = newArtworkName.replace(/\s+/g, "_") || "showcase";
+                                        const filesToDownload: { url: string; filename: string }[] = [];
+                                        if (boosterBgUrl) {
+                                          filesToDownload.push({ url: boosterBgUrl, filename: `Booster_${baseName}_background_16x9.png` });
+                                        }
+                                        if (boosterVerticalBgUrl) {
+                                          filesToDownload.push({ url: boosterVerticalBgUrl, filename: `Booster_${baseName}_background_9x16.png` });
+                                        }
+                                        if (boosterCutoutUrl || boosterResultUrl) {
+                                          filesToDownload.push({ url: (boosterCutoutUrl || boosterResultUrl)!, filename: `Booster_${baseName}_cutout.png` });
+                                        }
+                                        triggerZipDownload(filesToDownload, `Booster_${baseName}_split.zip`);
                                       }}
                                       className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors border-t border-zinc-800 cursor-pointer"
                                     >
                                       <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
                                         <span className="text-[9px] font-bold text-indigo-400">ZIP</span>
                                       </div>
-                                      <span>Hintergrund & Ausschnitt trennen</span>
+                                      <span>Hintergründe & Ausschnitt trennen</span>
                                     </button>
                                   )}
                                 </div>
@@ -4750,13 +5319,22 @@ export default function Home() {
                         <div className="w-full flex flex-col items-center animate-in fade-in duration-300">
                           <div 
                             className="relative rounded-lg overflow-hidden w-full max-w-[440px] cursor-pointer group transition-all duration-300"
-                            style={{ aspectRatio: boosterAspectRatio.replace(":", "/") }}
-                            onClick={() => setLightboxImage({ url: boosterResultUrl, title: newArtworkName || "Merged Booster Box" })}
+                            style={{ 
+                              aspectRatio: (activeBoosterPreviewFormat === "9:16" && boosterVerticalResultUrl) 
+                                ? "9/16" 
+                                : (boosterAspectRatio === "both" ? "16/9" : boosterAspectRatio.replace(":", "/")) 
+                            }}
+                            onClick={() => {
+                              const currentImg = (activeBoosterPreviewFormat === "9:16" && boosterVerticalResultUrl) 
+                                ? boosterVerticalResultUrl 
+                                : boosterResultUrl;
+                              setLightboxImage({ url: currentImg, title: newArtworkName || "Merged Booster Box" });
+                            }}
                             title="Größere Ansicht (Klicken)"
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={boosterResultUrl}
+                              src={(activeBoosterPreviewFormat === "9:16" && boosterVerticalResultUrl) ? boosterVerticalResultUrl : boosterResultUrl}
                               alt="Result showcase"
                               className={`w-full h-full ${boosterBgMode === "transparent" ? "object-contain" : "object-cover"} transition-transform duration-500 group-hover:scale-[1.02]`}
                             />
