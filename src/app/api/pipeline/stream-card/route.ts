@@ -4,7 +4,9 @@ import sharp, { OverlayOptions } from "sharp";
 import fs from "fs";
 import path from "path";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 export const preferredRegion = "iad1";
 
 // Helper to call generateContent with retry on transient errors (503, 429)
@@ -229,7 +231,7 @@ export async function POST(request: Request) {
       console.log(`[Stream Card API] Initializing GoogleGenAI client...`);
       const ai = new GoogleGenAI({ apiKey });
       const base64Image = originalCardBuffer.toString("base64");
-      const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+      const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
       let layoutText = "";
 
       const prompt = `The uploaded image is a scan or photo of a collectible trading card (such as Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana, Sports cards).

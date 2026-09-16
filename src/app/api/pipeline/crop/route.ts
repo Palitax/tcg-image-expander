@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const preferredRegion = "iad1"; // Force US-East server
+export const maxDuration = 60;
+export const preferredRegion = "iad1";
 
 // Helper to call generateContent with retry on transient errors (503, 429)
 async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {

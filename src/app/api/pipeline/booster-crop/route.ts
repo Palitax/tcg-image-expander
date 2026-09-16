@@ -4,17 +4,14 @@ import sharp from "sharp";
 import fs from "fs";
 import path from "path";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+export const preferredRegion = "iad1";
 
 function writeDebugLog(message: string) {
-  try {
-    const logPath = path.join(process.cwd(), "public", "booster_crop_debug.log");
-    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`);
-  } catch (err) {
-    console.error("Failed to write debug log:", err);
-  }
+  console.log(`[Booster Crop Debug] ${message}`);
 }
-export const preferredRegion = "iad1";
 
 async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
   for (let i = 0; i <= retries; i++) {
