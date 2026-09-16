@@ -32,7 +32,10 @@ import {
   Sliders,
   SlidersHorizontal,
   Sun,
-  Eye
+  Eye,
+  EyeOff,
+  Key,
+  KeyRound
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -126,7 +129,13 @@ const fetchWithRetry = async (
   onRetry?: (msg: string) => void
 ): Promise<Response> => {
   try {
-    return await fetch(url, options);
+    const customKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+    const headers = new Headers(options.headers || {});
+    if (customKey && customKey.trim() && !headers.has("x-gemini-api-key")) {
+      headers.set("x-gemini-api-key", customKey.trim());
+    }
+    const modifiedOptions = { ...options, headers };
+    return await fetch(url, modifiedOptions);
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
       throw e;
@@ -959,6 +968,15 @@ export default function Home() {
   const [renameValue, setRenameValue] = useState<string>("");
   const [identifyingArtworkId, setIdentifyingArtworkId] = useState<string | null>(null);
 
+  // API Key management states
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+  const [userApiKey, setUserApiKey] = useState<string>("");
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState<string>("");
+  const [showApiKeyText, setShowApiKeyText] = useState<boolean>(false);
+  const [isTestingKey, setIsTestingKey] = useState<boolean>(false);
+  const [keyTestSuccess, setKeyTestSuccess] = useState<boolean | null>(null);
+  const [keyTestError, setKeyTestError] = useState<string | null>(null);
+
   // Space authentication states
   const [currentSpace, setCurrentSpace] = useState<{ id: string; name: string } | null>(null);
   const [loginSpaceName, setLoginSpaceName] = useState<string>("");
@@ -1094,6 +1112,76 @@ export default function Home() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  // Load user API key on mount
+  useEffect(() => {
+    try {
+      const savedApiKey = localStorage.getItem("user_gemini_api_key");
+      if (savedApiKey) {
+        setUserApiKey(savedApiKey);
+        setGeminiApiKeyInput(savedApiKey);
+      }
+    } catch (e) {
+      console.error("Failed to load Gemini API key from localStorage:", e);
+    }
+  }, []);
+
+  const handleSaveApiKey = () => {
+    const trimmed = geminiApiKeyInput.trim();
+    if (trimmed) {
+      try {
+        localStorage.setItem("user_gemini_api_key", trimmed);
+        setUserApiKey(trimmed);
+        setKeyTestSuccess(null);
+        setKeyTestError(null);
+        setIsApiKeyModalOpen(false);
+      } catch (e) {
+        console.error("Failed to save API key to localStorage:", e);
+      }
+    }
+  };
+
+  const handleDeleteApiKey = () => {
+    try {
+      localStorage.removeItem("user_gemini_api_key");
+      setUserApiKey("");
+      setGeminiApiKeyInput("");
+      setKeyTestSuccess(null);
+      setKeyTestError(null);
+    } catch (e) {
+      console.error("Failed to delete API key from localStorage:", e);
+    }
+  };
+
+  const handleTestApiKey = async () => {
+    const keyToTest = geminiApiKeyInput.trim();
+    if (!keyToTest) {
+      setKeyTestError("Bitte gib zuerst einen API-Key ein.");
+      setKeyTestSuccess(false);
+      return;
+    }
+    setIsTestingKey(true);
+    setKeyTestError(null);
+    setKeyTestSuccess(null);
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(keyToTest)}`);
+      if (res.ok) {
+        setKeyTestSuccess(true);
+        localStorage.setItem("user_gemini_api_key", keyToTest);
+        setUserApiKey(keyToTest);
+      } else {
+        const errorData = await res.json().catch(() => null);
+        const errMsg = errorData?.error?.message || "Ungültiger API-Key oder fehlende Berechtigung.";
+        setKeyTestError(errMsg);
+        setKeyTestSuccess(false);
+      }
+    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      setKeyTestError(err?.message || "Verbindungsfehler beim Testen des API-Keys.");
+      setKeyTestSuccess(false);
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
 
   // Load saved session on mount and load artworks
   useEffect(() => {
@@ -4197,22 +4285,49 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Space indicator / Logout */}
-          {!isLocalMode && currentSpace && (
-            <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/20 text-xs font-semibold text-zinc-400">
-              <Layers className="w-3.5 h-3.5 text-purple-400" />
-              <span>Bereich: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
-              {isSpaceSyncing && <RefreshCw className="w-3 h-3 text-purple-400 animate-spin" />}
-              <span className="w-px h-3.5 bg-zinc-800 mx-1" />
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 cursor-pointer"
-              >
-                Abmelden
-              </button>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {/* API-Key Settings Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setGeminiApiKeyInput(userApiKey);
+                setKeyTestSuccess(null);
+                setKeyTestError(null);
+                setIsApiKeyModalOpen(true);
+              }}
+              className={`px-3.5 py-2 rounded-xl font-semibold text-xs transition-all flex items-center gap-2 cursor-pointer border ${
+                userApiKey
+                  ? "bg-zinc-900/60 border-zinc-800 text-zinc-300 hover:text-white hover:border-zinc-700"
+                  : "bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20 shadow-[0_0_12px_rgba(245,158,11,0.15)]"
+              }`}
+              title={userApiKey ? "Google Gemini API-Key eingerichtet" : "Google Gemini API-Key fehlt"}
+            >
+              <Key className={`w-3.5 h-3.5 ${userApiKey ? "text-emerald-400" : "text-amber-400"}`} />
+              <span>API-Key</span>
+              {userApiKey ? (
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+              )}
+            </button>
+
+            {/* Space indicator / Logout */}
+            {!isLocalMode && currentSpace && (
+              <div className="flex items-center gap-3 px-4 py-2 rounded-xl border border-zinc-800 bg-zinc-900/20 text-xs font-semibold text-zinc-400">
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Bereich: <strong className="text-zinc-200">{currentSpace.name}</strong></span>
+                {isSpaceSyncing && <RefreshCw className="w-3 h-3 text-purple-400 animate-spin" />}
+                <span className="w-px h-3.5 bg-zinc-800 mx-1" />
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  Abmelden
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {activeTab === "generate" ? (
@@ -4417,6 +4532,19 @@ export default function Home() {
                   <div>
                     <h3 className="font-semibold text-white">Ausführung der Pipeline fehlgeschlagen</h3>
                     <p className="text-sm text-zinc-400 mt-1">{errorMessage}</p>
+                    {(errorMessage.toLowerCase().includes("api-key") || errorMessage.toLowerCase().includes("gemini")) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGeminiApiKeyInput(userApiKey);
+                          setIsApiKeyModalOpen(true);
+                        }}
+                        className="mt-3 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm w-fit"
+                      >
+                        <Key className="w-3.5 h-3.5" />
+                        API-Key jetzt eingeben
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 mt-2">
@@ -6190,9 +6318,22 @@ export default function Home() {
                     {streamErrorMessage && (
                       <div className="mt-4 p-3 rounded-xl border border-rose-500/20 bg-rose-600/10 text-xs font-semibold text-rose-400 flex items-start gap-2">
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                        <div>
+                        <div className="flex-1">
                           <p>Verarbeitung fehlgeschlagen:</p>
                           <p className="text-[11px] text-rose-300/80 font-normal mt-0.5">{streamErrorMessage}</p>
+                          {(streamErrorMessage.toLowerCase().includes("api-key") || streamErrorMessage.toLowerCase().includes("gemini")) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setGeminiApiKeyInput(userApiKey);
+                                setIsApiKeyModalOpen(true);
+                              }}
+                              className="mt-2.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                            >
+                              <Key className="w-3.5 h-3.5" />
+                              API-Key jetzt eingeben
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -7217,6 +7358,138 @@ export default function Home() {
                   <Download className="w-4 h-4" />
                   Bild herunterladen
                 </a>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Gemini API Key Modal Popup */}
+        {isApiKeyModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsApiKeyModalOpen(false);
+                  setKeyTestSuccess(null);
+                  setKeyTestError(null);
+                }}
+                className="absolute top-5 right-5 p-2 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                title="Schließen"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400">
+                  <Key className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Google Gemini API-Key</h3>
+                  <p className="text-xs text-zinc-400">Verwende deinen eigenen Key für KI-Erkennung & Outpainting</p>
+                </div>
+              </div>
+
+              <div className="mb-5 p-4 rounded-xl bg-zinc-950/70 border border-zinc-850 text-xs text-zinc-350 space-y-2">
+                <p>
+                  Dein API-Key wird sicher <strong>lokal im Browser (localStorage)</strong> gespeichert und direkt für Bild- und Scan-Erkennungen verwendet. Du musst ihn nur einmalig hinterlegen.
+                </p>
+                <div className="pt-1">
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-purple-400 hover:text-purple-300 underline font-medium inline-flex items-center gap-1"
+                  >
+                    Kostenlosen API-Key im Google AI Studio erstellen →
+                  </a>
+                </div>
+              </div>
+
+              <div className="space-y-3 mb-6">
+                <label className="block text-xs font-semibold text-zinc-300">
+                  Gemini API-Schlüssel
+                </label>
+                <div className="relative">
+                  <input
+                    type={showApiKeyText ? "text" : "password"}
+                    placeholder="AIzaSy..."
+                    value={geminiApiKeyInput}
+                    onChange={(e) => {
+                      setGeminiApiKeyInput(e.target.value);
+                      setKeyTestSuccess(null);
+                      setKeyTestError(null);
+                    }}
+                    className="w-full pl-4 pr-12 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-white placeholder-zinc-600 focus:border-purple-500 focus:outline-none transition-colors text-sm font-mono"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKeyText(!showApiKeyText)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                    title={showApiKeyText ? "Key verbergen" : "Key anzeigen"}
+                  >
+                    {showApiKeyText ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                {keyTestSuccess === true && (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>API-Key ist gültig und erfolgreich verifiziert!</span>
+                  </div>
+                )}
+
+                {keyTestError && (
+                  <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-medium">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{keyTestError}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2.5 justify-between items-center pt-3 border-t border-zinc-800">
+                <div>
+                  {userApiKey && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteApiKey}
+                      className="px-3.5 py-2 rounded-xl border border-red-900/40 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Key entfernen
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestApiKey}
+                    disabled={isTestingKey || !geminiApiKeyInput.trim()}
+                    className="px-4 py-2.5 rounded-xl border border-zinc-750 hover:border-zinc-600 bg-zinc-950 text-zinc-300 hover:text-white text-xs font-semibold transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isTestingKey ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Prüfe...</span>
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Key testen</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveApiKey}
+                    disabled={!geminiApiKeyInput.trim()}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.2)] cursor-pointer"
+                  >
+                    Speichern
+                  </button>
+                </div>
               </div>
             </div>
           </div>

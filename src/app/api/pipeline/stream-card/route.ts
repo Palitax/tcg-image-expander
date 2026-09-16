@@ -184,7 +184,14 @@ export async function POST(request: Request) {
     const bgWidth = bgMetadata.width || 1024;
     const bgHeight = bgMetadata.height || 1024;
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = (formData.get("apiKey") as string) || request.headers.get("x-gemini-api-key") || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Kein Google Gemini API-Key gefunden. Bitte trage deinen API-Key in den Einstellungen (Schlüssel-Symbol oben) oder in die .env.local ein." },
+        { status: 400 }
+      );
+    }
+
     let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
     let isCardBack = false;
     let cardName = "";
@@ -197,15 +204,14 @@ export async function POST(request: Request) {
       mimeType = "image/jpeg";
     }
 
-    // Attempt AI vision detection if GEMINI_API_KEY is available
-    if (apiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-        const base64Image = originalCardBuffer.toString("base64");
-        const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
-        let layoutText = "";
+    // AI Vision detection using Google Gemini
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const base64Image = originalCardBuffer.toString("base64");
+      const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+      let layoutText = "";
 
-        const prompt = `The uploaded image is a scan or photo of a collectible trading card (such as Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana, Sports cards).
+      const prompt = `The uploaded image is a scan or photo of a collectible trading card (such as Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana, Sports cards).
 Image dimensions: ${width}x${height} pixels.
 
 CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
@@ -219,86 +225,85 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
 6. Determine whether this is the FRONT of a card or the BACK of a card (e.g. standard blue Pokémon card back with Pokéball, Yu-Gi-Oh swirl, Magic oval).
 7. If it's a card front with a legible character/card name, return the translated official English name in "cardName". If it is a card back or illegible, return an empty string for "cardName".`;
 
-        for (const model of models) {
-          try {
-            console.log(`[Stream Card API] Detecting card layout using model ${model}`);
-            const layoutResponse = await generateContentWithRetry(ai, {
-              model,
-              contents: [
-                {
-                  inlineData: {
-                    data: base64Image,
-                    mimeType
+      for (const model of models) {
+        try {
+          console.log(`[Stream Card API] Detecting card layout using model ${model}`);
+          const layoutResponse = await generateContentWithRetry(ai, {
+            model,
+            contents: [
+              {
+                inlineData: {
+                  data: base64Image,
+                  mimeType
+                }
+              },
+              prompt
+            ],
+            config: {
+              systemInstruction: "You are an expert at precision computer vision detection for trading card game scans (Pokémon, MTG, Yu-Gi-Oh, One Piece). Your task is to detect the exact pixel bounding box of the physical trading card inside sleeves or scans, distinguishing it from transparent sleeve margins, scanner beds, and outer backgrounds. Return ONLY JSON.",
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "object",
+                properties: {
+                  card: {
+                    type: "object",
+                    properties: {
+                      x1: { type: "integer", description: "Top-left X coordinate of the physical card in pixels" },
+                      y1: { type: "integer", description: "Top-left Y coordinate of the physical card in pixels" },
+                      x2: { type: "integer", description: "Bottom-right X coordinate of the physical card in pixels" },
+                      y2: { type: "integer", description: "Bottom-right Y coordinate of the physical card in pixels" }
+                    },
+                    required: ["x1", "y1", "x2", "y2"]
+                  },
+                  isCardBack: {
+                    type: "boolean",
+                    description: "True if this is the back of a trading card, false if it is the front artwork/gameplay face."
+                  },
+                  cardName: {
+                    type: "string",
+                    description: "The name of the card/character if visible on front. Empty string for card backs."
                   }
                 },
-                prompt
-              ],
-              config: {
-                systemInstruction: "You are an expert at precision computer vision detection for trading card game scans (Pokémon, MTG, Yu-Gi-Oh, One Piece). Your task is to detect the exact pixel bounding box of the physical trading card inside sleeves or scans, distinguishing it from transparent sleeve margins, scanner beds, and outer backgrounds. Return ONLY JSON.",
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: "object",
-                  properties: {
-                    card: {
-                      type: "object",
-                      properties: {
-                        x1: { type: "integer", description: "Top-left X coordinate of the physical card in pixels" },
-                        y1: { type: "integer", description: "Top-left Y coordinate of the physical card in pixels" },
-                        x2: { type: "integer", description: "Bottom-right X coordinate of the physical card in pixels" },
-                        y2: { type: "integer", description: "Bottom-right Y coordinate of the physical card in pixels" }
-                      },
-                      required: ["x1", "y1", "x2", "y2"]
-                    },
-                    isCardBack: {
-                      type: "boolean",
-                      description: "True if this is the back of a trading card, false if it is the front artwork/gameplay face."
-                    },
-                    cardName: {
-                      type: "string",
-                      description: "The name of the card/character if visible on front. Empty string for card backs."
-                    }
-                  },
-                  required: ["card", "isCardBack", "cardName"]
-                }
+                required: ["card", "isCardBack", "cardName"]
               }
-            });
-
-            if (layoutResponse.text) {
-              layoutText = layoutResponse.text;
-              break;
             }
-          } catch (modelErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-            console.warn(`[Stream Card API] Model ${model} failed: ${modelErr.message}`);
+          });
+
+          if (layoutResponse.text) {
+            layoutText = layoutResponse.text;
+            break;
           }
+        } catch (modelErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+          console.warn(`[Stream Card API] Model ${model} failed: ${modelErr.message}`);
         }
-
-        if (layoutText) {
-          const parsed = JSON.parse(layoutText);
-          if (parsed.card && typeof parsed.card.x1 === "number" && typeof parsed.card.x2 === "number") {
-            const coords = {
-              x1: Number(parsed.card.x1),
-              y1: Number(parsed.card.y1),
-              x2: Number(parsed.card.x2),
-              y2: Number(parsed.card.y2),
-            };
-
-            // Scale 0-1000 normalized coordinates if Gemini returned them on large images
-            if (coords.x2 <= 1000 && coords.y2 <= 1000 && (width > 1050 || height > 1050)) {
-              coords.x1 = Math.round((coords.x1 / 1000) * width);
-              coords.x2 = Math.round((coords.x2 / 1000) * width);
-              coords.y1 = Math.round((coords.y1 / 1000) * height);
-              coords.y2 = Math.round((coords.y2 / 1000) * height);
-            }
-
-            cardCoords = coords;
-            isCardBack = !!parsed.isCardBack;
-            cardName = parsed.cardName || "";
-            console.log("[Stream Card API] AI detected card coordinates:", cardCoords);
-          }
-        }
-      } catch (aiErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-        console.warn("[Stream Card API] Gemini vision failed, using CV detector:", aiErr.message);
       }
+
+      if (layoutText) {
+        const parsed = JSON.parse(layoutText);
+        if (parsed.card && typeof parsed.card.x1 === "number" && typeof parsed.card.x2 === "number") {
+          const coords = {
+            x1: Number(parsed.card.x1),
+            y1: Number(parsed.card.y1),
+            x2: Number(parsed.card.x2),
+            y2: Number(parsed.card.y2),
+          };
+
+          // Scale 0-1000 normalized coordinates if Gemini returned them on large images
+          if (coords.x2 <= 1000 && coords.y2 <= 1000 && (width > 1050 || height > 1050)) {
+            coords.x1 = Math.round((coords.x1 / 1000) * width);
+            coords.x2 = Math.round((coords.x2 / 1000) * width);
+            coords.y1 = Math.round((coords.y1 / 1000) * height);
+            coords.y2 = Math.round((coords.y2 / 1000) * height);
+          }
+
+          cardCoords = coords;
+          isCardBack = !!parsed.isCardBack;
+          cardName = parsed.cardName || "";
+          console.log("[Stream Card API] AI detected card coordinates:", cardCoords);
+        }
+      }
+    } catch (aiErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      console.warn("[Stream Card API] Gemini vision failed:", aiErr.message);
     }
 
     // High-precision Computer-Vision Fallback if AI detection was unavailable or incomplete

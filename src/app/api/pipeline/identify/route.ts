@@ -38,16 +38,17 @@ async function generateContentWithRetry(ai: any, params: any, retries = 2, delay
 
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const body = await request.json().catch(() => ({}));
+    const apiKey = body?.apiKey || request.headers.get("x-gemini-api-key") || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: "GEMINI_API_KEY is not configured. Please add it to your environment variables." },
-        { status: 500 }
+        { error: "Kein Google Gemini API-Key gefunden. Bitte trage deinen API-Key in den Einstellungen (Schlüssel-Symbol oben) oder in die .env.local ein." },
+        { status: 400 }
       );
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const { imageUrl } = await request.json();
+    const imageUrl = body?.imageUrl;
 
     if (!imageUrl) {
       return NextResponse.json({ error: "Missing imageUrl parameter." }, { status: 400 });

@@ -218,16 +218,16 @@ async function shaveCutoutEdges(cutoutBuffer: Buffer, radius = 2.5): Promise<Buf
 
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const formData = await request.formData();
+    const apiKey = (formData.get("apiKey") as string) || request.headers.get("x-gemini-api-key") || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: "GEMINI_API_KEY is not configured. Please add it to your environment variables." },
-        { status: 500 }
+        { error: "Kein Google Gemini API-Key gefunden. Bitte trage deinen API-Key in den Einstellungen (Schlüssel-Symbol oben) oder in die .env.local ein." },
+        { status: 400 }
       );
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const formData = await request.formData();
     const file = formData.get("displayImage") as File | null;
 
     if (!file) {
