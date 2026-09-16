@@ -14,30 +14,30 @@ async function generateContentWithRetry(ai: any, params: any, retries = 2, delay
     try {
       return await ai.models.generateContent(params);
     } catch (e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-      const errorStr = String(e.message || e);
+      const errorStr = String(e?.message || e);
       const isUnavailable =
         errorStr.includes("503") ||
         errorStr.toLowerCase().includes("demand") ||
         errorStr.toLowerCase().includes("unavailable") ||
-        e.status === 503 ||
-        e.statusCode === 503;
+        e?.status === 503 ||
+        e?.statusCode === 503;
       const isRateLimit =
         errorStr.includes("429") ||
         errorStr.toLowerCase().includes("rate limit") ||
         errorStr.toLowerCase().includes("quota") ||
-        e.status === 429 ||
-        e.statusCode === 429;
+        e?.status === 429 ||
+        e?.statusCode === 429;
 
       if ((isUnavailable || isRateLimit) && i < retries) {
         const waitTime = delay * Math.pow(2, i);
-        console.warn(`[Gemini API] Transient error: "${errorStr}". Retrying in ${waitTime}ms (attempt ${i + 1}/${retries})...`);
+        console.warn(`[Stream Card API] Transient Gemini error: "${errorStr}". Retrying in ${waitTime}ms (attempt ${i + 1}/${retries})...`);
         await new Promise((resolve) => setTimeout(resolve, waitTime));
         continue;
       }
       throw e;
     }
   }
-  throw new Error("Failed to generate content after retries.");
+  throw new Error("Gemini generateContent fehlgeschlagen nach Retries.");
 }
 
 // Programmatic computer-vision card detector for scanned cards on scanner beds
@@ -76,7 +76,6 @@ async function detectCardBordersCV(
     let minX = w, maxX = 0, minY = h, maxY = 0;
     let matchCount = 0;
 
-    // Scan lines with a small step for high speed and robustness
     const step = 2;
     for (let y = 0; y < h; y += step) {
       const rowOffset = y * w;
@@ -95,8 +94,8 @@ async function detectCardBordersCV(
     const detectedW = maxX - minX;
     const detectedH = maxY - minY;
 
-    // Validate that the detected region is plausible for a card (at least 30% of image size)
     if (matchCount > 100 && detectedW >= w * 0.3 && detectedH >= h * 0.3) {
+      console.log(`[Stream Card CV] Plausible card detected: x1=${minX}, y1=${minY}, x2=${maxX}, y2=${maxY} (${detectedW}x${detectedH})`);
       return {
         x1: Math.max(0, minX),
         y1: Math.max(0, minY),
@@ -105,7 +104,7 @@ async function detectCardBordersCV(
       };
     }
   } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-    console.warn("[Stream Card API CV] Raw scan failed:", err.message);
+    console.warn("[Stream Card CV] Pixel scan failed:", err?.message || err);
   }
 
   // Fallback to Sharp trim
@@ -120,6 +119,7 @@ async function detectCardBordersCV(
     const trimH = trimmed.info.height || height;
 
     if (trimW >= width * 0.3 && trimH >= height * 0.3) {
+      console.log(`[Stream Card CV] Trim fallback detected: left=${offsetLeft}, top=${offsetTop}, w=${trimW}, h=${trimH}`);
       return {
         x1: offsetLeft,
         y1: offsetTop,
@@ -128,13 +128,17 @@ async function detectCardBordersCV(
       };
     }
   } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-    console.warn("[Stream Card API CV] Trim failed:", err.message);
+    console.warn("[Stream Card CV] Trim failed:", err?.message || err);
   }
 
+  console.log("[Stream Card CV] Fallback to full image bounds.");
   return { x1: 0, y1: 0, x2: width, y2: height };
 }
 
 export async function POST(request: Request) {
+  const reqStart = Date.now();
+  console.log(`[Stream Card API] === Incoming POST Request at ${new Date().toISOString()} ===`);
+
   try {
     const formData = await request.formData();
     const cardFile = formData.get("cardImage") as File | null;
@@ -142,7 +146,10 @@ export async function POST(request: Request) {
     const cardScaleFactor = parseFloat(formData.get("cardScale") as string || "0.75");
     const shadowStyle = (formData.get("shadowStyle") as string || "soft") as "soft" | "intense" | "glow" | "none";
 
+    console.log(`[Stream Card API] Params: cardFileName=${cardFile?.name || "none"}, cardFileSize=${cardFile?.size || 0} bytes, scale=${cardScaleFactor}, shadowStyle=${shadowStyle}`);
+
     if (!cardFile) {
+      console.error("[Stream Card API] Error: Keine Bilddatei im FormData vorhanden.");
       return NextResponse.json({ error: "Keine Bilddatei hochgeladen." }, { status: 400 });
     }
 
@@ -153,22 +160,26 @@ export async function POST(request: Request) {
     const originalMetadata = await sharp(originalCardBuffer).metadata();
     const width = originalMetadata.width || 0;
     const height = originalMetadata.height || 0;
+    console.log(`[Stream Card API] Card image metadata: ${width}x${height}px, format=${originalMetadata.format}, channels=${originalMetadata.channels}`);
 
     if (width === 0 || height === 0) {
+      console.error("[Stream Card API] Error: Abmessungen konnten nicht ermittelt werden.");
       return NextResponse.json({ error: "Bildabmessungen konnten nicht gelesen werden." }, { status: 400 });
     }
 
     // Load background image
     let backgroundBuffer: Buffer;
     if (customBgFile) {
+      console.log(`[Stream Card API] Using custom background: ${customBgFile.name} (${customBgFile.size} bytes)`);
       const bgArrayBuffer = await customBgFile.arrayBuffer();
       backgroundBuffer = Buffer.from(bgArrayBuffer);
     } else {
       const defaultBgPath = path.join(process.cwd(), "public", "stream-background.jpg");
       if (fs.existsSync(defaultBgPath)) {
+        console.log(`[Stream Card API] Loading default background from ${defaultBgPath}`);
         backgroundBuffer = fs.readFileSync(defaultBgPath);
       } else {
-        // Fallback: create vibrant dark blue background if file is missing
+        console.warn(`[Stream Card API] Default background file not found, creating synthetic backdrop.`);
         backgroundBuffer = await sharp({
           create: {
             width: 1024,
@@ -183,9 +194,18 @@ export async function POST(request: Request) {
     const bgMetadata = await sharp(backgroundBuffer).metadata();
     const bgWidth = bgMetadata.width || 1024;
     const bgHeight = bgMetadata.height || 1024;
+    console.log(`[Stream Card API] Background metadata: ${bgWidth}x${bgHeight}px`);
 
-    const apiKey = (formData.get("apiKey") as string) || request.headers.get("x-gemini-api-key") || process.env.GEMINI_API_KEY;
+    const headerApiKey = request.headers.get("x-gemini-api-key");
+    const formApiKey = formData.get("apiKey") as string;
+    const envApiKey = process.env.GEMINI_API_KEY;
+    const apiKey = formApiKey || headerApiKey || envApiKey;
+
+    const keySource = formApiKey ? "form-data" : headerApiKey ? "header (x-gemini-api-key)" : envApiKey ? "env (GEMINI_API_KEY)" : "none";
+    console.log(`[Stream Card API] API Key resolution source: ${keySource} (key present: ${!!apiKey})`);
+
     if (!apiKey) {
+      console.error("[Stream Card API] Kein API-Key gefunden.");
       return NextResponse.json(
         { error: "Kein Google Gemini API-Key gefunden. Bitte trage deinen API-Key in den Einstellungen (Schlüssel-Symbol oben) oder in die .env.local ein." },
         { status: 400 }
@@ -206,6 +226,7 @@ export async function POST(request: Request) {
 
     // AI Vision detection using Google Gemini
     try {
+      console.log(`[Stream Card API] Initializing GoogleGenAI client...`);
       const ai = new GoogleGenAI({ apiKey });
       const base64Image = originalCardBuffer.toString("base64");
       const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
@@ -227,7 +248,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
 
       for (const model of models) {
         try {
-          console.log(`[Stream Card API] Detecting card layout using model ${model}`);
+          console.log(`[Stream Card API] Attempting Gemini card detection with model: ${model}`);
           const layoutResponse = await generateContentWithRetry(ai, {
             model,
             contents: [
@@ -270,18 +291,19 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
           });
 
           if (layoutResponse.text) {
+            console.log(`[Stream Card API] Model ${model} returned response: ${layoutResponse.text.slice(0, 200)}...`);
             layoutText = layoutResponse.text;
             break;
           }
         } catch (modelErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-          console.warn(`[Stream Card API] Model ${model} failed: ${modelErr.message}`);
+          console.warn(`[Stream Card API] Model ${model} call failed:`, modelErr?.message || modelErr);
         }
       }
 
       if (layoutText) {
         const parsed = JSON.parse(layoutText);
         if (parsed.card && typeof parsed.card.x1 === "number" && typeof parsed.card.x2 === "number") {
-          const coords = {
+          let coords = {
             x1: Number(parsed.card.x1),
             y1: Number(parsed.card.y1),
             x2: Number(parsed.card.x2),
@@ -290,25 +312,28 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
 
           // Scale 0-1000 normalized coordinates if Gemini returned them on large images
           if (coords.x2 <= 1000 && coords.y2 <= 1000 && (width > 1050 || height > 1050)) {
-            coords.x1 = Math.round((coords.x1 / 1000) * width);
-            coords.x2 = Math.round((coords.x2 / 1000) * width);
-            coords.y1 = Math.round((coords.y1 / 1000) * height);
-            coords.y2 = Math.round((coords.y2 / 1000) * height);
+            console.log(`[Stream Card API] Scaling normalized coordinates (0-1000) to image dimensions (${width}x${height})`);
+            coords = {
+              x1: Math.round((coords.x1 / 1000) * width),
+              x2: Math.round((coords.x2 / 1000) * width),
+              y1: Math.round((coords.y1 / 1000) * height),
+              y2: Math.round((coords.y2 / 1000) * height),
+            };
           }
 
           cardCoords = coords;
           isCardBack = !!parsed.isCardBack;
           cardName = parsed.cardName || "";
-          console.log("[Stream Card API] AI detected card coordinates:", cardCoords);
+          console.log("[Stream Card API] Gemini successfully parsed coordinates:", cardCoords, "cardName:", cardName, "isBack:", isCardBack);
         }
       }
     } catch (aiErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-      console.warn("[Stream Card API] Gemini vision failed:", aiErr.message);
+      console.warn("[Stream Card API] Gemini vision failed:", aiErr?.message || aiErr);
     }
 
     // High-precision Computer-Vision Fallback if AI detection was unavailable or incomplete
     if (!cardCoords || (cardCoords.x2 - cardCoords.x1) < 50 || (cardCoords.y2 - cardCoords.y1) < 50) {
-      console.log("[Stream Card API] Running smart CV border detection...");
+      console.log("[Stream Card API] AI coordinates missing or invalid. Triggering Computer Vision fallback...");
       usedFallback = true;
       cardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
     }
@@ -336,12 +361,10 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       // Allow 5% tolerance, otherwise conform to standard ratio
       if (Math.abs(currentRatio - TARGET_RATIO) > 0.04) {
         if (currentRatio > TARGET_RATIO) {
-          // Detected box is too wide, adjust width
           const newW = detectedH * TARGET_RATIO;
           adjX1 = Math.round(centerX - newW / 2);
           adjX2 = Math.round(centerX + newW / 2);
         } else {
-          // Detected box is too tall, adjust height
           const newH = detectedW / TARGET_RATIO;
           adjY1 = Math.round(centerY - newH / 2);
           adjY2 = Math.round(centerY + newH / 2);
@@ -349,11 +372,18 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       }
     }
 
-    // Clamp coordinates safely within original image bounds
-    const extractX = Math.max(0, Math.min(Math.round(adjX1), width - 10));
-    const extractY = Math.max(0, Math.min(Math.round(adjY1), height - 10));
-    const extractW = Math.max(10, Math.min(Math.round(adjX2 - adjX1), width - extractX));
-    const extractH = Math.max(10, Math.min(Math.round(adjY2 - adjY1), height - extractY));
+    // Strict mathematical clamping to prevent any out-of-bounds Sharp extraction errors
+    const clampedLeft = Math.max(0, Math.min(Math.round(adjX1), width - 1));
+    const clampedTop = Math.max(0, Math.min(Math.round(adjY1), height - 1));
+    const clampedRight = Math.max(clampedLeft + 1, Math.min(Math.round(adjX2), width));
+    const clampedBottom = Math.max(clampedTop + 1, Math.min(Math.round(adjY2), height));
+
+    const extractX = clampedLeft;
+    const extractY = clampedTop;
+    const extractW = Math.max(1, clampedRight - clampedLeft);
+    const extractH = Math.max(1, clampedBottom - clampedTop);
+
+    console.log(`[Stream Card API] Final extraction rectangle: left=${extractX}, top=${extractY}, width=${extractW}, height=${extractH} (within ${width}x${height})`);
 
     // Extract the card
     const extractedCard = await sharp(originalCardBuffer)
@@ -368,6 +398,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
     );
 
     const roundedCardBuffer = await sharp(extractedCard)
+      .ensureAlpha()
       .composite([{
         input: roundedCornersMask,
         blend: "dest-in"
@@ -376,12 +407,11 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       .toBuffer();
 
     // Calculate final sizing on the stream background
-    // Ensure card + shadow fits strictly within background dimensions
     const clampedScaleFactor = Math.max(0.4, Math.min(0.90, cardScaleFactor));
     
-    // Maximum allowable height for the card itself on the background
-    const maxAvailableHeight = shadowStyle !== "none" ? Math.floor(bgHeight * 0.88) : bgHeight;
-    const maxAvailableWidth = shadowStyle !== "none" ? Math.floor(bgWidth * 0.88) : bgWidth;
+    // Available bounds on background
+    const maxAvailableHeight = shadowStyle !== "none" ? Math.floor(bgHeight * 0.85) : Math.floor(bgHeight * 0.95);
+    const maxAvailableWidth = shadowStyle !== "none" ? Math.floor(bgWidth * 0.85) : Math.floor(bgWidth * 0.95);
 
     let targetCardHeight = Math.round(bgHeight * clampedScaleFactor);
     let targetCardWidth = Math.round((extractW / extractH) * targetCardHeight);
@@ -395,8 +425,10 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       targetCardHeight = Math.round((extractH / extractW) * targetCardWidth);
     }
 
-    targetCardWidth = Math.max(10, Math.min(bgWidth - 10, targetCardWidth));
-    targetCardHeight = Math.max(10, Math.min(bgHeight - 10, targetCardHeight));
+    targetCardWidth = Math.max(10, Math.min(maxAvailableWidth, targetCardWidth));
+    targetCardHeight = Math.max(10, Math.min(maxAvailableHeight, targetCardHeight));
+
+    console.log(`[Stream Card API] Target card dimensions on background: ${targetCardWidth}x${targetCardHeight}px`);
 
     const resizedCardBuffer = await sharp(roundedCardBuffer)
       .resize(targetCardWidth, targetCardHeight)
@@ -406,26 +438,26 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
     const compositeLayers: OverlayOptions[] = [];
 
     if (shadowStyle !== "none") {
-      const shadowPadding = Math.max(8, Math.min(40, Math.round(targetCardWidth * 0.08)));
-      const shadowWidth = targetCardWidth + shadowPadding * 2;
-      const shadowHeight = targetCardHeight + shadowPadding * 2;
+      const shadowPadding = Math.max(8, Math.min(36, Math.round(targetCardWidth * 0.07)));
+      const shadowWidth = Math.min(bgWidth, targetCardWidth + shadowPadding * 2);
+      const shadowHeight = Math.min(bgHeight, targetCardHeight + shadowPadding * 2);
       const targetShadowRadius = Math.round(targetCardWidth * 0.035);
 
       let shadowColorR = 0;
       let shadowColorG = 0;
       let shadowColorB = 0;
       let shadowAlpha = 0.55;
-      let blurSigma = Math.max(10, Math.min(24, Math.round(shadowPadding * 0.6)));
+      let blurSigma = Math.max(8, Math.min(22, Math.round(shadowPadding * 0.6)));
 
       if (shadowStyle === "intense") {
         shadowAlpha = 0.8;
-        blurSigma = Math.max(12, Math.min(28, Math.round(shadowPadding * 0.75)));
+        blurSigma = Math.max(10, Math.min(24, Math.round(shadowPadding * 0.75)));
       } else if (shadowStyle === "glow") {
         shadowColorR = 0;
         shadowColorG = 180;
         shadowColorB = 255;
         shadowAlpha = 0.75;
-        blurSigma = Math.max(12, Math.min(28, Math.round(shadowPadding * 0.7)));
+        blurSigma = Math.max(10, Math.min(24, Math.round(shadowPadding * 0.7)));
       }
 
       const shadowMask = Buffer.from(
@@ -497,6 +529,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
     }
 
     // Composite card (+ shadow) onto background and encode efficiently
+    console.log(`[Stream Card API] Performing final Sharp background composite...`);
     const finalCompositeBuffer = await sharp(backgroundBuffer)
       .composite(compositeLayers)
       .jpeg({ quality: 92, mozjpeg: true })
@@ -504,6 +537,9 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
 
     const finalBase64 = finalCompositeBuffer.toString("base64");
     const cutoutBase64 = roundedCardBuffer.toString("base64");
+
+    const totalDuration = Date.now() - reqStart;
+    console.log(`[Stream Card API] Successfully finished in ${totalDuration}ms. Output JPEG size: ${(finalCompositeBuffer.length / 1024).toFixed(1)} KB`);
 
     return NextResponse.json({
       resultImageUrl: `data:image/jpeg;base64,${finalBase64}`,
@@ -515,9 +551,10 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
     });
 
   } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-    console.error("Error in Stream Card API:", error);
+    console.error("[Stream Card API] Critical Error caught in POST handler:", error);
+    const detailedMessage = error?.message || (typeof error === "string" ? error : JSON.stringify(error)) || "Unbekannter Fehler bei der Bildverarbeitung.";
     return NextResponse.json(
-      { error: error?.message || "Fehler bei der Stream-Kartenverarbeitung." },
+      { error: `Stream-Fehler: ${detailedMessage}` },
       { status: 500 }
     );
   }

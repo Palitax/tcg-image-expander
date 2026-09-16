@@ -135,13 +135,17 @@ const fetchWithRetry = async (
       headers.set("x-gemini-api-key", customKey.trim());
     }
     const modifiedOptions = { ...options, headers };
-    return await fetch(url, modifiedOptions);
+    console.log(`[API Request] ${options.method || "GET"} ${url} | Custom Key attached: ${!!(customKey && customKey.trim())}`);
+    const response = await fetch(url, modifiedOptions);
+    console.log(`[API Response] ${options.method || "GET"} ${url} -> Status: ${response.status} ${response.statusText}`);
+    return response;
   } catch (e) {
+    console.warn(`[API Network Error] ${options.method || "GET"} ${url}:`, e);
     if (e instanceof Error && e.name === "AbortError") {
       throw e;
     }
     if (retries > 0) {
-      const msg = `Retrying connection in ${(delay / 1000).toFixed(0)}s... (${retries} left)`;
+      const msg = `Verbindung wird in ${(delay / 1000).toFixed(0)}s erneut versucht... (${retries} Versuche übrig)`;
       if (onRetry) onRetry(msg);
       await new Promise(r => setTimeout(r, delay));
       return fetchWithRetry(url, options, retries - 1, delay * 1.5, onRetry);
@@ -155,11 +159,16 @@ const fetchWithRetry = async (
 const parseResponseData = async (response: Response, defaultErrorMsg: string): Promise<any> => {
   if (response.ok) {
     try {
-      return await response.json();
-    } catch {
+      const json = await response.json();
+      console.log(`[API Success] Data received successfully:`, { keys: Object.keys(json) });
+      return json;
+    } catch (jsonErr) {
+      console.error("[API Parse Error] JSON response parsing failed:", jsonErr);
       throw new Error("Ungültiges Antwortformat vom Server empfangen.");
     }
   }
+
+  console.error(`[API HTTP Error] Status ${response.status}: ${response.statusText}`);
 
   if (response.status === 413) {
     throw new Error("Die Bilddatei ist zu groß für den Server (über 4.5 MB).");
@@ -169,10 +178,12 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   let errorMessage = defaultErrorMsg;
   try {
     const errorData = await response.json();
+    console.error("[API Server Error Payload]", errorData);
     errorMessage = errorData.error || errorMessage;
   } catch {
     try {
       const text = await response.text();
+      console.error("[API Server Error Text]", text);
       errorMessage = text || response.statusText || errorMessage;
     } catch {
       errorMessage = response.statusText || errorMessage;
@@ -3265,6 +3276,7 @@ export default function Home() {
   const handleProcessStreamImage = async (customFile?: File | unknown) => {
     const rawFile = (customFile instanceof File) ? customFile : streamFile;
     if (!rawFile) return;
+    console.log(`[Stream Studio] Starting single image processing: "${rawFile.name}" (${(rawFile.size / 1024).toFixed(1)} KB, type=${rawFile.type || "unknown"})`);
     setIsStreamProcessing(true);
     setStreamErrorMessage(null);
     setStreamResultUrl(null);
@@ -3277,6 +3289,8 @@ export default function Home() {
       setStreamActiveStepMessage("KI analysiert den Scan und erkennt die Karte...");
 
       const fileToProcess = await optimizeImageFile(rawFile);
+      console.log(`[Stream Studio] Image optimized if needed. Final payload size: ${(fileToProcess.size / 1024).toFixed(1)} KB`);
+
       const formData = new FormData();
       formData.append("cardImage", fileToProcess);
       if (streamCustomBgFile) {
@@ -3285,11 +3299,18 @@ export default function Home() {
       formData.append("cardScale", streamCardScale.toString());
       formData.append("shadowStyle", streamShadowStyle);
 
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+      if (localKey && localKey.trim()) {
+        formData.append("apiKey", localKey.trim());
+      }
+
+      console.log(`[Stream Studio] Sending POST /api/pipeline/stream-card...`);
       const response = await fetchWithRetry("/api/pipeline/stream-card", {
         method: "POST",
         body: formData
       });
 
+      console.log(`[Stream Studio] Received response with status ${response.status}`);
       const data = await parseResponseData(response, "Fehler bei der Stream-Kartenverarbeitung.");
 
       updateStreamStepStatus("DETECT", "success");
@@ -3302,6 +3323,7 @@ export default function Home() {
 
       updateStreamStepStatus("COMPOSE", "success");
       setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
+      console.log(`[Stream Studio] Card processed successfully! Detected name: "${data.cardName || ""}", Fallback used: ${data.usedFallback}`);
 
       return {
         success: true,
@@ -3310,6 +3332,7 @@ export default function Home() {
         detectedName: data.cardName || rawFile.name.replace(/\.[^/.]+$/, "")
       };
     } catch (err: any) {
+      console.error("[Stream Studio Error]", err);
       const errorMsg = getErrorMessage(err);
       setStreamErrorMessage(errorMsg);
       setStreamSteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
@@ -3321,6 +3344,7 @@ export default function Home() {
 
   const startStreamBatchProcessing = async () => {
     if (streamBatchItems.length === 0 || isStreamBatchProcessing) return;
+    console.log(`[Stream Batch] Starting batch processing for ${streamBatchItems.length} items.`);
     setIsStreamBatchProcessing(true);
     cancelBatchRef.current = false;
 
@@ -3329,6 +3353,7 @@ export default function Home() {
     const items = [...streamBatchItems];
     for (let i = 0; i < items.length; i++) {
       if (cancelBatchRef.current) {
+        console.log(`[Stream Batch] Processing cancelled by user at item ${i + 1}/${items.length}.`);
         setStreamBatchItems(prev => 
           prev.map((item, idx) => idx >= i ? { ...item, status: "pending" } : item)
         );
@@ -3336,6 +3361,7 @@ export default function Home() {
       }
 
       const item = items[i];
+      console.log(`[Stream Batch] Processing item ${i + 1}/${items.length}: "${item.name}"`);
       setStreamBatchItems(prev => 
         prev.map(it => it.id === item.id ? { ...it, status: "processing" } : it)
       );
@@ -3353,6 +3379,7 @@ export default function Home() {
       try {
         const result = await handleProcessStreamImage(item.file);
         if (result && result.success) {
+          console.log(`[Stream Batch] Item ${i + 1}/${items.length} ("${item.name}") SUCCEEDED.`);
           setStreamBatchItems(prev => 
             prev.map(it => it.id === item.id ? { 
               ...it, 
@@ -3366,6 +3393,7 @@ export default function Home() {
           throw new Error("Verarbeitung unvollständig.");
         }
       } catch (err) {
+        console.error(`[Stream Batch] Item ${i + 1}/${items.length} ("${item.name}") FAILED:`, err);
         if (cancelBatchRef.current) {
           setStreamBatchItems(prev => 
             prev.map(it => it.id === item.id ? { ...it, status: "pending" } : item)
@@ -3382,6 +3410,7 @@ export default function Home() {
         );
       }
     }
+    console.log(`[Stream Batch] Batch processing finished.`);
     setIsStreamBatchProcessing(false);
   };
 
@@ -3927,9 +3956,24 @@ export default function Home() {
                   </div>
                   
                   {isFailed && item.error && (
-                    <p className="text-[10px] text-red-400 mt-1 truncate max-w-[200px]" title={item.error}>
-                      {item.error}
-                    </p>
+                    <div className="mt-1">
+                      <p className="text-[10px] text-red-400 font-normal leading-tight break-words max-w-[260px]" title={item.error}>
+                        {item.error}
+                      </p>
+                      {(item.error.toLowerCase().includes("api-key") || item.error.toLowerCase().includes("gemini")) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setGeminiApiKeyInput(userApiKey);
+                            setIsApiKeyModalOpen(true);
+                          }}
+                          className="mt-1.5 px-2 py-0.5 rounded bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 text-[10px] font-semibold flex items-center gap-1 border border-purple-500/30 cursor-pointer transition-colors"
+                        >
+                          <Key className="w-2.5 h-2.5" />
+                          API-Key prüfen
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 
