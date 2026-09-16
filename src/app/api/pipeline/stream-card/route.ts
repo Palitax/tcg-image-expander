@@ -278,19 +278,17 @@ export async function POST(request: Request) {
       const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
       let layoutText = "";
 
-      const prompt = `The uploaded image is a scan or photo of a collectible trading card (such as Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana, Sports cards).
+      const prompt = `You are a high-precision Computer Vision model specialized in Trading Card Game (TCG) scanning and segmentation (Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana, Sports cards).
 Image dimensions: ${width}x${height} pixels.
 
-CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
-1. The card is often inside a clear plastic sleeve (penny sleeve, toploader, or binder pocket) and scanned on a scanner glass bed or against a background.
-2. Clear plastic sleeves typically extend PAST the edges of the card (especially at the bottom or top flap) and create horizontal seam lines, reflection glares, or transparent plastic margins.
-3. Your job is to locate the BOUNDING BOX of the PHYSICAL TRADING CARD ITSELF:
-   - x1, y1 (top-left pixel coordinates)
-   - x2, y2 (bottom-right pixel coordinates)
-4. EXCLUDE ALL surrounding background, scanner glass edges, transparent penny sleeve plastic overhang, plastic folds, tape, and condition sticker tags. The bounding box must tightly wrap only the printed card rectangle.
-5. Standard trading cards have a vertical rectangular aspect ratio of approximately 2.5 : 3.5 (~0.714 ratio).
-6. Determine whether this is the FRONT of a card or the BACK of a card (e.g. standard blue Pokémon card back with Pokéball, Yu-Gi-Oh swirl, Magic oval).
-7. If it's a card front with a legible character/card name, return the translated official English name in "cardName". If it is a card back or illegible, return an empty string for "cardName".`;
+CRITICAL INSTRUCTIONS:
+1. The uploaded image is a scan of a trading card placed on a scanner bed, background, or inside a clear plastic penny sleeve / toploader.
+2. Clear penny sleeves typically extend past the edges of the card at the top, bottom, and sides with transparent plastic flaps, glare, seams, or reflection lines.
+3. YOUR JOB: Locate the EXACT BOUNDING BOX of the PHYSICAL PRINTED CARDBOARD CARD ITSELF.
+4. EXCLUDE all transparent penny sleeve plastic overhangs, plastic flaps, scanner bed glass, white/grey margins, shadows, and labels.
+5. Return "box_2d" as [ymin, xmin, ymax, xmax] integers normalized on a scale from 0 to 1000 (where 0 is top/left, 1000 is bottom/right).
+6. Determine whether this is the FRONT or BACK of the card.
+7. Return the translated official English name in "cardName" if visible on the front (empty string for card backs).`;
 
       for (const model of models) {
         try {
@@ -318,13 +316,18 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
               responseSchema: {
                 type: "OBJECT",
                 properties: {
+                  box_2d: {
+                    type: "ARRAY",
+                    items: { type: "INTEGER" },
+                    description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] integers from 0 to 1000."
+                  },
                   card: {
                     type: "OBJECT",
                     properties: {
-                      x1: { type: "INTEGER", description: "Top-left X coordinate of the physical card in pixels" },
-                      y1: { type: "INTEGER", description: "Top-left Y coordinate of the physical card in pixels" },
-                      x2: { type: "INTEGER", description: "Bottom-right X coordinate of the physical card in pixels" },
-                      y2: { type: "INTEGER", description: "Bottom-right Y coordinate of the physical card in pixels" }
+                      x1: { type: "INTEGER", description: "Top-left X (0-1000)" },
+                      y1: { type: "INTEGER", description: "Top-left Y (0-1000)" },
+                      x2: { type: "INTEGER", description: "Bottom-right X (0-1000)" },
+                      y2: { type: "INTEGER", description: "Bottom-right Y (0-1000)" }
                     },
                     required: ["x1", "y1", "x2", "y2"]
                   },
@@ -337,7 +340,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
                     description: "The name of the card/character if visible on front. Empty string for card backs."
                   }
                 },
-                required: ["card", "isCardBack", "cardName"]
+                required: ["isCardBack", "cardName"]
               }
             }
           };
@@ -367,29 +370,34 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
 
       if (layoutText) {
         const parsed = JSON.parse(layoutText);
-        if (parsed.card && typeof parsed.card.x1 === "number" && typeof parsed.card.x2 === "number") {
-          let coords = {
-            x1: Number(parsed.card.x1),
-            y1: Number(parsed.card.y1),
-            x2: Number(parsed.card.x2),
-            y2: Number(parsed.card.y2),
-          };
+        isCardBack = !!parsed.isCardBack;
+        cardName = parsed.cardName || "";
 
-          // Scale 0-1000 normalized coordinates if Gemini returned them on large images
-          if (coords.x2 <= 1000 && coords.y2 <= 1000 && (width > 1050 || height > 1050)) {
-            console.log(`[Stream Card API] Scaling normalized coordinates (0-1000) to image dimensions (${width}x${height})`);
-            coords = {
-              x1: Math.round((coords.x1 / 1000) * width),
-              x2: Math.round((coords.x2 / 1000) * width),
-              y1: Math.round((coords.y1 / 1000) * height),
-              y2: Math.round((coords.y2 / 1000) * height),
-            };
+        if (parsed.box_2d && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
+          const [ymin, xmin, ymax, xmax] = parsed.box_2d.map(Number);
+          cardCoords = {
+            x1: Math.round((xmin / 1000) * width),
+            y1: Math.round((ymin / 1000) * height),
+            x2: Math.round((xmax / 1000) * width),
+            y2: Math.round((ymax / 1000) * height)
+          };
+          console.log(`[Stream Card API] Parsed box_2d [${ymin}, ${xmin}, ${ymax}, ${xmax}] -> exact pixels:`, cardCoords);
+        } else if (parsed.card && typeof parsed.card.x1 === "number" && typeof parsed.card.x2 === "number") {
+          let rx1 = Number(parsed.card.x1);
+          let ry1 = Number(parsed.card.y1);
+          let rx2 = Number(parsed.card.x2);
+          let ry2 = Number(parsed.card.y2);
+
+          // If normalized 0-1000
+          if (rx2 <= 1000 && ry2 <= 1000) {
+            rx1 = Math.round((rx1 / 1000) * width);
+            ry1 = Math.round((ry1 / 1000) * height);
+            rx2 = Math.round((rx2 / 1000) * width);
+            ry2 = Math.round((ry2 / 1000) * height);
           }
 
-          cardCoords = coords;
-          isCardBack = !!parsed.isCardBack;
-          cardName = parsed.cardName || "";
-          console.log("[Stream Card API] Gemini successfully parsed coordinates:", cardCoords, "cardName:", cardName, "isBack:", isCardBack);
+          cardCoords = { x1: rx1, y1: ry1, x2: rx2, y2: ry2 };
+          console.log("[Stream Card API] Parsed card object -> exact pixels:", cardCoords);
         }
       }
     } catch (aiErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
