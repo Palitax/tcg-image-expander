@@ -1,32 +1,9 @@
 import { NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-// Helper to call generateContent with retry on transient errors (503, 429)
-async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await ai.models.generateContent(params);
-    } catch (e: any) {
-      const errorStr = String(e.message || e);
-      const isUnavailable = errorStr.includes("503") || errorStr.toLowerCase().includes("demand") || errorStr.toLowerCase().includes("unavailable") || e.status === 503 || e.statusCode === 503;
-      const isRateLimit = errorStr.includes("429") || errorStr.toLowerCase().includes("rate limit") || errorStr.toLowerCase().includes("quota") || e.status === 429 || e.statusCode === 429;
-      
-      if ((isUnavailable || isRateLimit) && i < retries) {
-        const waitTime = delay * Math.pow(2, i);
-        console.warn(`[Gemini API] Transient error: "${errorStr}". Retrying in ${waitTime}ms (attempt ${i + 1}/${retries})...`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-        continue;
-      }
-      throw e;
-    }
-  }
-  throw new Error("Failed to generate content after retries.");
-}
 
 export async function POST(request: Request) {
   try {
@@ -39,7 +16,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const ai = new GoogleGenAI({ apiKey });
     const file = formData.get("cardImage") as File | null;
     const skipCardCrop = formData.get("skipCardCrop") === "true";
 
@@ -70,7 +46,6 @@ export async function POST(request: Request) {
     let trimmedHeight = height;
 
     try {
-      // sharp().trim() will trim pixels matching the top-left pixel color.
       const trimmed = await sharp(originalImageBuffer)
         .trim()
         .toBuffer({ resolveWithObject: true });
@@ -78,110 +53,99 @@ export async function POST(request: Request) {
       const tWidth = trimmed.info.width || width;
       const tHeight = trimmed.info.height || height;
       
-      // Safety check: only use trimmed image if it's at least 40% of the original dimensions
       if (tWidth >= width * 0.4 && tHeight >= height * 0.4) {
         trimmedBuffer = trimmed.data;
         trimmedWidth = tWidth;
         trimmedHeight = tHeight;
         console.log(`[Crop API] Auto-trimmed borders: ${width}x${height} -> ${trimmedWidth}x${trimmedHeight}`);
-      } else {
-        console.log(`[Crop API] Trim rejected (too small): ${tWidth}x${tHeight}`);
       }
     } catch (trimError: any) {
       console.log("[Crop API] Auto-trim borders skipped or failed:", trimError.message);
     }
 
-    const base64Image = originalImageBuffer.toString("base64"); // Send original image to Gemini so it has full context of backgrounds
+    const base64Image = originalImageBuffer.toString("base64");
     
     // Fallback list of modern active Gemini models
     const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
     let layoutText = "";
-    let lastError;
+
+    const prompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
+1. "card": Bounding box coordinates (x1, y1, x2, y2) of the physical trading card itself.
+   Rules for locating the card bounds:
+   - Identify the actual card frame or borders (which contain name text, rarity codes, cost symbols, copyright).
+   - Ignore any external mount boards, white sheets/margins, transparent penny sleeves, toploaders, scanner bed glass, or background scenery.
+   - The bounding box must tightly wrap the physical cardboard of the card.
+   - For full-art, borderless, or extended-art cards: the artwork might overflow beyond the card borders. Focus on the core card rectangle itself.
+2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card.
+3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.
+4. "isCleanCardImage": Set to true if the uploaded image contains ONLY the physical trading card itself, with NO outer backing or background.
+5. "cardName": The text title/name of the card (detecting and translating Japanese, Korean, Chinese names to their official English TCG equivalent). Empty string if not found.
+6. "cardNumber": The set/card sequence number (e.g. "151/165", "OP05-119"). Empty string if not found.`;
 
     for (const model of models) {
       try {
         console.log(`[Crop API] Trying model ${model}`);
-        const layoutResponse = await generateContentWithRetry(ai, {
-          model,
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const payload = {
           contents: [
             {
-              inlineData: {
-                data: base64Image,
-                mimeType: file.type || "image/png"
-              }
-            },
-            `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
-1. "card": Bounding box coordinates (x1, y1, x2, y2) of the physical trading card itself.
-   Rules for locating the card bounds:
-   - Identify the actual card frame or borders (which contain name text, rarity codes, cost symbols, copyright).
-   - Ignore any external mount boards, white sheets/margins, card sleeves, holder cases, scanner borders, or background scenery.
-   - For full-art, borderless, or extended-art cards: the artwork might overflow/bleed beyond the card borders, or characters (like hands, weapons, or effects) might protrude out. Do NOT extend the card bounding box to include outer background decorations. Focus on the core card layout itself.
-   - Trading cards are strictly vertical rectangles with an aspect ratio of approximately 2.5:3.5 (width-to-height ratio of ~0.71). Ensure the detected bounding box matches this shape, avoiding square or wide/tall distortions.
-2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card.
-   Rules for illustration:
-   - Locate the main artwork area. Differentiate it from bottom gameplay rules text, character banners, and borders.
-3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.
-4. "isCleanCardImage": Set to true if the uploaded image contains ONLY the physical trading card itself, with NO outer mounting boards, cases, white margins, or background scenery surrounding it (the card edges extend all the way to the boundary of the image). Otherwise false.
-5. "cardName": The text title/name of the character, Pokemon, item, or card (usually printed in bold letters at the top/center of the card, e.g. "Charizard", "Monkey.D.Luffy"). If the card name is in Japanese, Korean, Chinese (or any other non-English language), detect it, translate it, and look up/map it to its official English TCG equivalent name (e.g. translate 'モンキー・D・ルフィ' or '蒙奇·D·路飞' to 'Monkey.D.Luffy', '리자몽' or 'リザードン' to 'Charizard'). If not visible/legible, return an empty string.
-6. "cardNumber": The set/card sequence number, registration code, or catalog ID (usually located in the bottom corners or borders of the card, e.g. "151/165", "OP05-119", "PR-060"). If not visible/legible, return an empty string.`
+              parts: [
+                { inlineData: { mimeType: file.type || "image/jpeg", data: base64Image } },
+                { text: prompt }
+              ]
+            }
           ],
-          config: {
-            systemInstruction: "You are an expert at analyzing trading card layouts (Pokémon, One Piece, Yu-Gi-Oh, MTG). Your task is to identify: 1) the precise bounding box of the physical trading card, 2) a clean rectangular illustration area inside the card, 3) whether a 'SAMPLE' watermark exists, 4) whether the uploaded image contains ONLY the card itself with no margins or backgrounds (isCleanCardImage), 5) the text name of the card (cardName, detecting and translating Japanese, Korean, Chinese, and non-English names to their official English TCG names), and 6) the set/card number printed at the bottom or corners (cardNumber). Return ONLY a JSON object matching the requested schema.",
+          generationConfig: {
             responseMimeType: "application/json",
             responseSchema: {
-              type: "object",
+              type: "OBJECT",
               properties: {
                 card: {
-                  type: "object",
+                  type: "OBJECT",
                   properties: {
-                    x1: { type: "integer", description: "Top-left X coordinate of the card itself" },
-                    y1: { type: "integer", description: "Top-left Y coordinate of the card itself" },
-                    x2: { type: "integer", description: "Bottom-right X coordinate of the card itself" },
-                    y2: { type: "integer", description: "Bottom-right Y coordinate of the card itself" }
+                    x1: { type: "INTEGER" },
+                    y1: { type: "INTEGER" },
+                    x2: { type: "INTEGER" },
+                    y2: { type: "INTEGER" }
                   },
                   required: ["x1", "y1", "x2", "y2"]
                 },
                 illustration: {
-                  type: "object",
+                  type: "OBJECT",
                   properties: {
-                    x1: { type: "integer", description: "Top-left X coordinate of the clean illustration area" },
-                    y1: { type: "integer", description: "Top-left Y coordinate of the clean illustration area" },
-                    x2: { type: "integer", description: "Bottom-right X coordinate of the clean illustration area" },
-                    y2: { type: "integer", description: "Bottom-right Y coordinate of the clean illustration area" }
+                    x1: { type: "INTEGER" },
+                    y1: { type: "INTEGER" },
+                    x2: { type: "INTEGER" },
+                    y2: { type: "INTEGER" }
                   },
                   required: ["x1", "y1", "x2", "y2"]
                 },
-                hasSampleWatermark: {
-                  type: "boolean",
-                  description: "True if the large text watermark 'SAMPLE' is overlaid on the card illustration/layout, false otherwise"
-                },
-                isCleanCardImage: {
-                  type: "boolean",
-                  description: "True if the uploaded image contains only the physical trading card itself with no outer backing, case, mount, white space, or table backgrounds. False otherwise."
-                },
-                cardName: {
-                  type: "string",
-                  description: "The name of the character/Pokémon/item on the card. If the card name is Japanese, Korean, Chinese, or another non-English language, detect and translate/map it to its official English name (e.g. 'Charizard' for '리자몽' or 'リザードン'). Leave blank if not found."
-                },
-                cardNumber: {
-                  type: "string",
-                  description: "The card number/ID printed at the bottom corners/borders (e.g. '151/165', 'OP05-119', 'PR-060'). Leave blank if not found."
-                }
+                hasSampleWatermark: { type: "BOOLEAN" },
+                isCleanCardImage: { type: "BOOLEAN" },
+                cardName: { type: "STRING" },
+                cardNumber: { type: "STRING" }
               },
               required: ["card", "illustration", "hasSampleWatermark", "isCleanCardImage", "cardName", "cardNumber"]
             }
           }
+        };
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
         });
-        if (layoutResponse.text) {
-          layoutText = layoutResponse.text;
-          break;
+
+        if (res.ok) {
+          const json = await res.json();
+          const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) {
+            layoutText = text;
+            break;
+          }
         }
       } catch (e: any) {
         console.warn(`[Crop API] Model ${model} failed: ${e.message}`);
-        lastError = e;
-        if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
-          throw e;
-        }
       }
     }
 
@@ -294,49 +258,39 @@ export async function POST(request: Request) {
       try {
         const imageModels = ["gemini-2.0-flash-exp", "imagen-3.0-generate-002"];
         let cleanedBase64 = "";
-        let lastCleanError;
-
-        let editAspectRatio = "3:4";
-        const ratio = width / height;
-        if (Math.abs(ratio - 1) < 0.15) {
-          editAspectRatio = "1:1";
-        } else if (Math.abs(ratio - (3/4)) < 0.15) {
-          editAspectRatio = "3:4";
-        } else if (Math.abs(ratio - (4/3)) < 0.15) {
-          editAspectRatio = "4:3";
-        } else if (Math.abs(ratio - (9/16)) < 0.15) {
-          editAspectRatio = "9:16";
-        } else if (Math.abs(ratio - (16/9)) < 0.15) {
-          editAspectRatio = "16:9";
-        }
 
         for (const modelName of imageModels) {
           try {
             console.log(`[Crop API] Clean watermark using ${modelName}`);
-            const cleanResponse = await generateContentWithRetry(ai, {
-              model: modelName,
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
+            const payload = {
               contents: [
                 {
-                  inlineData: {
-                    data: base64Image,
-                    mimeType: file.type || "image/png"
-                  }
-                },
-                "Please remove the large diagonal semi-transparent 'SAMPLE' watermark text from this card. Ensure that the card artwork, text, border, and numbers underneath are clean, fully visible, and seamlessly restored, with no watermark remaining."
-              ],
-              config: {
-                responseModalities: ["IMAGE"],
-                imageConfig: {
-                  aspectRatio: editAspectRatio
+                  parts: [
+                    { inlineData: { mimeType: file.type || "image/jpeg", data: base64Image } },
+                    { text: "Please remove the large diagonal semi-transparent 'SAMPLE' watermark text from this card. Ensure that the card artwork, text, border, and numbers underneath are clean, fully visible, and seamlessly restored, with no watermark remaining." }
+                  ]
                 }
+              ],
+              generationConfig: {
+                responseModalities: ["IMAGE"]
               }
+            };
+
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
             });
 
-            const parts = cleanResponse.candidates?.[0]?.content?.parts || [];
-            for (const part of parts) {
-              if (part.inlineData?.data) {
-                cleanedBase64 = part.inlineData.data;
-                break;
+            if (res.ok) {
+              const json = await res.json();
+              const parts = json?.candidates?.[0]?.content?.parts || [];
+              for (const part of parts) {
+                if (part.inlineData?.data) {
+                  cleanedBase64 = part.inlineData.data;
+                  break;
+                }
               }
             }
 
@@ -350,21 +304,15 @@ export async function POST(request: Request) {
             }
           } catch (e: any) {
             console.warn(`[Crop API] Watermark removal failed with ${modelName}:`, e.message);
-            lastCleanError = e;
           }
-        }
-
-        if (!cleanedBase64 && lastCleanError) {
-          console.warn("[Crop API] Watermark removal failed for all models. Falling back to original image.");
         }
       } catch (cleanError: any) {
         console.warn("[Crop API] Error during watermark cleaning block:", cleanError.message);
       }
     }
 
-    // Enforce standard trading card aspect ratio (~0.715) on detected card coordinates
+    // Only normalize aspect ratio if severely distorted (outside 0.60 - 0.85) to preserve full borders
     if (!skipCardCrop && !isCleanCardImage) {
-      const TARGET_RATIO = 0.715;
       const cardW = cardCoords.x2 - cardCoords.x1;
       const cardH = cardCoords.y2 - cardCoords.y1;
       if (cardW > 0 && cardH > 0) {
@@ -372,14 +320,17 @@ export async function POST(request: Request) {
         const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
         const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
 
-        if (currentRatio > TARGET_RATIO) {
-          const newW = cardH * TARGET_RATIO;
-          cardCoords.x1 = centerX - newW / 2;
-          cardCoords.x2 = centerX + newW / 2;
-        } else if (currentRatio < TARGET_RATIO) {
-          const newH = cardW / TARGET_RATIO;
-          cardCoords.y1 = centerY - newH / 2;
-          cardCoords.y2 = centerY + newH / 2;
+        if (currentRatio < 0.60 || currentRatio > 0.85) {
+          const TARGET_RATIO = 0.715;
+          if (currentRatio > TARGET_RATIO) {
+            const newW = cardH * TARGET_RATIO;
+            cardCoords.x1 = centerX - newW / 2;
+            cardCoords.x2 = centerX + newW / 2;
+          } else {
+            const newH = cardW / TARGET_RATIO;
+            cardCoords.y1 = centerY - newH / 2;
+            cardCoords.y2 = centerY + newH / 2;
+          }
         }
       }
     }
@@ -424,8 +375,8 @@ export async function POST(request: Request) {
       .png({ compressionLevel: 7 })
       .toBuffer();
 
-    // Round the corners of the card using SVG mask
-    const cornerRadius = Math.round(cardResizeWidth * 0.035); // 3.5% corner radius for trading cards
+    // Round the corners of the card using SVG mask (authentic 3.5mm TCG corner radius ~3.8%)
+    const cornerRadius = Math.max(2, Math.round(cardResizeWidth * 0.038));
     const roundedCornersMask = Buffer.from(
       `<svg width="${cardResizeWidth}" height="${cardResizeHeight}"><rect x="0" y="0" width="${cardResizeWidth}" height="${cardResizeHeight}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
     );

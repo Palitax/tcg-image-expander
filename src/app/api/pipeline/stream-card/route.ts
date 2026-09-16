@@ -43,40 +43,80 @@ async function detectCardBordersCV(
     }
     const bgLuminance = cornerCount > 0 ? cornerSum / cornerCount : 0;
 
-    // Threshold difference
-    const diffThreshold = 22;
-    let minX = w, maxX = 0, minY = h, maxY = 0;
-    let matchCount = 0;
-
-    const step = 2;
-    for (let y = 0; y < h; y += step) {
-      const rowOffset = y * w;
-      for (let x = 0; x < w; x += step) {
-        const val = data[rowOffset + x];
-        if (Math.abs(val - bgLuminance) > diffThreshold) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-          matchCount++;
-        }
+    // Scan inward from Top
+    let topY = 0;
+    for (let y = 0; y < Math.floor(h * 0.35); y++) {
+      let diffSum = 0;
+      const startX = Math.floor(w * 0.2);
+      const endX = Math.floor(w * 0.8);
+      for (let x = startX; x < endX; x++) {
+        diffSum += Math.abs(data[y * w + x] - bgLuminance);
+      }
+      if (diffSum / (endX - startX) > 18) {
+        topY = y;
+        break;
       }
     }
 
-    const detectedW = maxX - minX;
-    const detectedH = maxY - minY;
+    // Scan inward from Bottom
+    let bottomY = h;
+    for (let y = h - 1; y > Math.floor(h * 0.65); y--) {
+      let diffSum = 0;
+      const startX = Math.floor(w * 0.2);
+      const endX = Math.floor(w * 0.8);
+      for (let x = startX; x < endX; x++) {
+        diffSum += Math.abs(data[y * w + x] - bgLuminance);
+      }
+      if (diffSum / (endX - startX) > 18) {
+        bottomY = y;
+        break;
+      }
+    }
 
-    if (matchCount > 100 && detectedW >= w * 0.3 && detectedH >= h * 0.3) {
-      console.log(`[Stream Card CV] Plausible card detected: x1=${minX}, y1=${minY}, x2=${maxX}, y2=${maxY} (${detectedW}x${detectedH})`);
+    // Scan inward from Left
+    let leftX = 0;
+    for (let x = 0; x < Math.floor(w * 0.35); x++) {
+      let diffSum = 0;
+      const startY = Math.floor(h * 0.2);
+      const endY = Math.floor(h * 0.8);
+      for (let y = startY; y < endY; y++) {
+        diffSum += Math.abs(data[y * w + x] - bgLuminance);
+      }
+      if (diffSum / (endY - startY) > 18) {
+        leftX = x;
+        break;
+      }
+    }
+
+    // Scan inward from Right
+    let rightX = w;
+    for (let x = w - 1; x > Math.floor(w * 0.65); x--) {
+      let diffSum = 0;
+      const startY = Math.floor(h * 0.2);
+      const endY = Math.floor(h * 0.8);
+      for (let y = startY; y < endY; y++) {
+        diffSum += Math.abs(data[y * w + x] - bgLuminance);
+      }
+      if (diffSum / (endY - startY) > 18) {
+        rightX = x;
+        break;
+      }
+    }
+
+    const detectedW = rightX - leftX;
+    const detectedH = bottomY - topY;
+
+    if (detectedW >= w * 0.35 && detectedH >= h * 0.35) {
+      console.log(`[Stream Card CV] High-contrast card detected: x1=${leftX}, y1=${topY}, x2=${rightX}, y2=${bottomY} (${detectedW}x${detectedH})`);
       return {
-        x1: Math.max(0, minX),
-        y1: Math.max(0, minY),
-        x2: Math.min(w, maxX),
-        y2: Math.min(h, maxY)
+        x1: Math.max(0, leftX),
+        y1: Math.max(0, topY),
+        x2: Math.min(w, rightX),
+        y2: Math.min(h, bottomY)
       };
     }
   } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-    console.warn("[Stream Card CV] Pixel scan failed:", err?.message || err);
+    console.warn("[Stream Card CV] Edge scan failed:", err?.message || err);
   }
 
   // Fallback to Sharp trim
@@ -377,14 +417,14 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
     let adjX2 = safeX2;
     let adjY2 = safeY2;
 
-    const TARGET_RATIO = 0.714;
+    // Only normalize if severely distorted (outside 0.60 - 0.85 range) to preserve full borders
     if (detectedW > 0 && detectedH > 0) {
       const currentRatio = detectedW / detectedH;
       const centerX = (safeX1 + safeX2) / 2;
       const centerY = (safeY1 + safeY2) / 2;
 
-      // Allow 5% tolerance, otherwise conform to standard ratio
-      if (Math.abs(currentRatio - TARGET_RATIO) > 0.04) {
+      if (currentRatio < 0.60 || currentRatio > 0.85) {
+        const TARGET_RATIO = 0.714;
         if (currentRatio > TARGET_RATIO) {
           const newW = detectedH * TARGET_RATIO;
           adjX1 = Math.round(centerX - newW / 2);
@@ -416,8 +456,8 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       .png()
       .toBuffer();
 
-    // Round the corners using an SVG alpha mask (TCG cards have ~3.5% corner radius)
-    const cornerRadius = Math.max(2, Math.round(extractW * 0.035));
+    // Round the corners using an SVG alpha mask (authentic 3.5mm TCG corner radius ~3.8%)
+    const cornerRadius = Math.max(2, Math.round(extractW * 0.038));
     const roundedCornersMask = Buffer.from(
       `<svg width="${extractW}" height="${extractH}"><rect x="0" y="0" width="${extractW}" height="${extractH}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
     );
