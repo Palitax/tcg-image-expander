@@ -308,37 +308,47 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       cardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
     }
 
-    // Standard TCG card aspect ratio validation (~0.714 = 2.5 / 3.5)
-    const TARGET_RATIO = 0.714;
-    const detectedW = cardCoords.x2 - cardCoords.x1;
-    const detectedH = cardCoords.y2 - cardCoords.y1;
+    // Sanitize coordinates and prevent any NaN or infinite values
+    const safeX1 = Number.isFinite(cardCoords.x1) ? cardCoords.x1 : 0;
+    const safeY1 = Number.isFinite(cardCoords.y1) ? cardCoords.y1 : 0;
+    const safeX2 = Number.isFinite(cardCoords.x2) ? cardCoords.x2 : width;
+    const safeY2 = Number.isFinite(cardCoords.y2) ? cardCoords.y2 : height;
 
+    const detectedW = Math.max(10, safeX2 - safeX1);
+    const detectedH = Math.max(10, safeY2 - safeY1);
+
+    let adjX1 = safeX1;
+    let adjY1 = safeY1;
+    let adjX2 = safeX2;
+    let adjY2 = safeY2;
+
+    const TARGET_RATIO = 0.714;
     if (detectedW > 0 && detectedH > 0) {
       const currentRatio = detectedW / detectedH;
-      const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
-      const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
+      const centerX = (safeX1 + safeX2) / 2;
+      const centerY = (safeY1 + safeY2) / 2;
 
       // Allow 5% tolerance, otherwise conform to standard ratio
       if (Math.abs(currentRatio - TARGET_RATIO) > 0.04) {
         if (currentRatio > TARGET_RATIO) {
           // Detected box is too wide, adjust width
           const newW = detectedH * TARGET_RATIO;
-          cardCoords.x1 = Math.round(centerX - newW / 2);
-          cardCoords.x2 = Math.round(centerX + newW / 2);
+          adjX1 = Math.round(centerX - newW / 2);
+          adjX2 = Math.round(centerX + newW / 2);
         } else {
           // Detected box is too tall, adjust height
           const newH = detectedW / TARGET_RATIO;
-          cardCoords.y1 = Math.round(centerY - newH / 2);
-          cardCoords.y2 = Math.round(centerY + newH / 2);
+          adjY1 = Math.round(centerY - newH / 2);
+          adjY2 = Math.round(centerY + newH / 2);
         }
       }
     }
 
     // Clamp coordinates safely within original image bounds
-    const extractX = Math.max(0, Math.min(Math.round(cardCoords.x1), width - 10));
-    const extractY = Math.max(0, Math.min(Math.round(cardCoords.y1), height - 10));
-    const extractW = Math.max(10, Math.min(Math.round(cardCoords.x2 - cardCoords.x1), width - extractX));
-    const extractH = Math.max(10, Math.min(Math.round(cardCoords.y2 - cardCoords.y1), height - extractY));
+    const extractX = Math.max(0, Math.min(Math.round(adjX1), width - 10));
+    const extractY = Math.max(0, Math.min(Math.round(adjY1), height - 10));
+    const extractW = Math.max(10, Math.min(Math.round(adjX2 - adjX1), width - extractX));
+    const extractH = Math.max(10, Math.min(Math.round(adjY2 - adjY1), height - extractY));
 
     // Extract the card
     const extractedCard = await sharp(originalCardBuffer)
@@ -347,7 +357,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       .toBuffer();
 
     // Round the corners using an SVG alpha mask (TCG cards have ~3.5% corner radius)
-    const cornerRadius = Math.round(extractW * 0.035);
+    const cornerRadius = Math.max(2, Math.round(extractW * 0.035));
     const roundedCornersMask = Buffer.from(
       `<svg width="${extractW}" height="${extractH}"><rect x="0" y="0" width="${extractW}" height="${extractH}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
     );
@@ -357,7 +367,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
         input: roundedCornersMask,
         blend: "dest-in"
       }])
-      .png({ compressionLevel: 7 })
+      .png({ compressionLevel: 8 })
       .toBuffer();
 
     // Calculate final sizing on the stream background
@@ -379,6 +389,9 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       targetCardWidth = maxAvailableWidth;
       targetCardHeight = Math.round((extractH / extractW) * targetCardWidth);
     }
+
+    targetCardWidth = Math.max(10, Math.min(bgWidth - 10, targetCardWidth));
+    targetCardHeight = Math.max(10, Math.min(bgHeight - 10, targetCardHeight));
 
     const resizedCardBuffer = await sharp(roundedCardBuffer)
       .resize(targetCardWidth, targetCardHeight)
@@ -478,17 +491,17 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       });
     }
 
-    // Composite card (+ shadow) onto background
+    // Composite card (+ shadow) onto background and encode efficiently
     const finalCompositeBuffer = await sharp(backgroundBuffer)
       .composite(compositeLayers)
-      .png({ compressionLevel: 6 })
+      .jpeg({ quality: 92, mozjpeg: true })
       .toBuffer();
 
     const finalBase64 = finalCompositeBuffer.toString("base64");
     const cutoutBase64 = roundedCardBuffer.toString("base64");
 
     return NextResponse.json({
-      resultImageUrl: `data:image/png;base64,${finalBase64}`,
+      resultImageUrl: `data:image/jpeg;base64,${finalBase64}`,
       cutoutImageUrl: `data:image/png;base64,${cutoutBase64}`,
       coords: { x1: extractX, y1: extractY, x2: extractX + extractW, y2: extractY + extractH },
       cardName,
@@ -499,7 +512,7 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
   } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
     console.error("Error in Stream Card API:", error);
     return NextResponse.json(
-      { error: error.message || "Fehler bei der Stream-Kartenverarbeitung." },
+      { error: error?.message || "Fehler bei der Stream-Kartenverarbeitung." },
       { status: 500 }
     );
   }

@@ -3197,9 +3197,6 @@ export default function Home() {
       formData.append("cardScale", streamCardScale.toString());
       formData.append("shadowStyle", streamShadowStyle);
 
-      updateStreamStepStatus("CROP", "running");
-      setStreamActiveStepMessage("Präziser Ecken-Zuschnitt & Freistellung...");
-
       const response = await fetchWithRetry("/api/pipeline/stream-card", {
         method: "POST",
         body: formData
