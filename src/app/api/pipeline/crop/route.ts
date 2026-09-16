@@ -49,9 +49,14 @@ export async function POST(request: Request) {
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const originalImageBuffer = Buffer.from(arrayBuffer);
+    const rawImageBuffer = Buffer.from(arrayBuffer);
 
-    // Get original image metadata
+    // Normalize orientation with .rotate() to eliminate any EXIF orientation discrepancies
+    const originalImageBuffer = await sharp(rawImageBuffer)
+      .rotate()
+      .toBuffer();
+
+    // Get normalized image metadata
     const originalMetadata = await sharp(originalImageBuffer).metadata();
     const width = originalMetadata.width || 0;
     const height = originalMetadata.height || 0;

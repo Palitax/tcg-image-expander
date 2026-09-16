@@ -157,36 +157,39 @@ const fetchWithRetry = async (
 // Helper to safely parse JSON from response or extract plain text/statusText on failure
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parseResponseData = async (response: Response, defaultErrorMsg: string): Promise<any> => {
+  const rawText = await response.text();
+
   if (response.ok) {
     try {
-      const json = await response.json();
+      const json = JSON.parse(rawText);
       console.log(`[API Success] Data received successfully:`, { keys: Object.keys(json) });
       return json;
     } catch (jsonErr) {
-      console.error("[API Parse Error] JSON response parsing failed:", jsonErr);
+      console.error("[API Parse Error] JSON response parsing failed:", jsonErr, "Raw response:", rawText);
       throw new Error("Ungültiges Antwortformat vom Server empfangen.");
     }
   }
 
-  console.error(`[API HTTP Error] Status ${response.status}: ${response.statusText}`);
+  console.error(`[API HTTP Error] Status ${response.status}: ${response.statusText}`, "Raw response:", rawText);
 
   if (response.status === 413) {
     throw new Error("Die Bilddatei ist zu groß für den Server (über 4.5 MB).");
   }
 
-  // Handle error status
+  // Handle error status with full server detail preservation
   let errorMessage = defaultErrorMsg;
   try {
-    const errorData = await response.json();
+    const errorData = JSON.parse(rawText);
     console.error("[API Server Error Payload]", errorData);
-    errorMessage = errorData.error || errorMessage;
+    if (errorData && errorData.error) {
+      errorMessage = errorData.error;
+    }
   } catch {
-    try {
-      const text = await response.text();
-      console.error("[API Server Error Text]", text);
-      errorMessage = text || response.statusText || errorMessage;
-    } catch {
-      errorMessage = response.statusText || errorMessage;
+    if (rawText && rawText.trim()) {
+      console.error("[API Server Error Text]", rawText);
+      errorMessage = `${defaultErrorMsg} (${rawText.slice(0, 300)})`;
+    } else {
+      errorMessage = `${defaultErrorMsg} (Server HTTP ${response.status}: ${response.statusText || "Internal Server Error"})`;
     }
   }
   throw new Error(errorMessage);

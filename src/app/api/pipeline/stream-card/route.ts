@@ -44,12 +44,13 @@ async function generateContentWithRetry(ai: any, params: any, retries = 2, delay
 
 // Programmatic computer-vision card detector for scanned cards on scanner beds
 async function detectCardBordersCV(
-  originalCardBuffer: Buffer,
+  cardBuffer: Buffer,
   width: number,
   height: number
 ): Promise<{ x1: number; y1: number; x2: number; y2: number }> {
   try {
-    const { data, info } = await sharp(originalCardBuffer)
+    const { data, info } = await sharp(cardBuffer)
+      .removeAlpha()
       .greyscale()
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -57,10 +58,14 @@ async function detectCardBordersCV(
     const w = info.width;
     const h = info.height;
 
+    if (!w || !h || data.length < w * h) {
+      return { x1: 0, y1: 0, x2: width, y2: height };
+    }
+
     // Sample corner pixel average brightness (scanner bed / background color)
     let cornerSum = 0;
     let cornerCount = 0;
-    const cornerSize = Math.max(5, Math.min(25, Math.round(Math.min(w, h) * 0.02)));
+    const cornerSize = Math.max(3, Math.min(25, Math.round(Math.min(w, h) * 0.02)));
 
     for (let dy = 0; dy < cornerSize; dy++) {
       for (let dx = 0; dx < cornerSize; dx++) {
@@ -111,7 +116,7 @@ async function detectCardBordersCV(
 
   // Fallback to Sharp trim
   try {
-    const trimmed = await sharp(originalCardBuffer)
+    const trimmed = await sharp(cardBuffer)
       .trim()
       .toBuffer({ resolveWithObject: true });
 
@@ -156,41 +161,75 @@ export async function POST(request: Request) {
     }
 
     const cardArrayBuffer = await cardFile.arrayBuffer();
-    const originalCardBuffer = Buffer.from(cardArrayBuffer);
+    const rawCardBuffer = Buffer.from(cardArrayBuffer);
 
-    // Read card image dimensions
+    // Normalize orientation with .rotate() to eliminate any EXIF orientation discrepancies
+    const originalCardBuffer = await sharp(rawCardBuffer)
+      .rotate()
+      .toBuffer();
+
+    // Read normalized card image dimensions
     const originalMetadata = await sharp(originalCardBuffer).metadata();
     const width = originalMetadata.width || 0;
     const height = originalMetadata.height || 0;
-    console.log(`[Stream Card API] Card image metadata: ${width}x${height}px, format=${originalMetadata.format}, channels=${originalMetadata.channels}`);
+    console.log(`[Stream Card API] Normalized card metadata: ${width}x${height}px, format=${originalMetadata.format}, channels=${originalMetadata.channels}`);
 
     if (width === 0 || height === 0) {
       console.error("[Stream Card API] Error: Abmessungen konnten nicht ermittelt werden.");
       return NextResponse.json({ error: "Bildabmessungen konnten nicht gelesen werden." }, { status: 400 });
     }
 
-    // Load background image
-    let backgroundBuffer: Buffer;
-    if (customBgFile) {
-      console.log(`[Stream Card API] Using custom background: ${customBgFile.name} (${customBgFile.size} bytes)`);
-      const bgArrayBuffer = await customBgFile.arrayBuffer();
-      backgroundBuffer = Buffer.from(bgArrayBuffer);
-    } else {
-      const defaultBgPath = path.join(process.cwd(), "public", "stream-background.jpg");
-      if (fs.existsSync(defaultBgPath)) {
-        console.log(`[Stream Card API] Loading default background from ${defaultBgPath}`);
-        backgroundBuffer = fs.readFileSync(defaultBgPath);
-      } else {
-        console.warn(`[Stream Card API] Default background file not found, creating synthetic backdrop.`);
-        backgroundBuffer = await sharp({
-          create: {
-            width: 1024,
-            height: 1024,
-            channels: 4,
-            background: { r: 10, g: 15, b: 35, alpha: 1 }
-          }
-        }).png().toBuffer();
+    // Load background image with 3-tier fallback
+    let backgroundBuffer: Buffer | null = null;
+    if (customBgFile && typeof (customBgFile as any).arrayBuffer === "function") {
+      try {
+        console.log(`[Stream Card API] Using custom background: ${customBgFile.name} (${customBgFile.size} bytes)`);
+        const bgArrayBuffer = await customBgFile.arrayBuffer();
+        backgroundBuffer = Buffer.from(bgArrayBuffer);
+      } catch (bgErr) {
+        console.warn("[Stream Card API] Custom background read failed, falling back to default:", bgErr);
       }
+    }
+
+    // Tier 1: Local file system
+    if (!backgroundBuffer) {
+      try {
+        const defaultBgPath = path.join(process.cwd(), "public", "stream-background.jpg");
+        if (fs.existsSync(defaultBgPath)) {
+          console.log(`[Stream Card API] Loading default background from ${defaultBgPath}`);
+          backgroundBuffer = fs.readFileSync(defaultBgPath);
+        }
+      } catch (fsErr) {
+        console.warn(`[Stream Card API] Local background file read failed:`, fsErr);
+      }
+    }
+
+    // Tier 2: HTTP fetch from origin
+    if (!backgroundBuffer) {
+      try {
+        const origin = new URL(request.url).origin;
+        console.log(`[Stream Card API] Attempting to fetch background from ${origin}/stream-background.jpg`);
+        const res = await fetch(`${origin}/stream-background.jpg`);
+        if (res.ok) {
+          backgroundBuffer = Buffer.from(await res.arrayBuffer());
+          console.log(`[Stream Card API] Successfully fetched default background from URL.`);
+        }
+      } catch (fetchErr) {
+        console.warn("[Stream Card API] HTTP fetch for background failed:", fetchErr);
+      }
+    }
+
+    // Tier 3: Synthetic gradient fallback
+    if (!backgroundBuffer) {
+      console.warn(`[Stream Card API] Creating synthetic dark blue backdrop fallback.`);
+      backgroundBuffer = await sharp({
+        create: {
+          width: 1024,
+          height: 1024,
+          channels: 4,
+          background: { r: 12, g: 20, b: 45, alpha: 1 }
+        }
+      }).png().toBuffer();
     }
 
     const bgMetadata = await sharp(backgroundBuffer).metadata();
@@ -201,7 +240,8 @@ export async function POST(request: Request) {
     const headerApiKey = request.headers.get("x-gemini-api-key");
     const formApiKey = formData.get("apiKey") as string;
     const envApiKey = process.env.GEMINI_API_KEY;
-    const apiKey = formApiKey || headerApiKey || envApiKey;
+    const rawKey = formApiKey || headerApiKey || envApiKey;
+    const apiKey = rawKey && typeof rawKey === "string" ? rawKey.trim() : null;
 
     const keySource = formApiKey ? "form-data" : headerApiKey ? "header (x-gemini-api-key)" : envApiKey ? "env (GEMINI_API_KEY)" : "none";
     console.log(`[Stream Card API] API Key resolution source: ${keySource} (key present: ${!!apiKey})`);
