@@ -7,7 +7,6 @@ import path from "path";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-export const preferredRegion = "iad1";
 
 function writeDebugLog(message: string) {
   console.log(`[Booster Crop Debug] ${message}`);

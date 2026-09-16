@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import sharp, { OverlayOptions } from "sharp";
 import fs from "fs";
 import path from "path";
@@ -7,40 +6,6 @@ import path from "path";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-export const preferredRegion = "iad1";
-
-// Helper to call generateContent with retry on transient errors (503, 429)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await ai.models.generateContent(params);
-    } catch (e: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-      const errorStr = String(e?.message || e);
-      const isUnavailable =
-        errorStr.includes("503") ||
-        errorStr.toLowerCase().includes("demand") ||
-        errorStr.toLowerCase().includes("unavailable") ||
-        e?.status === 503 ||
-        e?.statusCode === 503;
-      const isRateLimit =
-        errorStr.includes("429") ||
-        errorStr.toLowerCase().includes("rate limit") ||
-        errorStr.toLowerCase().includes("quota") ||
-        e?.status === 429 ||
-        e?.statusCode === 429;
-
-      if ((isUnavailable || isRateLimit) && i < retries) {
-        const waitTime = delay * Math.pow(2, i);
-        console.warn(`[Stream Card API] Transient Gemini error: "${errorStr}". Retrying in ${waitTime}ms (attempt ${i + 1}/${retries})...`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-        continue;
-      }
-      throw e;
-    }
-  }
-  throw new Error("Gemini generateContent fehlgeschlagen nach Retries.");
-}
 
 // Programmatic computer-vision card detector for scanned cards on scanner beds
 async function detectCardBordersCV(
@@ -266,10 +231,9 @@ export async function POST(request: Request) {
       mimeType = "image/jpeg";
     }
 
-    // AI Vision detection using Google Gemini
+    // AI Vision detection using Google Gemini REST API (zero external SDK dependency)
     try {
-      console.log(`[Stream Card API] Initializing GoogleGenAI client...`);
-      const ai = new GoogleGenAI({ apiKey });
+      console.log(`[Stream Card API] Starting Gemini AI detection over direct REST API...`);
       const base64Image = originalCardBuffer.toString("base64");
       const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
       let layoutText = "";
@@ -291,51 +255,70 @@ CRITICAL INSTRUCTIONS FOR SCANNER & SLEEVE DETECTION:
       for (const model of models) {
         try {
           console.log(`[Stream Card API] Attempting Gemini card detection with model: ${model}`);
-          const layoutResponse = await generateContentWithRetry(ai, {
-            model,
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+          
+          const payload = {
             contents: [
               {
-                inlineData: {
-                  data: base64Image,
-                  mimeType
-                }
-              },
-              prompt
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: base64Image
+                    }
+                  },
+                  {
+                    text: prompt
+                  }
+                ]
+              }
             ],
-            config: {
-              systemInstruction: "You are an expert at precision computer vision detection for trading card game scans (Pokémon, MTG, Yu-Gi-Oh, One Piece). Your task is to detect the exact pixel bounding box of the physical trading card inside sleeves or scans, distinguishing it from transparent sleeve margins, scanner beds, and outer backgrounds. Return ONLY JSON.",
+            generationConfig: {
               responseMimeType: "application/json",
               responseSchema: {
-                type: "object",
+                type: "OBJECT",
                 properties: {
                   card: {
-                    type: "object",
+                    type: "OBJECT",
                     properties: {
-                      x1: { type: "integer", description: "Top-left X coordinate of the physical card in pixels" },
-                      y1: { type: "integer", description: "Top-left Y coordinate of the physical card in pixels" },
-                      x2: { type: "integer", description: "Bottom-right X coordinate of the physical card in pixels" },
-                      y2: { type: "integer", description: "Bottom-right Y coordinate of the physical card in pixels" }
+                      x1: { type: "INTEGER", description: "Top-left X coordinate of the physical card in pixels" },
+                      y1: { type: "INTEGER", description: "Top-left Y coordinate of the physical card in pixels" },
+                      x2: { type: "INTEGER", description: "Bottom-right X coordinate of the physical card in pixels" },
+                      y2: { type: "INTEGER", description: "Bottom-right Y coordinate of the physical card in pixels" }
                     },
                     required: ["x1", "y1", "x2", "y2"]
                   },
                   isCardBack: {
-                    type: "boolean",
+                    type: "BOOLEAN",
                     description: "True if this is the back of a trading card, false if it is the front artwork/gameplay face."
                   },
                   cardName: {
-                    type: "string",
+                    type: "STRING",
                     description: "The name of the card/character if visible on front. Empty string for card backs."
                   }
                 },
                 required: ["card", "isCardBack", "cardName"]
               }
             }
+          };
+
+          const restResponse = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
           });
 
-          if (layoutResponse.text) {
-            console.log(`[Stream Card API] Model ${model} returned response: ${layoutResponse.text.slice(0, 200)}...`);
-            layoutText = layoutResponse.text;
-            break;
+          if (restResponse.ok) {
+            const result = await restResponse.json();
+            const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) {
+              console.log(`[Stream Card API] Model ${model} returned response: ${text.slice(0, 200)}...`);
+              layoutText = text;
+              break;
+            }
+          } else {
+            const errorText = await restResponse.text();
+            console.warn(`[Stream Card API] Model ${model} returned HTTP ${restResponse.status}: ${errorText}`);
           }
         } catch (modelErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
           console.warn(`[Stream Card API] Model ${model} call failed:`, modelErr?.message || modelErr);
