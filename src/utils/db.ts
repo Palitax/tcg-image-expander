@@ -14,6 +14,7 @@ export interface SavedArtwork {
   isCase?: boolean;
   isDisplay?: boolean;
   isBooster?: boolean;
+  isStream?: boolean;
 }
 
 export function initDB(): Promise<IDBDatabase> {

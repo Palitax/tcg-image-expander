@@ -27,7 +27,12 @@ import {
   FileSpreadsheet,
   FileText,
   Loader2,
-  Smartphone
+  Smartphone,
+  Tv,
+  Sliders,
+  SlidersHorizontal,
+  Sun,
+  Eye
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -94,6 +99,12 @@ const BOOSTER_STEPS: ProgressStep[] = [
   { id: "CROP", label: "Ausschnitt & Zuschnitt", description: "Sharp extrahiert und schneidet den transparenten Ausschnitt zu", status: "idle" },
   { id: "OUTPAINT", label: "Hintergrund-Generierung", description: "Imagen 3 generiert eine passende thematische Szene", status: "idle" },
   { id: "MERGE", label: "3D-Komposition", description: "Komposition des Ausschnitts mit weichem Schattenwurf auf den Hintergrund", status: "idle" }
+];
+
+const STREAM_STEPS: ProgressStep[] = [
+  { id: "DETECT", label: "KI-Kartenerkennung", description: "Gemini trennt die physische Karte präzise von Hüllen und Scan-Rändern", status: "idle" },
+  { id: "CROP", label: "Präziser Ecken-Zuschnitt", description: "Sharp schneidet die Karte mit 3.5% abgerundeten Ecken transparent frei", status: "idle" },
+  { id: "COMPOSE", label: "Stream-Compositing", description: "Karte wird mit natürlichem Schattenwurf auf dem Stream-Hintergrund platziert", status: "idle" }
 ];
 
 // Helper to convert file to Base64 data URL
@@ -803,7 +814,59 @@ export default function Home() {
     }
   }, []);
 
-  const handleCsvImport = useCallback(async (csvFile: File, studioType: 'card' | 'display' | 'booster') => {
+  const appendStreamBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      if (!skipCsvCheck) {
+        const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
+        if (csvFile) {
+          handleCsvImport(csvFile, "stream");
+        }
+      }
+
+      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      if (imageFiles.length === 0) return;
+
+      setStreamBatchItems(prev => {
+        const currentCount = prev.length;
+        if (currentCount >= 50) {
+          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+          return prev;
+        }
+
+        let filesToAdd = imageFiles;
+        if (currentCount + imageFiles.length > 50) {
+          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
+          filesToAdd = imageFiles.slice(0, 50 - currentCount);
+        }
+
+        const newItems = filesToAdd.map(file => ({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          file,
+          previewUrl: URL.createObjectURL(file),
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          status: "pending" as const,
+          isSaved: false
+        }));
+
+        if (prev.length === 0) {
+          const selectedFile = filesToAdd[0];
+          setStreamFile(selectedFile);
+          setStreamPreviewUrl(URL.createObjectURL(selectedFile));
+          setStreamResultUrl(null);
+          setStreamCutoutUrl(null);
+          setStreamErrorMessage(null);
+          setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+          setStreamElapsedTime(0);
+          setStreamActiveStepMessage("");
+          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+        }
+
+        return [...prev, ...newItems];
+      });
+    }
+  }, []);
+
+  const handleCsvImport = useCallback(async (csvFile: File, studioType: 'card' | 'display' | 'booster' | 'stream') => {
     setIsCsvLoading(true);
     setCsvStatusMsg("CSV-Datei wird analysiert...");
 
@@ -842,6 +905,7 @@ export default function Home() {
         if (studioType === "card") appendCardBatchFiles(downloadedFiles, true);
         else if (studioType === "display") appendDisplayBatchFiles(downloadedFiles, true);
         else if (studioType === "booster") appendBoosterBatchFiles(downloadedFiles, true);
+        else if (studioType === "stream") appendStreamBatchFiles(downloadedFiles, true);
       }
 
       if (failCount > 0) {
@@ -856,7 +920,7 @@ export default function Home() {
       setIsCsvLoading(false);
       setTimeout(() => setCsvStatusMsg(""), 4000);
     }
-  }, [appendCardBatchFiles, appendDisplayBatchFiles, appendBoosterBatchFiles]);
+  }, [appendCardBatchFiles, appendDisplayBatchFiles, appendBoosterBatchFiles, appendStreamBatchFiles]);
 
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -876,17 +940,17 @@ export default function Home() {
   const [bgMode, setBgMode] = useState<"backdrop" | "outpaint">("outpaint");
   const [shouldCropCard, setShouldCropCard] = useState<boolean>(true);
 
-  const [activeTab, setActiveTab] = useState<"generate" | "case" | "library">("generate");
+  const [activeTab, setActiveTab] = useState<"generate" | "case" | "stream" | "library">("generate");
   const [activeStudioSubTab, setActiveStudioSubTab] = useState<"card" | "display" | "booster">("card");
   const [savedArtworks, setSavedArtworks] = useState<SavedArtwork[]>([]);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload" | "display" | "booster">("generate");
+  const [saveTarget, setSaveTarget] = useState<"generate" | "case" | "upload" | "display" | "booster" | "stream">("generate");
   const [newArtworkName, setNewArtworkName] = useState<string>("");
   const [libraryUploadDataUrl, setLibraryUploadDataUrl] = useState<string | null>(null);
   const [libraryUploadAspectRatio, setLibraryUploadAspectRatio] = useState<string>("3:4");
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [libraryCategory, setLibraryCategory] = useState<"all" | "cards" | "displays" | "boosters">("all");
+  const [libraryCategory, setLibraryCategory] = useState<"all" | "cards" | "displays" | "boosters" | "stream">("all");
   const [libraryCardSubCategory, setLibraryCardSubCategory] = useState<"all" | "case" | "noCase">("all");
 
   // Card renaming states
@@ -904,6 +968,24 @@ export default function Home() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoginLoading, setIsLoginLoading] = useState<boolean>(false);
   const [isSpaceSyncing, setIsSpaceSyncing] = useState<boolean>(false);
+
+  // Stream / Whatnot Studio states
+  const [streamFile, setStreamFile] = useState<File | null>(null);
+  const [streamPreviewUrl, setStreamPreviewUrl] = useState<string | null>(null);
+  const [streamResultUrl, setStreamResultUrl] = useState<string | null>(null);
+  const [streamCutoutUrl, setStreamCutoutUrl] = useState<string | null>(null);
+  const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
+  const [isStreamProcessing, setIsStreamProcessing] = useState<boolean>(false);
+  const [streamSteps, setStreamSteps] = useState<ProgressStep[]>(STREAM_STEPS);
+  const [streamElapsedTime, setStreamElapsedTime] = useState<number>(0);
+  const [streamActiveStepMessage, setStreamActiveStepMessage] = useState<string>("");
+  const [streamBatchItems, setStreamBatchItems] = useState<BatchItem[]>([]);
+  const [isStreamBatchProcessing, setIsStreamBatchProcessing] = useState<boolean>(false);
+  const [streamCustomBgFile, setStreamCustomBgFile] = useState<File | null>(null);
+  const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
+  const [streamCardScale, setStreamCardScale] = useState<number>(0.75);
+  const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
+  const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
 
   // Case Maker states
   const [selectedArtworkId, setSelectedArtworkId] = useState<string | null>(null);
@@ -2103,6 +2185,59 @@ export default function Home() {
     noClick: true
   });
 
+  const onStreamDrop = appendStreamBatchFiles;
+
+  const {
+    getRootProps: getStreamRootProps,
+    getInputProps: getStreamInputProps,
+    isDragActive: isStreamDragActive
+  } = useDropzone({
+    onDrop: onStreamDrop,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
+    },
+    maxFiles: 50,
+    disabled: isStreamProcessing || isStreamBatchProcessing
+  });
+
+  const { 
+    getRootProps: getStreamBatchDropProps, 
+    getInputProps: getStreamBatchInputProps, 
+    isDragActive: isStreamBatchDragActive 
+  } = useDropzone({
+    onDrop: appendStreamBatchFiles,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"],
+      "text/csv": [".csv"],
+      "text/plain": [".csv"]
+    },
+    maxFiles: 50,
+    disabled: isStreamProcessing || isStreamBatchProcessing,
+    noClick: true
+  });
+
+  const onStreamBgDrop = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      const bgFile = acceptedFiles[0];
+      setStreamCustomBgFile(bgFile);
+      setStreamCustomBgPreview(URL.createObjectURL(bgFile));
+    }
+  }, []);
+
+  const {
+    getRootProps: getStreamBgRootProps,
+    getInputProps: getStreamBgInputProps,
+    isDragActive: isStreamBgDragActive
+  } = useDropzone({
+    onDrop: onStreamBgDrop,
+    accept: {
+      "image/*": [".jpeg", ".jpg", ".png", ".webp"]
+    },
+    maxFiles: 1
+  });
+
   // Listen for paste event to allow pasting images directly from clipboard (Ctrl+V / Cmd+V)
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
@@ -2128,6 +2263,10 @@ export default function Home() {
                   onBoosterDrop([pastedFile]);
                 }
               }
+            } else if (activeTab === "stream") {
+              if (!isStreamProcessing && !isStreamBatchProcessing) {
+                onStreamDrop([pastedFile]);
+              }
             } else if (activeTab === "library") {
               onLibraryDrop([pastedFile]);
             }
@@ -2141,7 +2280,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-  }, [activeTab, activeStudioSubTab, isProcessing, isDisplayProcessing, isBoosterProcessing, onDrop, onDisplayDrop, onBoosterDrop, onLibraryDrop]);
+  }, [activeTab, activeStudioSubTab, isProcessing, isDisplayProcessing, isBoosterProcessing, isStreamProcessing, isStreamBatchProcessing, onDrop, onDisplayDrop, onBoosterDrop, onStreamDrop, onLibraryDrop]);
 
   const updateStepStatus = (stepId: string, status: "running" | "success" | "error") => {
     setSteps(prev => 
@@ -3024,7 +3163,178 @@ export default function Home() {
     setIsBoosterBatchProcessing(false);
   };
 
-  const handleSaveBatchItem = async (item: BatchItem, studioType: 'card' | 'display' | 'booster') => {
+  const updateStreamStepStatus = (stepId: string, status: "running" | "success" | "error") => {
+    setStreamSteps(prev => 
+      prev.map(step => {
+        if (step.id === stepId) {
+          return { ...step, status };
+        }
+        return step;
+      })
+    );
+  };
+
+  const handleProcessStreamImage = async (customFile?: File | unknown) => {
+    const rawFile = (customFile instanceof File) ? customFile : streamFile;
+    if (!rawFile) return;
+    setIsStreamProcessing(true);
+    setStreamErrorMessage(null);
+    setStreamResultUrl(null);
+    setStreamCutoutUrl(null);
+    setStreamElapsedTime(0);
+    setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+
+    try {
+      updateStreamStepStatus("DETECT", "running");
+      setStreamActiveStepMessage("KI analysiert den Scan und erkennt die Karte...");
+
+      const fileToProcess = await optimizeImageFile(rawFile);
+      const formData = new FormData();
+      formData.append("cardImage", fileToProcess);
+      if (streamCustomBgFile) {
+        formData.append("backgroundImage", streamCustomBgFile);
+      }
+      formData.append("cardScale", streamCardScale.toString());
+      formData.append("shadowStyle", streamShadowStyle);
+
+      updateStreamStepStatus("CROP", "running");
+      setStreamActiveStepMessage("Präziser Ecken-Zuschnitt & Freistellung...");
+
+      const response = await fetchWithRetry("/api/pipeline/stream-card", {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await parseResponseData(response, "Fehler bei der Stream-Kartenverarbeitung.");
+
+      updateStreamStepStatus("DETECT", "success");
+      updateStreamStepStatus("CROP", "success");
+      updateStreamStepStatus("COMPOSE", "running");
+      setStreamActiveStepMessage("Compositing auf Stream-Hintergrund...");
+
+      setStreamResultUrl(data.resultImageUrl);
+      setStreamCutoutUrl(data.cutoutImageUrl);
+
+      updateStreamStepStatus("COMPOSE", "success");
+      setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
+
+      return {
+        success: true,
+        resultImageUrl: data.resultImageUrl,
+        cutoutImageUrl: data.cutoutImageUrl,
+        detectedName: data.cardName || rawFile.name.replace(/\.[^/.]+$/, "")
+      };
+    } catch (err: any) {
+      const errorMsg = getErrorMessage(err);
+      setStreamErrorMessage(errorMsg);
+      setStreamSteps(prev => prev.map(s => s.status === "running" ? { ...s, status: "error" } : s));
+      throw err;
+    } finally {
+      setIsStreamProcessing(false);
+    }
+  };
+
+  const startStreamBatchProcessing = async () => {
+    if (streamBatchItems.length === 0 || isStreamBatchProcessing) return;
+    setIsStreamBatchProcessing(true);
+    cancelBatchRef.current = false;
+
+    setStreamBatchItems(prev => prev.map(item => ({ ...item, status: "pending", error: undefined })));
+
+    const items = [...streamBatchItems];
+    for (let i = 0; i < items.length; i++) {
+      if (cancelBatchRef.current) {
+        setStreamBatchItems(prev => 
+          prev.map((item, idx) => idx >= i ? { ...item, status: "pending" } : item)
+        );
+        break;
+      }
+
+      const item = items[i];
+      setStreamBatchItems(prev => 
+        prev.map(it => it.id === item.id ? { ...it, status: "processing" } : it)
+      );
+
+      setStreamFile(item.file);
+      setStreamPreviewUrl(item.previewUrl);
+      setStreamResultUrl(null);
+      setStreamCutoutUrl(null);
+      setStreamErrorMessage(null);
+      setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+      setStreamElapsedTime(0);
+      setStreamActiveStepMessage("");
+      setNewArtworkName(item.name);
+
+      try {
+        const result = await handleProcessStreamImage(item.file);
+        if (result && result.success) {
+          setStreamBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { 
+              ...it, 
+              status: "completed", 
+              resultImageUrl: result.resultImageUrl || undefined,
+              cutoutImageUrl: result.cutoutImageUrl || undefined,
+              name: it.file.name.replace(/\.[^/.]+$/, "")
+            } : it)
+          );
+        } else {
+          throw new Error("Verarbeitung unvollständig.");
+        }
+      } catch (err) {
+        if (cancelBatchRef.current) {
+          setStreamBatchItems(prev => 
+            prev.map(it => it.id === item.id ? { ...it, status: "pending" } : item)
+          );
+          break;
+        }
+        const errorMsg = getErrorMessage(err);
+        setStreamBatchItems(prev => 
+          prev.map(it => it.id === item.id ? { 
+            ...it, 
+            status: "failed", 
+            error: errorMsg 
+          } : it)
+        );
+      }
+    }
+    setIsStreamBatchProcessing(false);
+  };
+
+  const handleCancelStreamProcessing = () => {
+    cancelBatchRef.current = true;
+    setIsStreamBatchProcessing(false);
+    setIsStreamProcessing(false);
+  };
+
+  const downloadAllStreamBatchItems = async () => {
+    const completedItems = streamBatchItems.filter(it => it.status === "completed" && it.resultImageUrl);
+    if (completedItems.length === 0) return;
+
+    if (completedItems.length === 1) {
+      const item = completedItems[0];
+      const baseName = item.file.name.replace(/\.[^/.]+$/, "");
+      triggerDownload(item.resultImageUrl!, `${baseName}.png`);
+      return;
+    }
+
+    const filesToDownload: { url: string; filename: string }[] = [];
+    completedItems.forEach((item) => {
+      const baseName = item.file.name.replace(/\.[^/.]+$/, "");
+      filesToDownload.push({
+        url: item.resultImageUrl!,
+        filename: `${baseName}.png`
+      });
+    });
+
+    await triggerZipDownload(filesToDownload, `Whatnot_Stream_Export_${Date.now()}.zip`);
+  };
+
+  const triggerStreamSingleDownload = (url: string, originalFilename: string) => {
+    const baseName = originalFilename.replace(/\.[^/.]+$/, "");
+    triggerDownload(url, `${baseName}.png`);
+  };
+
+  const handleSaveBatchItem = async (item: BatchItem, studioType: 'card' | 'display' | 'booster' | 'stream') => {
     if (!item.resultImageUrl) return;
 
     const artId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
@@ -3032,7 +3342,8 @@ export default function Home() {
 
     const currentRatio = studioType === "card" ? aspectRatio :
                          studioType === "display" ? displayAspectRatio :
-                         boosterAspectRatio;
+                         studioType === "booster" ? boosterAspectRatio :
+                         "1:1";
 
     const isDual = currentRatio === "both" || !!item.verticalResultImageUrl;
 
@@ -3054,7 +3365,8 @@ export default function Home() {
           const response = await fetch(originalCardUrl);
           const blob = await response.blob();
           const filename = studioType === "card" ? "card.png" : 
-                           studioType === "display" ? "display_original.png" : "booster_original.png";
+                           studioType === "display" ? "display_original.png" : 
+                           studioType === "stream" ? "stream_scan.png" : "booster_original.png";
           const path = `spaces/${currentSpace.id}/${artId}/${filename}`;
           const { error: uploadError } = await supabase.storage
             .from("tcg-artworks")
@@ -3071,14 +3383,16 @@ export default function Home() {
         }
         if (cardOnlyUrl && cardOnlyUrl.startsWith("data:image/")) {
           const filename = studioType === "card" ? "card_only.png" : 
-                           studioType === "display" ? "display_cutout.png" : "booster_cutout.png";
+                           studioType === "display" ? "display_cutout.png" : 
+                           studioType === "stream" ? "stream_cutout.png" : "booster_cutout.png";
           cardOnlyUrl = await uploadBase64ToSupabase(cardOnlyUrl, `spaces/${currentSpace.id}/${artId}/${filename}`);
         }
 
         if (originalCardUrl && cardOnlyUrl) {
           originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}${
             studioType === "display" ? "&is_display=true" : 
-            studioType === "booster" ? "&is_booster=true" : ""
+            studioType === "booster" ? "&is_booster=true" : 
+            studioType === "stream" ? "&is_stream=true" : ""
           }`;
         }
 
@@ -3145,7 +3459,8 @@ export default function Home() {
         timestamp: timestamp,
         isCase: false,
         isDisplay: studioType === "display",
-        isBooster: studioType === "booster"
+        isBooster: studioType === "booster",
+        isStream: studioType === "stream"
       };
 
       try {
@@ -3163,7 +3478,8 @@ export default function Home() {
             timestamp: timestamp + 1,
             isCase: false,
             isDisplay: studioType === "display",
-            isBooster: studioType === "booster"
+            isBooster: studioType === "booster",
+            isStream: studioType === "stream"
           };
           await saveArtwork(localVertArtwork);
         }
@@ -3183,6 +3499,8 @@ export default function Home() {
       setDisplayBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, isSaved: true } : it));
     } else if (studioType === "booster") {
       setBoosterBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, isSaved: true } : it));
+    } else if (studioType === "stream") {
+      setStreamBatchItems(prev => prev.map(it => it.id === item.id ? { ...it, isSaved: true } : it));
     }
 
     try {
@@ -3193,10 +3511,11 @@ export default function Home() {
     }
   };
 
-  const handleSaveAllBatchItems = async (studioType: 'card' | 'display' | 'booster') => {
+  const handleSaveAllBatchItems = async (studioType: 'card' | 'display' | 'booster' | 'stream') => {
     const items = studioType === "card" ? cardBatchItems :
                   studioType === "display" ? displayBatchItems :
-                  boosterBatchItems;
+                  studioType === "booster" ? boosterBatchItems :
+                  streamBatchItems;
     
     const completedItems = items.filter(it => it.status === "completed" && !it.isSaved);
     if (completedItems.length === 0) return;
@@ -3248,18 +3567,21 @@ export default function Home() {
     await triggerZipDownload(filesToDownload, `${prefix}_Batch_Export_${Date.now()}.zip`);
   };
 
-  const renderBatchUI = (studioType: 'card' | 'display' | 'booster') => {
+  const renderBatchUI = (studioType: 'card' | 'display' | 'booster' | 'stream') => {
     const items = studioType === 'card' ? cardBatchItems :
                   studioType === 'display' ? displayBatchItems :
-                  boosterBatchItems;
+                  studioType === 'booster' ? boosterBatchItems :
+                  streamBatchItems;
     
     const isProcessingBatch = studioType === 'card' ? isCardBatchProcessing :
                               studioType === 'display' ? isDisplayBatchProcessing :
-                              isBoosterBatchProcessing;
+                              studioType === 'booster' ? isBoosterBatchProcessing :
+                              isStreamBatchProcessing;
 
     const startProcessing = studioType === 'card' ? startCardBatchProcessing :
                             studioType === 'display' ? startDisplayBatchProcessing :
-                            startBoosterBatchProcessing;
+                            studioType === 'booster' ? startBoosterBatchProcessing :
+                            startStreamBatchProcessing;
 
     const resetBatch = () => {
       if (studioType === 'card') {
@@ -3274,12 +3596,19 @@ export default function Home() {
         setDisplayPreviewUrl(null);
         setDisplayResultUrl(null);
         setDisplayErrorMessage(null);
-      } else {
+      } else if (studioType === 'booster') {
         setBoosterBatchItems([]);
         setBoosterFile(null);
         setBoosterPreviewUrl(null);
         setBoosterResultUrl(null);
         setBoosterErrorMessage(null);
+      } else {
+        setStreamBatchItems([]);
+        setStreamFile(null);
+        setStreamPreviewUrl(null);
+        setStreamResultUrl(null);
+        setStreamCutoutUrl(null);
+        setStreamErrorMessage(null);
       }
     };
 
@@ -3292,15 +3621,18 @@ export default function Home() {
 
     const batchDropProps = studioType === 'card' ? getCardBatchDropProps :
                           studioType === 'display' ? getDisplayBatchDropProps :
-                          getBoosterBatchDropProps;
+                          studioType === 'booster' ? getBoosterBatchDropProps :
+                          getStreamBatchDropProps;
     
     const batchInputProps = studioType === 'card' ? getCardBatchInputProps :
                            studioType === 'display' ? getDisplayBatchInputProps :
-                           getBoosterBatchInputProps;
+                           studioType === 'booster' ? getBoosterBatchInputProps :
+                           getStreamBatchInputProps;
     
     const isBatchDragActive = studioType === 'card' ? isCardBatchDragActive :
                              studioType === 'display' ? isDisplayBatchDragActive :
-                             isBoosterBatchDragActive;
+                             studioType === 'booster' ? isBoosterBatchDragActive :
+                             isStreamBatchDragActive;
 
     return (
       <div 
@@ -3326,6 +3658,7 @@ export default function Home() {
             </h2>
             <p className="text-xs text-zinc-500 mt-1">
               Verarbeite bis zu 50 Bilder nacheinander. Status: {completedCount} abgeschlossen, {failedCount} fehlgeschlagen, {pendingCount} wartend.
+              {studioType === "stream" && " (Original-Dateinamen bleiben beim Download exakt erhalten)"}
             </p>
           </div>
           
@@ -3348,7 +3681,8 @@ export default function Home() {
                   cancelBatchRef.current = true;
                   if (studioType === 'card') handleCancelProcessing();
                   else if (studioType === 'display') handleCancelDisplayProcessing();
-                  else handleCancelBoosterProcessing();
+                  else if (studioType === 'booster') handleCancelBoosterProcessing();
+                  else handleCancelStreamProcessing();
                 }}
                 className="px-4 py-2 rounded-xl border border-red-500/30 hover:border-red-500/50 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
               >
@@ -3392,7 +3726,13 @@ export default function Home() {
               <>
                 <button
                   type="button"
-                  onClick={() => downloadAllBatchItems(studioType)}
+                  onClick={() => {
+                    if (studioType === "stream") {
+                      downloadAllStreamBatchItems();
+                    } else {
+                      downloadAllBatchItems(studioType);
+                    }
+                  }}
                   className="px-4 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
                 >
                   <Download className="w-4 h-4 text-purple-400" />
@@ -3526,15 +3866,19 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => {
-                          const prefix = studioType === "card" ? "TCG" : studioType === "display" ? "Display" : "Booster";
-                          const cleanName = sanitizeNameForFile(item.name, "Artwork");
-                          if (item.verticalResultImageUrl) {
-                            triggerZipDownload([
-                              { url: item.resultImageUrl!, filename: `${prefix}_${cleanName}_Desktop.png` },
-                              { url: item.verticalResultImageUrl, filename: `${prefix}_${cleanName}_Mobile.png` }
-                            ], `${prefix}_${cleanName}_Desktop_Mobile.zip`);
+                          if (studioType === "stream") {
+                            triggerStreamSingleDownload(item.resultImageUrl!, item.file.name);
                           } else {
-                            triggerDownload(item.resultImageUrl!, `${prefix}_${cleanName}.png`);
+                            const prefix = studioType === "card" ? "TCG" : studioType === "display" ? "Display" : "Booster";
+                            const cleanName = sanitizeNameForFile(item.name, "Artwork");
+                            if (item.verticalResultImageUrl) {
+                              triggerZipDownload([
+                                { url: item.resultImageUrl!, filename: `${prefix}_${cleanName}_Desktop.png` },
+                                { url: item.verticalResultImageUrl, filename: `${prefix}_${cleanName}_Mobile.png` }
+                              ], `${prefix}_${cleanName}_Desktop_Mobile.zip`);
+                            } else {
+                              triggerDownload(item.resultImageUrl!, `${prefix}_${cleanName}.png`);
+                            }
                           }
                         }}
                         className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-300 hover:text-white transition-colors cursor-pointer"
@@ -3622,6 +3966,18 @@ export default function Home() {
     setBoosterElapsedTime(0);
     setBoosterActiveStepMessage("");
     setIsBoosterDownloadOpen(false);
+
+    // Reset Stream Studio states
+    setStreamFile(null);
+    setStreamBatchItems([]);
+    setStreamPreviewUrl(null);
+    setStreamResultUrl(null);
+    setStreamCutoutUrl(null);
+    setStreamErrorMessage(null);
+    setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+    setStreamElapsedTime(0);
+    setStreamActiveStepMessage("");
+    setIsStreamDownloadOpen(false);
   };
 
   const filteredArtworks = savedArtworks.filter(art => {
@@ -3632,8 +3988,10 @@ export default function Home() {
       return !!art.isDisplay;
     } else if (libraryCategory === "boosters") {
       return !!art.isBooster;
+    } else if (libraryCategory === "stream") {
+      return !!art.isStream;
     } else if (libraryCategory === "cards") {
-      const isCard = !art.isDisplay && !art.isBooster;
+      const isCard = !art.isDisplay && !art.isBooster && !art.isStream;
       if (!isCard) return false;
       if (libraryCardSubCategory === "case") {
         return !!art.isCase;
@@ -3791,7 +4149,7 @@ export default function Home() {
 
         {/* Tab selection bar */}
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-8 border-b border-zinc-800 pb-4">
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-3">
             <button
               type="button"
               onClick={() => setActiveTab("generate")}
@@ -3803,6 +4161,18 @@ export default function Home() {
             >
               <Sparkles className="w-4 h-4" />
               Studio
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("stream")}
+              className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${
+                activeTab === "stream"
+                  ? "bg-purple-600/15 border border-purple-500/30 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]"
+                  : "border border-transparent text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Tv className="w-4 h-4" />
+              Stream / Whatnot
             </button>
             <button
               type="button"
@@ -5531,6 +5901,413 @@ export default function Home() {
               </div>
             )}
           </>
+        ) : activeTab === "stream" ? (
+          <div className="flex-1 flex flex-col gap-8 items-start w-full">
+            {/* Stream Studio Top Settings & Background Bar */}
+            <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+              {/* Background Selection Card */}
+              <div className="lg:col-span-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                      <Tv className="w-4 h-4 text-purple-400" />
+                      Stream-Hintergrund
+                    </h2>
+                    <span className="text-[11px] font-medium text-purple-300 px-2.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20">
+                      Whatnot / Live-Stream
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 mb-4">
+                    Wähle den Hintergrund für deine Stream-Präsentation. Standardmäßig wird dein blauer Energie-Hintergrund verwendet.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-4 bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-3">
+                  <div className="w-16 h-16 rounded-lg overflow-hidden border border-zinc-750 bg-zinc-900 shrink-0 relative shadow-inner">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={streamCustomBgPreview || "/stream-background.jpg"}
+                      alt="Stream Background Preview"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0 flex flex-col gap-2">
+                    <p className="text-xs font-semibold text-zinc-200 truncate">
+                      {streamCustomBgFile ? streamCustomBgFile.name : "Standard: Blauer Energie-Blast (Whatnot)"}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <div {...getStreamBgRootProps()} className="inline-block">
+                        <input {...getStreamBgInputProps()} />
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Upload className="w-3 h-3" />
+                          Eigenen Hintergrund laden
+                        </button>
+                      </div>
+                      {streamCustomBgFile && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStreamCustomBgFile(null);
+                            setStreamCustomBgPreview(null);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-750 text-zinc-400 hover:text-zinc-200 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          Standard zurücksetzen
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Layout & Shadow Settings Card */}
+              <div className="lg:col-span-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
+                <div>
+                  <h2 className="text-base font-semibold text-white flex items-center gap-2 mb-3">
+                    <SlidersHorizontal className="w-4 h-4 text-purple-400" />
+                    Layout & Effekt-Einstellungen
+                  </h2>
+                  <p className="text-xs text-zinc-400 mb-4">
+                    Passe die Kartengröße und den Schattenwurf für den Stream optimal an.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Card Scale */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                      Kartengröße auf Hintergrund
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
+                      {[
+                        { label: "65%", sub: "Kompakt", val: 0.65 },
+                        { label: "75%", sub: "Standard", val: 0.75 },
+                        { label: "85%", sub: "Groß", val: 0.85 }
+                      ].map(opt => (
+                        <button
+                          key={opt.label}
+                          type="button"
+                          onClick={() => setStreamCardScale(opt.val)}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all ${
+                            streamCardScale === opt.val
+                              ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                              : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                          }`}
+                        >
+                          <span>{opt.label}</span>
+                          <span className="text-[9px] text-zinc-500 font-normal">{opt.sub}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Shadow Style */}
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                      Schatten- & Leuchteffekt
+                    </label>
+                    <select
+                      value={streamShadowStyle}
+                      onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
+                      className="w-full px-3 py-2.5 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
+                    >
+                      <option value="soft">Weicher Schatten (Standard)</option>
+                      <option value="intense">Intensiver 3D-Schatten</option>
+                      <option value="glow">Blauer Glow-Effekt (Whatnot)</option>
+                      <option value="none">Kein Schatten</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Upload Area for Scanned Cards */}
+            <div className="w-full">
+              <div 
+                {...getStreamRootProps()}
+                className={`border-2 border-dashed rounded-3xl p-8 sm:p-10 text-center transition-all duration-300 cursor-pointer ${
+                  isStreamDragActive 
+                    ? "border-purple-500 bg-purple-500/10 shadow-[0_0_30px_rgba(168,85,247,0.2)]" 
+                    : "border-zinc-800 hover:border-purple-500/50 bg-zinc-900/20 hover:bg-zinc-900/40"
+                }`}
+              >
+                <input {...getStreamInputProps({ id: "stream-card-input" })} />
+                <div className="flex flex-col items-center justify-center gap-3 max-w-xl mx-auto">
+                  <div className="w-14 h-14 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+                    <Upload className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Gescannte TCG-Karten hier ablegen oder durchsuchen
+                    </h3>
+                    <p className="text-xs text-zinc-400">
+                      Unterstützt Vorder- und Rückseiten, gesleevte Scans mit Folienrändern und Rohkarten.
+                    </p>
+                    <p className="text-[11px] text-zinc-500 mt-1">
+                      Massen-Upload von bis zu 50 Bildern gleichzeitig (JPG, PNG, WEBP) oder CSV-Import.
+                    </p>
+                  </div>
+                  
+                  <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                    <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
+                      ⚡ KI trennt Folie & Scannerbett
+                    </span>
+                    <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
+                      ✂️ 3.5% abgerundete Ecken
+                    </span>
+                    <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
+                      📁 Exakte Dateinamen bleiben erhalten
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Active Card Single Preview & Process Section */}
+            {streamFile && (
+              <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                {/* Left Column: Uploaded Card Preview + Detection Checklist */}
+                <section className="lg:col-span-6 flex flex-col gap-6">
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
+                    <div className="flex items-center justify-between gap-4 mb-4">
+                      <h2 className="text-lg font-semibold text-white flex items-center gap-2 truncate">
+                        <ImageIcon className="w-5 h-5 text-purple-400" />
+                        <span className="truncate">{streamFile.name}</span>
+                      </h2>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStreamFile(null);
+                          setStreamPreviewUrl(null);
+                          setStreamResultUrl(null);
+                          setStreamCutoutUrl(null);
+                          setStreamErrorMessage(null);
+                        }}
+                        className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                        title="Auswahl aufheben"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-6 items-center">
+                      <div className="w-44 h-60 rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative shadow-xl">
+                        {streamPreviewUrl && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={streamPreviewUrl}
+                            alt="Uploaded Card Scan"
+                            className="w-full h-full object-contain"
+                          />
+                        )}
+                        {isStreamProcessing && (
+                          <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-3 text-center">
+                            <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mb-2" />
+                            <p className="text-[11px] font-semibold text-purple-300">Wird verarbeitet...</p>
+                            <span className="text-[10px] text-zinc-400 mt-1">{streamElapsedTime}s</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 flex flex-col gap-3 w-full">
+                        <div className="flex flex-col gap-2 bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/80">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-zinc-400 font-medium">Dateiname:</span>
+                            <span className="text-zinc-200 font-mono font-semibold truncate max-w-[180px]">{streamFile.name}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-zinc-400 font-medium">Dateigröße:</span>
+                            <span className="text-zinc-300">{(streamFile.size / 1024 / 1024).toFixed(2)} MB</span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-zinc-400 font-medium">Ausgabeformat:</span>
+                            <span className="text-emerald-400 font-medium">PNG (Hochauflösend)</span>
+                          </div>
+                        </div>
+
+                        {!isStreamProcessing && !streamResultUrl && (
+                          <button
+                            type="button"
+                            onClick={() => handleProcessStreamImage()}
+                            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(147,51,234,0.3)] transition-all cursor-pointer"
+                          >
+                            <Sparkles className="w-4 h-4" />
+                            Stream-Bild erstellen
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Progress steps checklist */}
+                    <div className="mt-6 border-t border-zinc-800/80 pt-4 flex flex-col gap-2.5">
+                      {streamSteps.map((step) => {
+                        const isRunning = step.status === "running";
+                        const isSuccess = step.status === "success";
+                        const isError = step.status === "error";
+
+                        return (
+                          <div
+                            key={step.id}
+                            className={`flex items-start gap-3 p-2.5 rounded-xl transition-colors ${
+                              isRunning ? "bg-purple-600/10 border border-purple-500/20" : ""
+                            }`}
+                          >
+                            <div className="mt-0.5 shrink-0">
+                              {isRunning ? (
+                                <div className="w-4 h-4 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
+                              ) : isSuccess ? (
+                                <div className="w-4 h-4 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
+                                  <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                </div>
+                              ) : isError ? (
+                                <div className="w-4 h-4 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center">
+                                  <AlertCircle className="w-2.5 h-2.5 text-rose-400" />
+                                </div>
+                              ) : (
+                                <div className="w-4 h-4 rounded-full border border-zinc-800 bg-zinc-950 flex items-center justify-center">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-zinc-700" />
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p
+                                className={`text-xs font-semibold ${
+                                  isRunning ? "text-purple-400" : isSuccess ? "text-zinc-300" : isError ? "text-rose-400" : "text-zinc-500"
+                                }`}
+                              >
+                                {step.label}
+                              </p>
+                              <p className="text-[10px] text-zinc-500 mt-0.5">
+                                {step.description}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {streamErrorMessage && (
+                      <div className="mt-4 p-3 rounded-xl border border-rose-500/20 bg-rose-600/10 text-xs font-semibold text-rose-400 flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div>
+                          <p>Verarbeitung fehlgeschlagen:</p>
+                          <p className="text-[11px] text-rose-300/80 font-normal mt-0.5">{streamErrorMessage}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {/* Right Column: Final Stream Result Showcase */}
+                <section className="lg:col-span-6 flex flex-col gap-6">
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col">
+                    <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                      <Maximize2 className="w-5 h-5 text-purple-400" />
+                      Stream-Ergebnis (Vorschau)
+                    </h2>
+
+                    <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950/80 rounded-2xl border border-zinc-850 p-4 relative min-h-[360px]">
+                      {isStreamProcessing ? (
+                        <div className="text-center text-zinc-400 p-8 flex flex-col items-center">
+                          <div className="w-16 h-16 rounded-2xl border border-purple-500/20 bg-purple-500/5 flex items-center justify-center mb-4">
+                            <RefreshCw className="w-8 h-8 text-purple-400 animate-spin" />
+                          </div>
+                          <p className="text-sm font-semibold text-white">Stream-Grafik wird generiert...</p>
+                          <p className="text-xs text-zinc-500 mt-1 max-w-[240px]">
+                            {streamActiveStepMessage || "Die Karte wird präzise freigestellt und auf dem Hintergrund platziert."}
+                          </p>
+                        </div>
+                      ) : streamResultUrl ? (
+                        <div className="w-full flex flex-col items-center">
+                          <div 
+                            className="relative rounded-xl overflow-hidden border border-zinc-800 shadow-2xl w-full max-w-[340px] aspect-square cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
+                            onClick={() => {
+                              setLightboxImage({ url: streamResultUrl, title: streamFile.name });
+                            }}
+                            title="Größere Ansicht (Klicken)"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={streamResultUrl}
+                              alt="Stream Card Result"
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
+                            />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                              <div className="p-3 rounded-full bg-black/60 border border-zinc-700 text-white backdrop-blur-md">
+                                <Maximize2 className="w-5 h-5" />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Download Buttons Bar */}
+                          <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (streamResultUrl && streamFile) {
+                                  triggerStreamSingleDownload(streamResultUrl, streamFile.name);
+                                }
+                              }}
+                              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(147,51,234,0.3)] cursor-pointer"
+                              title={`Herunterladen als ${streamFile.name.replace(/\.[^/.]+$/, "")}.png`}
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Herunterladen</span>
+                            </button>
+
+                            {streamCutoutUrl && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const baseName = streamFile.name.replace(/\.[^/.]+$/, "");
+                                  triggerDownload(streamCutoutUrl, `${baseName}_cutout.png`);
+                                }}
+                                className="py-3 px-3.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                                title="Nur die freigestellte Karte mit transparentem Hintergrund herunterladen"
+                              >
+                                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                                <span>Freigestellt (PNG)</span>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSaveTarget("stream");
+                                setNewArtworkName(streamFile.name.replace(/\.[^/.]+$/, ""));
+                                setIsSaveModalOpen(true);
+                              }}
+                              className="p-3 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-955/20 hover:bg-purple-955/40 text-purple-300 font-semibold text-xs flex items-center justify-center transition-all cursor-pointer"
+                              title="In Bibliothek speichern"
+                            >
+                              <Bookmark className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center text-zinc-500 p-8 flex flex-col items-center">
+                          <div className="w-16 h-16 rounded-2xl border border-zinc-850 bg-zinc-900/40 flex items-center justify-center mb-4">
+                            <Tv className="w-8 h-8 text-zinc-650" />
+                          </div>
+                          <p className="text-sm font-semibold text-zinc-400">Noch kein Stream-Bild generiert</p>
+                          <p className="text-xs text-zinc-600 mt-2 max-w-[240px]">
+                            Klicke auf &quot;Stream-Bild erstellen&quot;, um die Karte per KI freizustellen und auf dem Stream-Hintergrund zu platzieren.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {/* Stream Batch UI */}
+            {renderBatchUI("stream")}
+          </div>
         ) : activeTab === "case" ? (
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left panel - Case configuration & library selection */}
