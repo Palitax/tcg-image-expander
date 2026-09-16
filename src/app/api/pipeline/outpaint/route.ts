@@ -80,7 +80,7 @@ export async function POST(request: Request) {
 
     try {
       // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
-      const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+      const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
       let description = "";
       let lastError;
 
@@ -138,55 +138,74 @@ export async function POST(request: Request) {
 
       // Helper function to generate single background image for a given aspect ratio
       const generateBgForRatio = async (targetRatio: string): Promise<string> => {
-        const imageModels = ["gemini-3.1-flash-image", "gemini-2.5-flash-image"];
         let generatedBase64 = "";
         let lastImageError;
 
-        for (const imgModel of imageModels) {
-          try {
-            console.log(`[Outpaint API] Attempting Gemini Image Generation for ratio ${targetRatio} with model ${imgModel} (mode: ${mode}, isDisplay: ${isDisplay})`);
-            
-            let contentsArray: any[] = [];
-            if (mode === "backdrop" || isDisplay) {
-              contentsArray = [outpaintPrompt];
-            } else {
-              contentsArray = [
-                {
-                  inlineData: {
-                    data: base64Data,
-                    mimeType: "image/png"
-                  }
-                },
-                outpaintPrompt
-              ];
+        // 1. Try Imagen 3 via generateImages
+        try {
+          console.log(`[Outpaint API] Attempting Imagen 3 generation for ratio ${targetRatio}...`);
+          const imagenRes = await ai.models.generateImages({
+            model: "imagen-3.0-generate-002",
+            prompt: outpaintPrompt,
+            config: {
+              numberOfImages: 1,
+              aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any),
+              outputMimeType: "image/jpeg"
             }
+          });
+          const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+          if (imgBytes) {
+            console.log(`[Outpaint API] Imagen 3 generated image successfully for ratio ${targetRatio}`);
+            return imgBytes;
+          }
+        } catch (e: any) {
+          console.warn(`[Outpaint API] Imagen 3 failed: ${e.message}`);
+          lastImageError = e;
+        }
 
-            const imagenResponse = await generateContentWithRetry(ai, {
-              model: imgModel,
-              contents: contentsArray,
-              config: {
-                responseModalities: ["IMAGE"],
-                imageConfig: {
-                  aspectRatio: targetRatio
+        // 2. Try Gemini 2.0 Flash experimental image generation
+        try {
+          console.log(`[Outpaint API] Attempting gemini-2.0-flash-exp for ratio ${targetRatio}...`);
+          let contentsArray: any[] = [];
+          if (mode === "backdrop" || isDisplay) {
+            contentsArray = [outpaintPrompt];
+          } else {
+            contentsArray = [
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType: "image/png"
                 }
-              }
-            });
+              },
+              outpaintPrompt
+            ];
+          }
 
-            const parts = imagenResponse.candidates?.[0]?.content?.parts || [];
-            for (const part of parts) {
-              if (part.inlineData?.data) {
-                generatedBase64 = part.inlineData.data;
-                break;
+          const geminiImgRes = await generateContentWithRetry(ai, {
+            model: "gemini-2.0-flash-exp",
+            contents: contentsArray,
+            config: {
+              responseModalities: ["IMAGE"],
+              imageConfig: {
+                aspectRatio: targetRatio
               }
             }
-            if (generatedBase64) {
-              console.log(`[Outpaint API] Image generated successfully for ratio ${targetRatio} with ${imgModel}`);
+          });
+
+          const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
+          for (const part of parts) {
+            if (part.inlineData?.data) {
+              generatedBase64 = part.inlineData.data;
               break;
             }
-          } catch (e: any) {
-            console.warn(`[Outpaint API] Image generation for ratio ${targetRatio} with ${imgModel} failed: ${e.message}`);
-            lastImageError = e;
           }
+          if (generatedBase64) {
+            console.log(`[Outpaint API] gemini-2.0-flash-exp generated image successfully for ratio ${targetRatio}`);
+            return generatedBase64;
+          }
+        } catch (e: any) {
+          console.warn(`[Outpaint API] gemini-2.0-flash-exp failed: ${e.message}`);
+          lastImageError = e;
         }
 
         if (generatedBase64) {

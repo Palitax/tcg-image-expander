@@ -90,7 +90,7 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64"); // Send original image to Gemini so it has full context of backgrounds
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
     let layoutText = "";
     let lastError;
 
@@ -288,7 +288,7 @@ export async function POST(request: Request) {
     if (hasSampleWatermark) {
       console.log("[Crop API] Watermark 'SAMPLE' detected. Attempting to remove it...");
       try {
-        const imageModels = ["gemini-2.5-flash-image", "gemini-2.0-flash-exp"];
+        const imageModels = ["gemini-2.0-flash-exp", "imagen-3.0-generate-002"];
         let cleanedBase64 = "";
         let lastCleanError;
 

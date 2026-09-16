@@ -1547,20 +1547,19 @@ export default function Home() {
     setIdentifyingArtworkId(art.id);
     
     try {
-      const response = await fetch("/api/pipeline/identify", {
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+      const response = await fetchWithRetry("/api/pipeline/identify", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ imageUrl: targetUrl }),
+        body: JSON.stringify({ 
+          imageUrl: targetUrl,
+          apiKey: localKey || undefined
+        }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || "Failed to analyze card name.");
-      }
-
-      const data = await response.json();
+      const data = await parseResponseData(response, "Fehler beim Identifizieren der Karte.");
       if (data.isFound && data.cardName) {
         let finalName = data.cardName.trim();
         if (data.cardNumber && data.cardNumber.trim()) {
@@ -2014,7 +2013,7 @@ export default function Home() {
     setCaseBgResultUrl(null);
 
     try {
-      const response = await fetch("/api/pipeline/case", {
+      const response = await fetchWithRetry("/api/pipeline/case", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2030,7 +2029,7 @@ export default function Home() {
         backgroundImageUrl: newCaseBgResultUrl 
       } = await parseResponseData(
         response,
-        "Failed to generate case showcase."
+        "Fehler beim Erstellen der Acryl-Case-Präsentation."
       );
       setCaseResultUrl(resultImageUrl);
       setCaseWithCardUrl(newCaseWithCardUrl || null);
@@ -2038,7 +2037,7 @@ export default function Home() {
     } catch (err) {
       const message = getErrorMessage(err);
       console.error("Case generation error:", err);
-      setCaseErrorMessage(message || "An unexpected error occurred during case rendering.");
+      setCaseErrorMessage(message || "Ein unerwarteter Fehler ist beim Erstellen des Cases aufgetreten.");
     } finally {
       setIsCaseProcessing(false);
     }
@@ -2455,7 +2454,13 @@ export default function Home() {
       cropFormData.append("cardImage", fileToProcess);
       cropFormData.append("skipCardCrop", String(!shouldCropCard));
 
-      const cropResponse = await fetch("/api/pipeline/crop", {
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+      if (localKey && localKey.trim()) {
+        cropFormData.append("apiKey", localKey.trim());
+      }
+
+      console.log(`[Card Studio] Calling /api/pipeline/crop with file: ${fileToProcess.name} (${fileToProcess.size} bytes)...`);
+      const cropResponse = await fetchWithRetry("/api/pipeline/crop", {
         method: "POST",
         body: cropFormData,
         signal
@@ -2469,7 +2474,7 @@ export default function Home() {
         cardNumber
       } = await parseResponseData(
         cropResponse,
-        "Failed to analyze and crop card artwork."
+        "Fehler beim Zuschneiden der Sammelkarte."
       );
       setUsedCropFallback(cropFallback || false);
       setTrimmedCard(cropTrimmedCard || null);
@@ -2491,14 +2496,19 @@ export default function Home() {
 
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateStepStatus("OUTPAINT", "running");
-      setActiveStepMessage("Analyzing style with Gemini...");
+      setActiveStepMessage("Hintergrund-Stil wird mit KI analysiert...");
 
       const outpaintResponse = await fetchWithRetry(
         "/api/pipeline/outpaint",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ croppedImage, aspectRatio, mode: bgMode }),
+          body: JSON.stringify({ 
+            croppedImage, 
+            aspectRatio, 
+            mode: bgMode,
+            apiKey: localKey || undefined
+          }),
           signal
         },
         2,
@@ -2508,7 +2518,7 @@ export default function Home() {
 
       const { backgroundImage, verticalBackgroundImage, usedFallback, fallbackReason } = await parseResponseData(
         outpaintResponse,
-        "Failed to outpaint and extend background."
+        "Fehler bei der Hintergrunderweiterung."
       );
       setBackgroundImageUrl(backgroundImage);
       setVerticalBackgroundImageUrl(verticalBackgroundImage || null);
@@ -2518,14 +2528,14 @@ export default function Home() {
 
       // STEP 4: Merge card + shadow over background
       updateStepStatus("MERGE", "running");
-      setActiveStepMessage("Overlaying card with 3D drop shadow...");
+      setActiveStepMessage("Karte wird mit 3D-Schatten überlagert...");
 
       let finalResult169 = "";
       let finalResult916 = "";
 
       if (verticalBackgroundImage) {
         const [merge169Res, merge916Res] = await Promise.all([
-          fetch("/api/pipeline/merge", {
+          fetchWithRetry("/api/pipeline/merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -2535,7 +2545,7 @@ export default function Home() {
             }),
             signal
           }),
-          fetch("/api/pipeline/merge", {
+          fetchWithRetry("/api/pipeline/merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -2547,12 +2557,12 @@ export default function Home() {
           })
         ]);
 
-        const data169 = await parseResponseData(merge169Res, "Failed to merge card and 16:9 background.");
-        const data916 = await parseResponseData(merge916Res, "Failed to merge card and 9:16 background.");
+        const data169 = await parseResponseData(merge169Res, "Fehler beim Zusammenfügen (16:9).");
+        const data916 = await parseResponseData(merge916Res, "Fehler beim Zusammenfügen (9:16).");
         finalResult169 = data169.resultImageUrl;
         finalResult916 = data916.resultImageUrl;
       } else {
-        const mergeResponse = await fetch("/api/pipeline/merge", {
+        const mergeResponse = await fetchWithRetry("/api/pipeline/merge", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
@@ -2563,14 +2573,14 @@ export default function Home() {
           signal
         });
 
-        const data = await parseResponseData(mergeResponse, "Failed to merge card and background.");
+        const data = await parseResponseData(mergeResponse, "Fehler beim Zusammenfügen des Bildes.");
         finalResult169 = data.resultImageUrl;
       }
 
       updateStepStatus("MERGE", "success");
       setResultImageUrl(finalResult169);
       setVerticalResultImageUrl(finalResult916 || null);
-      setActiveStepMessage("Completed!");
+      setActiveStepMessage("Erfolgreich abgeschlossen!");
 
       return {
         success: true,
@@ -2635,7 +2645,12 @@ export default function Home() {
       const cropFormData = new FormData();
       cropFormData.append("displayImage", fileToProcess);
 
-      const cropResponse = await fetch("/api/pipeline/display-crop", {
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+      if (localKey && localKey.trim()) {
+        cropFormData.append("apiKey", localKey.trim());
+      }
+
+      const cropResponse = await fetchWithRetry("/api/pipeline/display-crop", {
         method: "POST",
         body: cropFormData,
         signal
@@ -2649,7 +2664,7 @@ export default function Home() {
         usedFallback
       } = await parseResponseData(
         cropResponse,
-        "Failed to analyze and cutout display box."
+        "Fehler beim Freistellen der Display-Box."
       );
       
       console.log("[Display Studio] Layout & Crop success:", { displayName, displaySeries, usedFallback, coords });
@@ -2679,7 +2694,7 @@ export default function Home() {
         setDisplaySteps(prev => 
           prev.map(s => s.id === "OUTPAINT" || s.id === "MERGE" ? { ...s, status: "success" } : s)
         );
-        setDisplayActiveStepMessage("Completed transparent cutout!");
+        setDisplayActiveStepMessage("Transparenter Zuschnitt erfolgreich!");
         
         return {
           success: true,
@@ -2695,7 +2710,7 @@ export default function Home() {
       console.log("[Display Studio] Starting Outpaint step with mode:", displayBgMode);
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateDisplayStepStatus("OUTPAINT", "running");
-      setDisplayActiveStepMessage("Analyzing display theme with Gemini...");
+      setDisplayActiveStepMessage("Display-Thema wird mit KI analysiert...");
 
       const outpaintResponse = await fetchWithRetry(
         "/api/pipeline/outpaint",
@@ -2706,7 +2721,8 @@ export default function Home() {
             croppedImage: cutoutImage, // Use the clean transparent cutout as style reference
             aspectRatio: displayAspectRatio, 
             mode: displayBgMode,
-            isDisplay: true
+            isDisplay: true,
+            apiKey: localKey || undefined
           }),
           signal
         },
@@ -2717,7 +2733,7 @@ export default function Home() {
 
       const { backgroundImage, verticalBackgroundImage } = await parseResponseData(
         outpaintResponse,
-        "Failed to generate themed backdrop."
+        "Fehler beim Generieren des Display-Hintergrunds."
       );
       console.log("[Display Studio] Outpaint background generated successfully.");
       setDisplayBgUrl(backgroundImage || null);
@@ -2727,14 +2743,14 @@ export default function Home() {
       console.log("[Display Studio] Starting Merge step...");
       // STEP 4: Merge display cutout + shadow over background
       updateDisplayStepStatus("MERGE", "running");
-      setDisplayActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
+      setDisplayActiveStepMessage("Display wird mit 3D-Schatten auf Hintergrund gesetzt...");
 
       let finalDisplayResult169 = "";
       let finalDisplayResult916 = "";
 
       if (verticalBackgroundImage) {
         const [merge169Res, merge916Res] = await Promise.all([
-          fetch("/api/pipeline/display-merge", {
+          fetchWithRetry("/api/pipeline/display-merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -2747,7 +2763,7 @@ export default function Home() {
             }),
             signal
           }),
-          fetch("/api/pipeline/display-merge", {
+          fetchWithRetry("/api/pipeline/display-merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -2762,12 +2778,12 @@ export default function Home() {
           })
         ]);
 
-        const data169 = await parseResponseData(merge169Res, "Failed to merge display cutout and 16:9 background.");
-        const data916 = await parseResponseData(merge916Res, "Failed to merge display cutout and 9:16 background.");
+        const data169 = await parseResponseData(merge169Res, "Fehler beim Zusammenfügen (16:9).");
+        const data916 = await parseResponseData(merge916Res, "Fehler beim Zusammenfügen (9:16).");
         finalDisplayResult169 = data169.resultImageUrl;
         finalDisplayResult916 = data916.resultImageUrl;
       } else {
-        const mergeResponse = await fetch("/api/pipeline/display-merge", {
+        const mergeResponse = await fetchWithRetry("/api/pipeline/display-merge", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
@@ -2781,7 +2797,7 @@ export default function Home() {
           signal
         });
 
-        const data = await parseResponseData(mergeResponse, "Failed to merge display cutout and background.");
+        const data = await parseResponseData(mergeResponse, "Fehler beim Zusammenfügen des Display-Bildes.");
         finalDisplayResult169 = data.resultImageUrl;
       }
 
@@ -2789,7 +2805,7 @@ export default function Home() {
       updateDisplayStepStatus("MERGE", "success");
       setDisplayResultUrl(finalDisplayResult169 || null);
       setDisplayVerticalResultUrl(finalDisplayResult916 || null);
-      setDisplayActiveStepMessage("Completed!");
+      setDisplayActiveStepMessage("Erfolgreich abgeschlossen!");
 
       return {
         success: true,
@@ -2854,7 +2870,12 @@ export default function Home() {
       const cropFormData = new FormData();
       cropFormData.append("boosterImage", fileToProcess);
 
-      const cropResponse = await fetch("/api/pipeline/booster-crop", {
+      const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+      if (localKey && localKey.trim()) {
+        cropFormData.append("apiKey", localKey.trim());
+      }
+
+      const cropResponse = await fetchWithRetry("/api/pipeline/booster-crop", {
         method: "POST",
         body: cropFormData,
         signal
@@ -2868,7 +2889,7 @@ export default function Home() {
         usedFallback
       } = await parseResponseData(
         cropResponse,
-        "Failed to analyze and cutout booster pack."
+        "Fehler beim Freistellen des Booster Packs."
       );
       
       console.log("[Booster Studio] Layout & Crop success:", { displayName, displaySeries, usedFallback, coords });
@@ -2898,7 +2919,7 @@ export default function Home() {
         setBoosterSteps(prev => 
           prev.map(s => s.id === "OUTPAINT" || s.id === "MERGE" ? { ...s, status: "success" } : s)
         );
-        setBoosterActiveStepMessage("Completed transparent cutout!");
+        setBoosterActiveStepMessage("Transparenter Zuschnitt erfolgreich!");
         
         return {
           success: true,
@@ -2914,7 +2935,7 @@ export default function Home() {
       console.log("[Booster Studio] Starting Outpaint step with mode:", boosterBgMode);
       // STEP 3: Outpainting with style analysis & Imagen 3
       updateBoosterStepStatus("OUTPAINT", "running");
-      setBoosterActiveStepMessage("Analyzing booster theme with Gemini...");
+      setBoosterActiveStepMessage("Booster-Thema wird mit KI analysiert...");
 
       const outpaintResponse = await fetchWithRetry(
         "/api/pipeline/outpaint",
@@ -2925,7 +2946,8 @@ export default function Home() {
             croppedImage: cutoutImage, // Use the clean transparent cutout as style reference
             aspectRatio: boosterAspectRatio, 
             mode: boosterBgMode,
-            isDisplay: true
+            isDisplay: true,
+            apiKey: localKey || undefined
           }),
           signal
         },
@@ -2936,7 +2958,7 @@ export default function Home() {
 
       const { backgroundImage, verticalBackgroundImage } = await parseResponseData(
         outpaintResponse,
-        "Failed to generate themed backdrop."
+        "Fehler beim Generieren des Booster-Hintergrunds."
       );
       console.log("[Booster Studio] Outpaint background generated successfully.");
       setBoosterBgUrl(backgroundImage || null);
@@ -2946,14 +2968,14 @@ export default function Home() {
       console.log("[Booster Studio] Starting Merge step...");
       // STEP 4: Merge booster cutout + shadow over background
       updateBoosterStepStatus("MERGE", "running");
-      setBoosterActiveStepMessage("Overlaying cutout with soft 3D drop shadow...");
+      setBoosterActiveStepMessage("Booster wird mit 3D-Schatten auf Hintergrund gesetzt...");
 
       let finalBoosterResult169 = "";
       let finalBoosterResult916 = "";
 
       if (verticalBackgroundImage) {
         const [merge169Res, merge916Res] = await Promise.all([
-          fetch("/api/pipeline/display-merge", {
+          fetchWithRetry("/api/pipeline/display-merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -2966,7 +2988,7 @@ export default function Home() {
             }),
             signal
           }),
-          fetch("/api/pipeline/display-merge", {
+          fetchWithRetry("/api/pipeline/display-merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -2981,12 +3003,12 @@ export default function Home() {
           })
         ]);
 
-        const data169 = await parseResponseData(merge169Res, "Failed to merge booster cutout and 16:9 background.");
-        const data916 = await parseResponseData(merge916Res, "Failed to merge booster cutout and 9:16 background.");
+        const data169 = await parseResponseData(merge169Res, "Fehler beim Zusammenfügen (16:9).");
+        const data916 = await parseResponseData(merge916Res, "Fehler beim Zusammenfügen (9:16).");
         finalBoosterResult169 = data169.resultImageUrl;
         finalBoosterResult916 = data916.resultImageUrl;
       } else {
-        const mergeResponse = await fetch("/api/pipeline/display-merge", {
+        const mergeResponse = await fetchWithRetry("/api/pipeline/display-merge", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
@@ -3000,7 +3022,7 @@ export default function Home() {
           signal
         });
 
-        const data = await parseResponseData(mergeResponse, "Failed to merge booster cutout and background.");
+        const data = await parseResponseData(mergeResponse, "Fehler beim Zusammenfügen des Booster-Bildes.");
         finalBoosterResult169 = data.resultImageUrl;
       }
 
@@ -3008,7 +3030,7 @@ export default function Home() {
       updateBoosterStepStatus("MERGE", "success");
       setBoosterResultUrl(finalBoosterResult169 || null);
       setBoosterVerticalResultUrl(finalBoosterResult916 || null);
-      setBoosterActiveStepMessage("Completed!");
+      setBoosterActiveStepMessage("Erfolgreich abgeschlossen!");
 
       return {
         success: true,
