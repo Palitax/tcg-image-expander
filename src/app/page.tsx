@@ -81,6 +81,13 @@ interface BatchItem {
   cutoutImageUrl?: string;
   error?: string;
   isSaved?: boolean;
+  metadata?: {
+    cardName: string;
+    cardNumber: string;
+    setCode: string;
+    setName: string;
+    slogan?: string;
+  };
 }
 
 const INITIAL_STEPS: ProgressStep[] = [
@@ -108,6 +115,13 @@ const STREAM_STEPS: ProgressStep[] = [
   { id: "DETECT", label: "KI-Kartenerkennung", description: "Gemini trennt die physische Karte präzise von Hüllen und Scan-Rändern", status: "idle" },
   { id: "CROP", label: "Präziser Ecken-Zuschnitt", description: "Sharp schneidet die Karte mit 3.5% abgerundeten Ecken transparent frei", status: "idle" },
   { id: "COMPOSE", label: "Stream-Compositing", description: "Karte wird mit natürlichem Schattenwurf auf dem Stream-Hintergrund platziert", status: "idle" }
+];
+
+const STREAM_EXTENDED_STEPS: ProgressStep[] = [
+  { id: "DETECT", label: "KI-Kartenerkennung & OCR", description: "Gemini extrahiert Karte, Name, Nummer und Set-Kürzel", status: "idle" },
+  { id: "DATABASE", label: "TCG-Set-Datenbankabgleich", description: "Offizieller Set-Name wird ermittelt und abgeglichen", status: "idle" },
+  { id: "OUTPAINT", label: "KI-Artwork-Erweiterung", description: "Imagen 3 erweitert das Kunstwerk auf 1:1 Stream-Format", status: "idle" },
+  { id: "COMPOSE", label: "Manacards-Stream-Compositing", description: "Stream-Preview-Rahmen, Typografie und Slogan werden gerendert", status: "idle" }
 ];
 
 // Helper to convert file to Base64 data URL
@@ -851,15 +865,15 @@ export default function Home() {
 
       setStreamBatchItems(prev => {
         const currentCount = prev.length;
-        if (currentCount >= 50) {
-          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+        if (currentCount >= 100) {
+          alert("Maximal 100 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
           return prev;
         }
 
         let filesToAdd = imageFiles;
-        if (currentCount + imageFiles.length > 50) {
-          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
-          filesToAdd = imageFiles.slice(0, 50 - currentCount);
+        if (currentCount + imageFiles.length > 100) {
+          alert(`Es können nur noch ${100 - currentCount} Bilder hinzugefügt werden (Maximal 100 insgesamt).`);
+          filesToAdd = imageFiles.slice(0, 100 - currentCount);
         }
 
         const newItems = filesToAdd.map(file => ({
@@ -877,8 +891,9 @@ export default function Home() {
           setStreamPreviewUrl(URL.createObjectURL(selectedFile));
           setStreamResultUrl(null);
           setStreamCutoutUrl(null);
+          setStreamBgImageUrl(null);
           setStreamErrorMessage(null);
-          setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+          setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
           setStreamElapsedTime(0);
           setStreamActiveStepMessage("");
           setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
@@ -1002,20 +1017,36 @@ export default function Home() {
   const [isSpaceSyncing, setIsSpaceSyncing] = useState<boolean>(false);
 
   // Stream / Whatnot Studio states
+  const [streamMode, setStreamMode] = useState<"extended" | "classic">("extended");
   const [streamFile, setStreamFile] = useState<File | null>(null);
   const [streamPreviewUrl, setStreamPreviewUrl] = useState<string | null>(null);
   const [streamResultUrl, setStreamResultUrl] = useState<string | null>(null);
   const [streamCutoutUrl, setStreamCutoutUrl] = useState<string | null>(null);
+  const [streamBgImageUrl, setStreamBgImageUrl] = useState<string | null>(null);
+  const [streamMetadata, setStreamMetadata] = useState<{
+    cardName: string;
+    cardNumber: string;
+    setCode: string;
+    setName: string;
+    slogan: string;
+  }>({
+    cardName: "",
+    cardNumber: "",
+    setCode: "",
+    setName: "",
+    slogan: "MANACARDS – Unpack the magic"
+  });
+  const [isRecompositing, setIsRecompositing] = useState<boolean>(false);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
   const [isStreamProcessing, setIsStreamProcessing] = useState<boolean>(false);
-  const [streamSteps, setStreamSteps] = useState<ProgressStep[]>(STREAM_STEPS);
+  const [streamSteps, setStreamSteps] = useState<ProgressStep[]>(STREAM_EXTENDED_STEPS);
   const [streamElapsedTime, setStreamElapsedTime] = useState<number>(0);
   const [streamActiveStepMessage, setStreamActiveStepMessage] = useState<string>("");
   const [streamBatchItems, setStreamBatchItems] = useState<BatchItem[]>([]);
   const [isStreamBatchProcessing, setIsStreamBatchProcessing] = useState<boolean>(false);
   const [streamCustomBgFile, setStreamCustomBgFile] = useState<File | null>(null);
   const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
-  const [streamCardScale, setStreamCardScale] = useState<number>(0.75);
+  const [streamCardScale, setStreamCardScale] = useState<number>(0.68);
   const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
   const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
 
@@ -1635,6 +1666,7 @@ export default function Home() {
       saveTarget === "upload" ? libraryUploadDataUrl : 
       saveTarget === "display" ? displayResultUrl :
       saveTarget === "booster" ? boosterResultUrl :
+      saveTarget === "stream" ? streamResultUrl :
       resultImageUrl;
 
     if (!targetUrl || !newArtworkName.trim()) return;
@@ -1647,12 +1679,14 @@ export default function Home() {
       saveTarget === "case" ? (caseWithCardUrl || caseCardImage || undefined) : 
       saveTarget === "display" ? (displayPreviewUrl || undefined) :
       saveTarget === "booster" ? (boosterPreviewUrl || undefined) :
+      saveTarget === "stream" ? (streamPreviewUrl || undefined) :
       undefined;
     let backgroundUrl = 
       saveTarget === "generate" ? (backgroundImageUrl || undefined) : 
       saveTarget === "case" ? (caseBgResultUrl || caseBgImage || undefined) : 
       saveTarget === "display" ? (displayBgUrl || undefined) :
       saveTarget === "booster" ? (boosterBgUrl || undefined) :
+      saveTarget === "stream" ? (streamBgImageUrl || undefined) :
       undefined;
 
     const timestamp = Date.now();
@@ -1818,12 +1852,15 @@ export default function Home() {
           saveTarget === "case" ? (caseCardImage || undefined) : 
           saveTarget === "display" ? (displayCutoutUrl || undefined) : 
           saveTarget === "booster" ? (boosterCutoutUrl || undefined) :
+          saveTarget === "stream" ? (streamCutoutUrl || undefined) :
           undefined,
         aspectRatio: isDual ? "16:9" : currentRatio,
         timestamp: timestamp,
         isCase: saveTarget === "case",
         isDisplay: saveTarget === "display",
-        isBooster: saveTarget === "booster"
+        isBooster: saveTarget === "booster",
+        isStream: saveTarget === "stream",
+        metadata: saveTarget === "stream" ? streamMetadata : undefined
       };
 
       try {
@@ -1841,7 +1878,9 @@ export default function Home() {
             timestamp: timestamp + 1,
             isCase: saveTarget === "case",
             isDisplay: saveTarget === "display",
-            isBooster: saveTarget === "booster"
+            isBooster: saveTarget === "booster",
+            isStream: saveTarget === "stream",
+            metadata: localArtwork.metadata
           };
           await saveArtwork(localVertArtwork);
         }
@@ -2299,7 +2338,7 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
+    maxFiles: 100,
     disabled: isStreamProcessing || isStreamBatchProcessing
   });
 
@@ -2314,7 +2353,7 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
+    maxFiles: 100,
     disabled: isStreamProcessing || isStreamBatchProcessing,
     noClick: true
   });
@@ -3293,32 +3332,70 @@ export default function Home() {
         if (step.id === stepId) {
           return { ...step, status };
         }
+        if (status === "success" && prev.findIndex(s => s.id === stepId) > prev.findIndex(s => s.id === step.id)) {
+          return { ...step, status: "success" };
+        }
         return step;
       })
     );
   };
 
+  const handleRecompositeStreamPreview = async () => {
+    if (!streamResultUrl || !streamBgImageUrl || !streamCutoutUrl) return;
+    setIsRecompositing(true);
+    try {
+      const response = await fetchWithRetry("/api/pipeline/stream-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          backgroundImage: streamBgImageUrl,
+          cutoutImage: streamCutoutUrl,
+          metadata: streamMetadata,
+          cardScale: streamCardScale,
+          shadowStyle: streamShadowStyle
+        })
+      });
+      const data = await parseResponseData(response, "Fehler beim Aktualisieren der Stream-Vorschau.");
+      if (data.resultImageUrl) {
+        setStreamResultUrl(data.resultImageUrl);
+        if (streamFile) {
+          setStreamBatchItems(prev =>
+            prev.map(it => it.file.name === streamFile.name ? {
+              ...it,
+              resultImageUrl: data.resultImageUrl,
+              metadata: streamMetadata
+            } : it)
+          );
+        }
+      }
+    } catch (err) {
+      console.error("[Recomposite Error]", err);
+      alert(`Fehler beim Aktualisieren des Overlays: ${getErrorMessage(err)}`);
+    } finally {
+      setIsRecompositing(false);
+    }
+  };
+
   const handleProcessStreamImage = async (customFile?: File | unknown) => {
     const rawFile = (customFile instanceof File) ? customFile : streamFile;
     if (!rawFile) return;
-    console.log(`[Stream Studio] Starting single image processing: "${rawFile.name}" (${(rawFile.size / 1024).toFixed(1)} KB, type=${rawFile.type || "unknown"})`);
+    console.log(`[Stream Studio] Starting single image processing (${streamMode}): "${rawFile.name}" (${(rawFile.size / 1024).toFixed(1)} KB)`);
     setIsStreamProcessing(true);
     setStreamErrorMessage(null);
     setStreamResultUrl(null);
     setStreamCutoutUrl(null);
+    setStreamBgImageUrl(null);
     setStreamElapsedTime(0);
-    setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+
+    const activeSteps = streamMode === "extended" ? STREAM_EXTENDED_STEPS : STREAM_STEPS;
+    setStreamSteps(activeSteps.map(s => ({ ...s, status: "idle" })));
 
     try {
-      updateStreamStepStatus("DETECT", "running");
-      setStreamActiveStepMessage("KI analysiert den Scan und erkennt die Karte...");
-
       const fileToProcess = await optimizeImageFile(rawFile);
-      console.log(`[Stream Studio] Image optimized if needed. Final payload size: ${(fileToProcess.size / 1024).toFixed(1)} KB`);
 
       const formData = new FormData();
       formData.append("cardImage", fileToProcess);
-      if (streamCustomBgFile) {
+      if (streamMode === "classic" && streamCustomBgFile) {
         formData.append("backgroundImage", streamCustomBgFile);
       }
       formData.append("cardScale", streamCardScale.toString());
@@ -3329,33 +3406,75 @@ export default function Home() {
         formData.append("apiKey", localKey.trim());
       }
 
-      console.log(`[Stream Studio] Sending POST /api/pipeline/stream-card...`);
-      const response = await fetchWithRetry("/api/pipeline/stream-card", {
-        method: "POST",
-        body: formData
-      });
+      if (streamMode === "extended") {
+        updateStreamStepStatus("DETECT", "running");
+        setStreamActiveStepMessage("KI analysiert Layout, Kartennummer und Set-Kürzel...");
 
-      console.log(`[Stream Studio] Received response with status ${response.status}`);
-      const data = await parseResponseData(response, "Fehler bei der Stream-Kartenverarbeitung.");
+        const response = await fetchWithRetry("/api/pipeline/stream-preview", {
+          method: "POST",
+          body: formData
+        });
 
-      updateStreamStepStatus("DETECT", "success");
-      updateStreamStepStatus("CROP", "success");
-      updateStreamStepStatus("COMPOSE", "running");
-      setStreamActiveStepMessage("Compositing auf Stream-Hintergrund...");
+        updateStreamStepStatus("DETECT", "success");
+        updateStreamStepStatus("DATABASE", "running");
+        setStreamActiveStepMessage("Abgleich mit TCG-Set-Datenbank läuft...");
 
-      setStreamResultUrl(data.resultImageUrl);
-      setStreamCutoutUrl(data.cutoutImageUrl);
+        const data = await parseResponseData(response, "Fehler bei der Stream-Preview-Verarbeitung.");
 
-      updateStreamStepStatus("COMPOSE", "success");
-      setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
-      console.log(`[Stream Studio] Card processed successfully! Detected name: "${data.cardName || ""}", Fallback used: ${data.usedFallback}`);
+        updateStreamStepStatus("DATABASE", "success");
+        updateStreamStepStatus("OUTPAINT", "success");
+        updateStreamStepStatus("COMPOSE", "running");
+        setStreamActiveStepMessage("Manacards Stream-Preview wird gerendert...");
 
-      return {
-        success: true,
-        resultImageUrl: data.resultImageUrl,
-        cutoutImageUrl: data.cutoutImageUrl,
-        detectedName: data.cardName || rawFile.name.replace(/\.[^/.]+$/, "")
-      };
+        setStreamResultUrl(data.resultImageUrl);
+        setStreamCutoutUrl(data.cutoutImageUrl);
+        setStreamBgImageUrl(data.backgroundImageUrl || null);
+
+        if (data.metadata) {
+          setStreamMetadata(data.metadata);
+          setNewArtworkName(`${data.metadata.cardName} - ${data.metadata.cardNumber}`);
+        }
+
+        updateStreamStepStatus("COMPOSE", "success");
+        setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
+
+        return {
+          success: true,
+          resultImageUrl: data.resultImageUrl,
+          cutoutImageUrl: data.cutoutImageUrl,
+          backgroundImageUrl: data.backgroundImageUrl,
+          metadata: data.metadata,
+          detectedName: data.metadata?.cardName || rawFile.name.replace(/\.[^/.]+$/, "")
+        };
+      } else {
+        updateStreamStepStatus("DETECT", "running");
+        setStreamActiveStepMessage("KI analysiert den Scan und erkennt die Karte...");
+
+        const response = await fetchWithRetry("/api/pipeline/stream-card", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await parseResponseData(response, "Fehler bei der Stream-Kartenverarbeitung.");
+
+        updateStreamStepStatus("DETECT", "success");
+        updateStreamStepStatus("CROP", "success");
+        updateStreamStepStatus("COMPOSE", "running");
+        setStreamActiveStepMessage("Compositing auf Stream-Hintergrund...");
+
+        setStreamResultUrl(data.resultImageUrl);
+        setStreamCutoutUrl(data.cutoutImageUrl);
+
+        updateStreamStepStatus("COMPOSE", "success");
+        setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
+
+        return {
+          success: true,
+          resultImageUrl: data.resultImageUrl,
+          cutoutImageUrl: data.cutoutImageUrl,
+          detectedName: data.cardName || rawFile.name.replace(/\.[^/.]+$/, "")
+        };
+      }
     } catch (err: any) {
       console.error("[Stream Studio Error]", err);
       const errorMsg = getErrorMessage(err);
@@ -3375,6 +3494,7 @@ export default function Home() {
 
     setStreamBatchItems(prev => prev.map(item => ({ ...item, status: "pending", error: undefined })));
 
+    const activeSteps = streamMode === "extended" ? STREAM_EXTENDED_STEPS : STREAM_STEPS;
     const items = [...streamBatchItems];
     for (let i = 0; i < items.length; i++) {
       if (cancelBatchRef.current) {
@@ -3395,8 +3515,9 @@ export default function Home() {
       setStreamPreviewUrl(item.previewUrl);
       setStreamResultUrl(null);
       setStreamCutoutUrl(null);
+      setStreamBgImageUrl(null);
       setStreamErrorMessage(null);
-      setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+      setStreamSteps(activeSteps.map(s => ({ ...s, status: "idle" })));
       setStreamElapsedTime(0);
       setStreamActiveStepMessage("");
       setNewArtworkName(item.name);
@@ -3411,7 +3532,9 @@ export default function Home() {
               status: "completed", 
               resultImageUrl: result.resultImageUrl || undefined,
               cutoutImageUrl: result.cutoutImageUrl || undefined,
-              name: it.file.name.replace(/\.[^/.]+$/, "")
+              backgroundImageUrl: result.backgroundImageUrl || undefined,
+              metadata: result.metadata || undefined,
+              name: result.metadata ? `${result.metadata.cardName} - ${result.metadata.cardNumber}` : it.file.name.replace(/\.[^/.]+$/, "")
             } : it)
           );
         } else {
@@ -3923,7 +4046,25 @@ export default function Home() {
             return (
               <div 
                 key={item.id}
-                className={`p-3 rounded-xl border flex gap-4 items-center bg-zinc-955/20 transition-all ${
+                onClick={() => {
+                  if (studioType === "stream") {
+                    setStreamFile(item.file);
+                    setStreamPreviewUrl(item.previewUrl);
+                    setStreamResultUrl(item.resultImageUrl || null);
+                    setStreamCutoutUrl(item.cutoutImageUrl || null);
+                    setStreamBgImageUrl(item.backgroundImageUrl || null);
+                    if (item.metadata) {
+                      setStreamMetadata({
+                        cardName: item.metadata.cardName || "",
+                        cardNumber: item.metadata.cardNumber || "",
+                        setCode: item.metadata.setCode || "",
+                        setName: item.metadata.setName || "",
+                        slogan: item.metadata.slogan || "MANACARDS – Unpack the magic"
+                      });
+                    }
+                  }
+                }}
+                className={`p-3 rounded-xl border flex gap-4 items-center bg-zinc-955/20 transition-all cursor-pointer hover:border-purple-500/50 ${
                   isProcessingItem 
                     ? "border-purple-500 bg-purple-500/5 shadow-[0_0_15px_rgba(168,85,247,0.1)]" 
                     : isCompleted 
@@ -3954,6 +4095,11 @@ export default function Home() {
                       {item.name}
                     </h3>
                   </div>
+                  {item.metadata && (
+                    <p className="text-[10px] text-purple-300 font-medium truncate mt-0.5">
+                      {item.metadata.setName} {item.metadata.setCode ? `• ${item.metadata.setCode}` : ""}
+                    </p>
+                  )}
                   
                   <div className="mt-1 flex items-center gap-1.5">
                     {isPending && (
@@ -6097,126 +6243,275 @@ export default function Home() {
           </>
         ) : activeTab === "stream" ? (
           <div className="flex-1 flex flex-col gap-8 items-start w-full">
-            {/* Stream Studio Top Settings & Background Bar */}
+            {/* Stream Studio Mode Selector Bar */}
+            <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-2 rounded-2xl bg-zinc-900/60 border border-zinc-800 backdrop-blur-xl">
+              <div className="flex p-1 gap-1.5 bg-zinc-950/80 rounded-xl border border-zinc-800/80 flex-1 sm:flex-initial">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStreamMode("extended");
+                    setStreamCardScale(0.68);
+                    setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
+                  }}
+                  className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    streamMode === "extended"
+                      ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-500/20"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60"
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4 text-purple-300" />
+                  <span>Erweiterte Stream-Vorschau (Extended Art)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStreamMode("classic");
+                    setStreamCardScale(0.75);
+                    setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
+                  }}
+                  className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    streamMode === "classic"
+                      ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-500/20"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60"
+                  }`}
+                >
+                  <Tv className="w-4 h-4 text-purple-300" />
+                  <span>Klassischer Stream-Hintergrund</span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 px-3 py-1">
+                <span className="text-[11px] font-medium text-purple-300 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Whatnot / Live-Stream Studio (bis zu 100 Bilder)
+                </span>
+              </div>
+            </div>
+
+            {/* Stream Studio Top Settings */}
             <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-              {/* Background Selection Card */}
-              <div className="lg:col-span-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                      <Tv className="w-4 h-4 text-purple-400" />
-                      Stream-Hintergrund
-                    </h2>
-                    <span className="text-[11px] font-medium text-purple-300 px-2.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20">
-                      Whatnot / Live-Stream
-                    </span>
-                  </div>
-                  <p className="text-xs text-zinc-400 mb-4">
-                    Wähle den Hintergrund für deine Stream-Präsentation. Standardmäßig wird dein blauer Energie-Hintergrund verwendet.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-4 bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-3">
-                  <div className="w-16 h-16 rounded-lg overflow-hidden border border-zinc-750 bg-zinc-900 shrink-0 relative shadow-inner">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={streamCustomBgPreview || "/stream-background.jpg"}
-                      alt="Stream Background Preview"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0 flex flex-col gap-2">
-                    <p className="text-xs font-semibold text-zinc-200 truncate">
-                      {streamCustomBgFile ? streamCustomBgFile.name : "Standard: Blauer Energie-Blast (Whatnot)"}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <div {...getStreamBgRootProps()} className="inline-block">
-                        <input {...getStreamBgInputProps()} />
-                        <button
-                          type="button"
-                          className="px-3 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1.5"
-                        >
-                          <Upload className="w-3 h-3" />
-                          Eigenen Hintergrund laden
-                        </button>
+              {streamMode === "extended" ? (
+                <>
+                  {/* Extended Mode Banner & Info Card */}
+                  <div className="lg:col-span-7 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                          <Sparkles className="w-4 h-4 text-purple-400" />
+                          Manacards Stream-Preview Design
+                        </h2>
+                        <span className="text-[10px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 uppercase tracking-wider">
+                          KI-Outpainting
+                        </span>
                       </div>
-                      {streamCustomBgFile && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setStreamCustomBgFile(null);
-                            setStreamCustomBgPreview(null);
-                          }}
-                          className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-750 text-zinc-400 hover:text-zinc-200 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          Standard zurücksetzen
-                        </button>
-                      )}
+                      <p className="text-xs text-zinc-300 leading-relaxed mb-4">
+                        Erweitert das Artwork der Sammelkarte per KI nahtlos auf quadratisches 1:1 Stream-Format. 
+                        Überlagert automatisch die leuchtenden Manacards-Rahmenlinien, die &quot;Stream Preview&quot;-Kennzeichnung, den Kartennamen, Kartennummer, Set-Namen und den Slogan &quot;MANACARDS – Unpack the magic&quot;.
+                      </p>
                     </div>
-                  </div>
-                </div>
-              </div>
 
-              {/* Layout & Shadow Settings Card */}
-              <div className="lg:col-span-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-white flex items-center gap-2 mb-3">
-                    <SlidersHorizontal className="w-4 h-4 text-purple-400" />
-                    Layout & Effekt-Einstellungen
-                  </h2>
-                  <p className="text-xs text-zinc-400 mb-4">
-                    Passe die Kartengröße und den Schattenwurf für den Stream optimal an.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Card Scale */}
-                  <div>
-                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                      Kartengröße auf Hintergrund
-                    </label>
-                    <div className="grid grid-cols-3 gap-1.5 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
-                      {[
-                        { label: "65%", sub: "Kompakt", val: 0.65 },
-                        { label: "75%", sub: "Standard", val: 0.75 },
-                        { label: "85%", sub: "Groß", val: 0.85 }
-                      ].map(opt => (
-                        <button
-                          key={opt.label}
-                          type="button"
-                          onClick={() => setStreamCardScale(opt.val)}
-                          className={`py-1.5 px-2 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all ${
-                            streamCardScale === opt.val
-                              ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
-                              : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
-                          }`}
-                        >
-                          <span>{opt.label}</span>
-                          <span className="text-[9px] text-zinc-500 font-normal">{opt.sub}</span>
-                        </button>
-                      ))}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-zinc-800/60">
+                      <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
+                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Oben Links</span>
+                        <span className="text-xs font-bold text-white">STREAM PREVIEW</span>
+                      </div>
+                      <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
+                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Zeile 1</span>
+                        <span className="text-xs font-bold text-white truncate block">Name - Nr. - Set</span>
+                      </div>
+                      <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
+                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Zeile 2</span>
+                        <span className="text-xs font-bold text-white truncate block">Set-Name</span>
+                      </div>
+                      <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
+                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Slogan</span>
+                        <span className="text-[10px] font-bold text-purple-300 truncate block">MANACARDS</span>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Shadow Style */}
-                  <div>
-                    <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                      Schatten- & Leuchteffekt
-                    </label>
-                    <select
-                      value={streamShadowStyle}
-                      onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
-                      className="w-full px-3 py-2.5 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
-                    >
-                      <option value="soft">Weicher Schatten (Standard)</option>
-                      <option value="intense">Intensiver 3D-Schatten</option>
-                      <option value="glow">Blauer Glow-Effekt (Whatnot)</option>
-                      <option value="none">Kein Schatten</option>
-                    </select>
+                  {/* Layout Settings Card */}
+                  <div className="lg:col-span-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
+                    <div>
+                      <h2 className="text-base font-semibold text-white flex items-center gap-2 mb-2">
+                        <SlidersHorizontal className="w-4 h-4 text-purple-400" />
+                        Kartengröße & Schatten
+                      </h2>
+                      <p className="text-xs text-zinc-400 mb-4">
+                        Passe die Skalierung der Karte innerhalb des Rahmens und den Schatteneffekt an.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Card Scale */}
+                      <div>
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                          Kartengröße
+                        </label>
+                        <div className="grid grid-cols-3 gap-1 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
+                          {[
+                            { label: "62%", sub: "Kompakt", val: 0.62 },
+                            { label: "68%", sub: "Standard", val: 0.68 },
+                            { label: "75%", sub: "Groß", val: 0.75 }
+                          ].map(opt => (
+                            <button
+                              key={opt.label}
+                              type="button"
+                              onClick={() => setStreamCardScale(opt.val)}
+                              className={`py-1 px-1 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all ${
+                                streamCardScale === opt.val
+                                  ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              <span className="text-[9px] text-zinc-500 font-normal">{opt.sub}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Shadow Style */}
+                      <div>
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                          Schattenwurf
+                        </label>
+                        <select
+                          value={streamShadowStyle}
+                          onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
+                          className="w-full px-3 py-2 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
+                        >
+                          <option value="soft">Weicher Schatten (Standard)</option>
+                          <option value="intense">Intensiver 3D-Schatten</option>
+                          <option value="glow">Magenta Glow-Effekt</option>
+                          <option value="none">Kein Schatten</option>
+                        </select>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                </>
+              ) : (
+                <>
+                  {/* Classic Background Selection Card */}
+                  <div className="lg:col-span-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                          <Tv className="w-4 h-4 text-purple-400" />
+                          Stream-Hintergrund
+                        </h2>
+                        <span className="text-[11px] font-medium text-purple-300 px-2.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20">
+                          Klassischer Modus
+                        </span>
+                      </div>
+                      <p className="text-xs text-zinc-400 mb-4">
+                        Wähle den Hintergrund für deine Stream-Präsentation. Standardmäßig wird dein blauer Energie-Hintergrund verwendet.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-4 bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-3">
+                      <div className="w-16 h-16 rounded-lg overflow-hidden border border-zinc-750 bg-zinc-900 shrink-0 relative shadow-inner">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={streamCustomBgPreview || "/stream-background.jpg"}
+                          alt="Stream Background Preview"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0 flex flex-col gap-2">
+                        <p className="text-xs font-semibold text-zinc-200 truncate">
+                          {streamCustomBgFile ? streamCustomBgFile.name : "Standard: Blauer Energie-Blast (Whatnot)"}
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <div {...getStreamBgRootProps()} className="inline-block">
+                            <input {...getStreamBgInputProps()} />
+                            <button
+                              type="button"
+                              className="px-3 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                            >
+                              <Upload className="w-3 h-3" />
+                              Eigenen Hintergrund laden
+                            </button>
+                          </div>
+                          {streamCustomBgFile && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStreamCustomBgFile(null);
+                                setStreamCustomBgPreview(null);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-750 text-zinc-400 hover:text-zinc-200 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              Standard zurücksetzen
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Classic Layout & Shadow Settings Card */}
+                  <div className="lg:col-span-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col justify-between">
+                    <div>
+                      <h2 className="text-base font-semibold text-white flex items-center gap-2 mb-3">
+                        <SlidersHorizontal className="w-4 h-4 text-purple-400" />
+                        Layout & Effekt-Einstellungen
+                      </h2>
+                      <p className="text-xs text-zinc-400 mb-4">
+                        Passe die Kartengröße und den Schattenwurf für den Stream optimal an.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Card Scale */}
+                      <div>
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                          Kartengröße auf Hintergrund
+                        </label>
+                        <div className="grid grid-cols-3 gap-1.5 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
+                          {[
+                            { label: "65%", sub: "Kompakt", val: 0.65 },
+                            { label: "75%", sub: "Standard", val: 0.75 },
+                            { label: "85%", sub: "Groß", val: 0.85 }
+                          ].map(opt => (
+                            <button
+                              key={opt.label}
+                              type="button"
+                              onClick={() => setStreamCardScale(opt.val)}
+                              className={`py-1.5 px-2 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all ${
+                                streamCardScale === opt.val
+                                  ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              <span className="text-[9px] text-zinc-500 font-normal">{opt.sub}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Shadow Style */}
+                      <div>
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                          Schatten- & Leuchteffekt
+                        </label>
+                        <select
+                          value={streamShadowStyle}
+                          onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
+                          className="w-full px-3 py-2.5 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
+                        >
+                          <option value="soft">Weicher Schatten (Standard)</option>
+                          <option value="intense">Intensiver 3D-Schatten</option>
+                          <option value="glow">Blauer Glow-Effekt (Whatnot)</option>
+                          <option value="none">Kein Schatten</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Upload Area for Scanned Cards */}
@@ -6236,13 +6531,15 @@ export default function Home() {
                   </div>
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1">
-                      Gescannte TCG-Karten hier ablegen oder durchsuchen
+                      {streamMode === "extended" 
+                        ? "Sammelkarten für Stream-Preview hier ablegen oder durchsuchen"
+                        : "Gescannte TCG-Karten hier ablegen oder durchsuchen"}
                     </h3>
                     <p className="text-xs text-zinc-400">
-                      Unterstützt Vorder- und Rückseiten, gesleevte Scans mit Folienrändern und Rohkarten.
+                      Unterstützt Pokémon, One Piece, Yu-Gi-Oh, Lorcana und alle TCGs (Scans, Sleeves, Rohkarten).
                     </p>
                     <p className="text-[11px] text-zinc-500 mt-1">
-                      Massen-Upload von bis zu 50 Bildern gleichzeitig (JPG, PNG, WEBP) oder CSV-Import.
+                      Massen-Upload von bis zu 100 Bildern gleichzeitig (JPG, PNG, WEBP) oder CSV-Import.
                     </p>
                   </div>
                   
@@ -6250,12 +6547,28 @@ export default function Home() {
                     <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
                       ⚡ KI trennt Folie & Scannerbett
                     </span>
-                    <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
-                      ✂️ 3.5% abgerundete Ecken
-                    </span>
-                    <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
-                      📁 Exakte Dateinamen bleiben erhalten
-                    </span>
+                    {streamMode === "extended" ? (
+                      <>
+                        <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-purple-300">
+                          🎨 KI erweitert Artwork nahtlos
+                        </span>
+                        <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-emerald-400">
+                          🔍 Automatischer TCG-Set-Abgleich
+                        </span>
+                        <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-purple-300">
+                          ✨ Manacards Stream-Overlay
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
+                          ✂️ 3.5% abgerundete Ecken
+                        </span>
+                        <span className="px-3 py-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-[11px] font-medium text-zinc-400">
+                          📁 Exakte Dateinamen bleiben erhalten
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -6265,7 +6578,7 @@ export default function Home() {
             {streamFile && (
               <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left Column: Uploaded Card Preview + Detection Checklist */}
-                <section className="lg:col-span-6 flex flex-col gap-6">
+                <section className="lg:col-span-5 flex flex-col gap-6">
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
                     <div className="flex items-center justify-between gap-4 mb-4">
                       <h2 className="text-lg font-semibold text-white flex items-center gap-2 truncate">
@@ -6279,6 +6592,7 @@ export default function Home() {
                           setStreamPreviewUrl(null);
                           setStreamResultUrl(null);
                           setStreamCutoutUrl(null);
+                          setStreamBgImageUrl(null);
                           setStreamErrorMessage(null);
                         }}
                         className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-white transition-colors cursor-pointer"
@@ -6318,8 +6632,10 @@ export default function Home() {
                             <span className="text-zinc-300">{(streamFile.size / 1024 / 1024).toFixed(2)} MB</span>
                           </div>
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-zinc-400 font-medium">Ausgabeformat:</span>
-                            <span className="text-emerald-400 font-medium">PNG (Hochauflösend)</span>
+                            <span className="text-zinc-400 font-medium">Modus:</span>
+                            <span className="text-purple-400 font-medium">
+                              {streamMode === "extended" ? "Erweiterte Stream-Preview" : "Klassisch"}
+                            </span>
                           </div>
                         </div>
 
@@ -6330,7 +6646,7 @@ export default function Home() {
                             className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(147,51,234,0.3)] transition-all cursor-pointer"
                           >
                             <Sparkles className="w-4 h-4" />
-                            Stream-Bild erstellen
+                            {streamMode === "extended" ? "Stream-Preview erstellen" : "Stream-Bild erstellen"}
                           </button>
                         )}
                       </div>
@@ -6409,12 +6725,19 @@ export default function Home() {
                   </div>
                 </section>
 
-                {/* Right Column: Final Stream Result Showcase */}
-                <section className="lg:col-span-6 flex flex-col gap-6">
+                {/* Right Column: Final Stream Result Showcase & Metadata Quick-Editor */}
+                <section className="lg:col-span-7 flex flex-col gap-6">
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col">
-                    <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                      <Maximize2 className="w-5 h-5 text-purple-400" />
-                      Stream-Ergebnis (Vorschau)
+                    <h2 className="text-lg font-semibold text-white mb-4 flex items-center justify-between">
+                      <span className="flex items-center gap-2">
+                        <Maximize2 className="w-5 h-5 text-purple-400" />
+                        Stream-Ergebnis (Vorschau)
+                      </span>
+                      {streamResultUrl && streamMode === "extended" && (
+                        <span className="text-[11px] font-medium text-purple-300 px-2.5 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20">
+                          1024 x 1024 px
+                        </span>
+                      )}
                     </h2>
 
                     <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950/80 rounded-2xl border border-zinc-850 p-4 relative min-h-[360px]">
@@ -6424,14 +6747,14 @@ export default function Home() {
                             <RefreshCw className="w-8 h-8 text-purple-400 animate-spin" />
                           </div>
                           <p className="text-sm font-semibold text-white">Stream-Grafik wird generiert...</p>
-                          <p className="text-xs text-zinc-500 mt-1 max-w-[240px]">
-                            {streamActiveStepMessage || "Die Karte wird präzise freigestellt und auf dem Hintergrund platziert."}
+                          <p className="text-xs text-zinc-500 mt-1 max-w-[280px]">
+                            {streamActiveStepMessage || "Die Karte wird per KI analysiert, freigestellt und aufbereitet."}
                           </p>
                         </div>
                       ) : streamResultUrl ? (
                         <div className="w-full flex flex-col items-center">
                           <div 
-                            className="relative rounded-xl overflow-hidden border border-zinc-800 shadow-2xl w-full max-w-[340px] aspect-square cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
+                            className="relative rounded-xl overflow-hidden border border-zinc-800 shadow-2xl w-full max-w-[380px] aspect-square cursor-pointer group transition-all duration-300 hover:border-purple-500/60 hover:shadow-[0_0_30px_rgba(168,85,247,0.25)]"
                             onClick={() => {
                               setLightboxImage({ url: streamResultUrl, title: streamFile.name });
                             }}
@@ -6450,8 +6773,85 @@ export default function Home() {
                             </div>
                           </div>
 
+                          {/* Metadata Quick-Editor for Extended Art Stream Preview */}
+                          {streamMode === "extended" && (
+                            <div className="mt-5 w-full bg-zinc-950/70 p-4 rounded-xl border border-zinc-800">
+                              <div className="flex items-center justify-between mb-3">
+                                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                                  <Pencil className="w-3.5 h-3.5 text-purple-400" />
+                                  Kartendetails & Beschriftung anpassen
+                                </span>
+                                <span className="text-[10px] text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
+                                  Slogan: MANACARDS – Unpack the magic
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-3">
+                                <div>
+                                  <label className="block text-[10px] text-zinc-400 mb-1 font-medium">Kartenname</label>
+                                  <input
+                                    type="text"
+                                    value={streamMetadata.cardName}
+                                    onChange={(e) => setStreamMetadata(prev => ({ ...prev, cardName: e.target.value }))}
+                                    placeholder="z.B. Morpeko"
+                                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-600 focus:border-purple-500 focus:outline-none"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] text-zinc-400 mb-1 font-medium">Kartennummer</label>
+                                  <input
+                                    type="text"
+                                    value={streamMetadata.cardNumber}
+                                    onChange={(e) => setStreamMetadata(prev => ({ ...prev, cardNumber: e.target.value }))}
+                                    placeholder="z.B. 076/066"
+                                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-600 focus:border-purple-500 focus:outline-none font-mono"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] text-zinc-400 mb-1 font-medium">Set-Kürzel</label>
+                                  <input
+                                    type="text"
+                                    value={streamMetadata.setCode}
+                                    onChange={(e) => setStreamMetadata(prev => ({ ...prev, setCode: e.target.value }))}
+                                    placeholder="z.B. SV4K"
+                                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-600 focus:border-purple-500 focus:outline-none uppercase font-mono"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] text-zinc-400 mb-1 font-medium">Set-Name</label>
+                                  <input
+                                    type="text"
+                                    value={streamMetadata.setName}
+                                    onChange={(e) => setStreamMetadata(prev => ({ ...prev, setName: e.target.value }))}
+                                    placeholder="z.B. Ancient Roar"
+                                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-600 focus:border-purple-500 focus:outline-none"
+                                  />
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={isRecompositing || !streamBgImageUrl}
+                                onClick={handleRecompositeStreamPreview}
+                                className="w-full py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-purple-500/30 text-purple-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                              >
+                                {isRecompositing ? (
+                                  <>
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Wird neu gerendert...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                                    <span>Text & Overlay neu berechnen</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          )}
+
                           {/* Download Buttons Bar */}
-                          <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full max-w-[340px]">
+                          <div className="mt-5 flex flex-col sm:flex-row gap-3 w-full">
                             <button
                               type="button"
                               onClick={() => {
@@ -6463,7 +6863,7 @@ export default function Home() {
                               title={`Herunterladen als ${streamFile.name.replace(/\.[^/.]+$/, "")}.png`}
                             >
                               <Download className="w-4 h-4" />
-                              <span>Herunterladen</span>
+                              <span>Herunterladen (PNG)</span>
                             </button>
 
                             {streamCutoutUrl && (
@@ -6485,7 +6885,7 @@ export default function Home() {
                               type="button"
                               onClick={() => {
                                 setSaveTarget("stream");
-                                setNewArtworkName(streamFile.name.replace(/\.[^/.]+$/, ""));
+                                setNewArtworkName(streamMetadata.cardName ? `${streamMetadata.cardName} - ${streamMetadata.cardNumber}` : streamFile.name.replace(/\.[^/.]+$/, ""));
                                 setIsSaveModalOpen(true);
                               }}
                               className="p-3 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-955/20 hover:bg-purple-955/40 text-purple-300 font-semibold text-xs flex items-center justify-center transition-all cursor-pointer"
@@ -6501,8 +6901,10 @@ export default function Home() {
                             <Tv className="w-8 h-8 text-zinc-650" />
                           </div>
                           <p className="text-sm font-semibold text-zinc-400">Noch kein Stream-Bild generiert</p>
-                          <p className="text-xs text-zinc-600 mt-2 max-w-[240px]">
-                            Klicke auf &quot;Stream-Bild erstellen&quot;, um die Karte per KI freizustellen und auf dem Stream-Hintergrund zu platzieren.
+                          <p className="text-xs text-zinc-600 mt-2 max-w-[280px]">
+                            {streamMode === "extended"
+                              ? "Klicke auf \"Stream-Preview erstellen\", um das Artwork per KI zu erweitern und das Manacards-Design zu generieren."
+                              : "Klicke auf \"Stream-Bild erstellen\", um die Karte auf dem Stream-Hintergrund zu platzieren."}
                           </p>
                         </div>
                       )}

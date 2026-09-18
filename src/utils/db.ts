@@ -15,6 +15,13 @@ export interface SavedArtwork {
   isDisplay?: boolean;
   isBooster?: boolean;
   isStream?: boolean;
+  metadata?: {
+    cardName?: string;
+    cardNumber?: string;
+    setCode?: string;
+    setName?: string;
+    slogan?: string;
+  };
 }
 
 export function initDB(): Promise<IDBDatabase> {
