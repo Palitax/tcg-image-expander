@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import sharp, { OverlayOptions } from "sharp";
 import { enrichCardMetadata, CardMetadata } from "@/utils/tcgDatabase";
-import { INTER_BOLD_BASE64, INTER_MEDIUM_BASE64 } from "@/utils/streamFonts";
+import { buildStreamPreviewVectorSvg } from "@/utils/svgVectorText";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,146 +38,6 @@ async function generateContentWithRetry(ai: any, params: any, retries = 2, delay
     }
   }
   throw new Error("Failed to generate content after retries.");
-}
-
-// Helper to generate SVG Stream Preview frame & typography overlay with embedded Inter fonts
-function buildStreamPreviewSvg(metadata: CardMetadata, width = 1024, height = 1024): Buffer {
-  const line1 = [metadata.cardName, metadata.cardNumber, metadata.setCode].filter(Boolean).join(" - ");
-  const line2 = metadata.setName || "";
-  const line3 = metadata.slogan || "MANACARDS – Unpack the magic";
-
-  // Escape special XML characters in text
-  const escapeXml = (str: string) =>
-    str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&apos;");
-
-  const safeLine1 = escapeXml(line1);
-  const safeLine2 = escapeXml(line2);
-  const safeLine3 = escapeXml(line3);
-
-  // Dynamic font sizing for long card names
-  let line1FontSize = 40;
-  if (safeLine1.length > 28) line1FontSize = 34;
-  if (safeLine1.length > 38) line1FontSize = 28;
-  if (safeLine1.length > 48) line1FontSize = 24;
-
-  let line2FontSize = 32;
-  if (safeLine2.length > 25) line2FontSize = 28;
-  if (safeLine2.length > 35) line2FontSize = 24;
-
-  const svgContent = `
-<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <style>
-      @font-face {
-        font-family: 'InterStream';
-        src: url('data:font/truetype;charset=utf-8;base64,${INTER_BOLD_BASE64}') format('truetype');
-        font-weight: 800;
-        font-style: normal;
-      }
-      @font-face {
-        font-family: 'InterStream';
-        src: url('data:font/truetype;charset=utf-8;base64,${INTER_MEDIUM_BASE64}') format('truetype');
-        font-weight: 500;
-        font-style: normal;
-      }
-      .badge-text {
-        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
-        font-size: 23px;
-        font-weight: 800;
-        fill: #ffffff;
-      }
-      .title-text {
-        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
-        font-size: ${line1FontSize}px;
-        font-weight: 800;
-        fill: #ffffff;
-        text-anchor: middle;
-      }
-      .set-text {
-        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
-        font-size: ${line2FontSize}px;
-        font-weight: 800;
-        fill: #ffffff;
-        text-anchor: middle;
-      }
-      .slogan-text {
-        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
-        font-size: 22px;
-        font-weight: 500;
-        fill: #ffffff;
-        text-anchor: middle;
-      }
-    </style>
-
-    <!-- Stream Preview Accent Glow Gradient -->
-    <linearGradient id="lineGlow" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.95" />
-      <stop offset="50%" stop-color="#c084fc" stop-opacity="0.85" />
-      <stop offset="100%" stop-color="#f472b6" stop-opacity="0.95" />
-    </linearGradient>
-
-    <!-- Bottom Vignette for text contrast -->
-    <linearGradient id="bottomVignette" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0" />
-      <stop offset="25%" stop-color="#000000" stop-opacity="0.45" />
-      <stop offset="65%" stop-color="#000000" stop-opacity="0.88" />
-      <stop offset="100%" stop-color="#000000" stop-opacity="0.98" />
-    </linearGradient>
-
-    <!-- Top Vignette for STREAM PREVIEW badge -->
-    <linearGradient id="topVignette" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0.75" />
-      <stop offset="60%" stop-color="#000000" stop-opacity="0.30" />
-      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
-    </linearGradient>
-
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="2" result="blur" />
-      <feMerge>
-        <feMergeNode in="blur" />
-        <feMergeNode in="SourceGraphic" />
-      </feMerge>
-    </filter>
-  </defs>
-
-  <!-- Top Vignette -->
-  <rect x="0" y="0" width="${width}" height="120" fill="url(#topVignette)" />
-
-  <!-- Bottom Dark Vignette for Text Contrast -->
-  <rect x="0" y="650" width="${width}" height="374" fill="url(#bottomVignette)" />
-
-  <!-- Top Left Badge -->
-  <text x="42" y="54" class="badge-text">STREAM PREVIEW</text>
-
-  <!-- Framing Neon Lines -->
-  <!-- Top & Right framing path -->
-  <path d="M 265 46 L 950 46 Q 982 46 982 78 L 982 916 Q 982 948 950 948 L 780 948" fill="none" stroke="url(#lineGlow)" stroke-width="2" filter="url(#glow)" />
-  
-  <!-- Left & Bottom framing path -->
-  <path d="M 42 78 L 42 916 Q 42 948 74 948 L 244 948" fill="none" stroke="url(#lineGlow)" stroke-width="2" filter="url(#glow)" />
-
-  <!-- Outer side accent brackets -->
-  <path d="M 26 120 L 26 880 Q 26 915 52 915 L 70 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.4" opacity="0.55" />
-  <path d="M 998 120 L 998 880 Q 998 915 972 915 L 954 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.4" opacity="0.55" />
-
-  <!-- Line 1: Card Name - Number - Set Code -->
-  <text x="512" y="864" class="title-text">${safeLine1}</text>
-
-  <!-- Line 2: Set Name -->
-  <text x="512" y="908" class="set-text">${safeLine2}</text>
-
-  <!-- Line 3: Bottom Slogan flanked with accent lines -->
-  <line x1="80" y1="948" x2="234" y2="948" stroke="url(#lineGlow)" stroke-width="1.6" />
-  <text x="512" y="954" class="slogan-text">${safeLine3}</text>
-  <line x1="790" y1="948" x2="944" y2="948" stroke="url(#lineGlow)" stroke-width="1.6" />
-</svg>`;
-
-  return Buffer.from(svgContent);
 }
 
 // Programmatic computer-vision card detector fallback
@@ -330,8 +190,8 @@ async function compositeStreamPreviewLayers(params: {
     });
   }
 
-  // 2. Stream Preview SVG Overlay
-  const overlaySvgBuffer = buildStreamPreviewSvg(metadata, bgWidth, bgHeight);
+  // 2. Stream Preview Pure Vector SVG Overlay (Zero fontconfig dependency, no tofu boxes)
+  const overlaySvgBuffer = buildStreamPreviewVectorSvg(metadata, bgWidth, bgHeight);
   compositeLayers.push({
     input: overlaySvgBuffer,
     top: 0,
@@ -434,81 +294,121 @@ export async function POST(request: Request) {
     const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
     let layoutText = "";
 
-    const visionPrompt = `You are a high-precision Computer Vision model specialized in Trading Card Game (TCG) analysis (Pokémon, One Piece, Yu-Gi-Oh, Magic: The Gathering, Lorcana).
-Image dimensions: ${width}x${height} pixels.
+    const visionPrompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please analyze this Trading Card Game (TCG) image:
+1. "card": Bounding box coordinates [ymin, xmin, ymax, xmax] (integers 0-1000) of the physical cardboard trading card.
+   CRITICAL RULES:
+   - Identify the actual card frame / cardboard rectangle.
+   - Ignore and exclude any external semi-rigid card savers, top loaders, magnetic one-touch cases, penny sleeves, grading slabs, scanner glass, or background tables.
+   - The bounding box must tightly wrap the physical cardboard rectangle of the card itself!
+2. "illustration": Bounding box coordinates [ymin, xmin, ymax, xmax] (integers 0-1000) of the inner artwork illustration inside the card frame.
+3. "cardName": Extract the official English TCG name of this card/character (translate Japanese e.g. 'デンリュウ' -> 'Ampharos', 'ワンパチ' -> 'Yamper', 'モルペコ' -> 'Morpeko', 'リザードン' -> 'Charizard').
+4. "cardNumber": Locate the collector/card number printed at the bottom corner (e.g. '088/083', '086/080', '076/066', '151/165').
+5. "setCode": Extract the set registration code or symbol printed at the bottom corner (e.g. 'SV8', 'SV9', 'SV4K', 'SV2a', 'OP05', 'OBF', 'PAL', 'S12a').
+6. "setName": Identify the official English set name for this card and set code (e.g. 'Supercharged Breaker', 'Battle Partners', 'Ancient Roar', 'Pokémon Card 151').`;
 
-CRITICAL DETECTION INSTRUCTIONS:
-1. "card": Locate the EXACT bounding box [ymin, xmin, ymax, xmax] (integers 0-1000) of the physical cardboard trading card.
-   IMPORTANT: The card may be enclosed inside a clear plastic sleeve, penny sleeve, top loader, magnetic one-touch case, or slab. You MUST find the bounding box of the ACTUAL printed cardboard card itself, excluding the clear plastic margins, borders, or tabs of the holder!
-2. "illustration": Locate the bounding box [ymin, xmin, ymax, xmax] (integers 0-1000) of the inner artwork illustration inside the card frame.
-3. "cardName": Extract the official English TCG name of this card/character (translate Japanese, Korean, Chinese names to their official English name e.g. 'ワンパチ' -> 'Yamper', 'モルペコ' -> 'Morpeko', 'リザードン' -> 'Charizard').
-4. "cardNumber": Locate the collector/card number printed at the bottom corner (e.g. '086/080', '076/066', '151/165', 'OP05-119').
-5. "setCode": Extract the set registration code or symbol printed at the bottom corner (e.g. 'SV9', 'SV4K', 'SV2a', 'MEW', 'OP05', 'OBF', 'PAL', 'S12a').
-6. "setName": Identify the official English set name for this card and set code (e.g. 'Battle Partners', 'Ancient Roar', 'Pokémon Card 151', 'Paradox Rift', 'Awakening of the New Era').`;
-
+    // Try REST fetch first for maximum reliability across serverless environments
     for (const model of models) {
       try {
         console.log(`[Stream Preview API] Trying model ${model} for vision analysis...`);
-        const response = await ai.models.generateContent({
-          model,
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const payload = {
           contents: [
             {
-              inlineData: {
-                data: base64Image,
-                mimeType
-              }
-            },
-            visionPrompt
+              parts: [
+                { inlineData: { mimeType, data: base64Image } },
+                { text: visionPrompt }
+              ]
+            }
           ],
-          config: {
+          generationConfig: {
             responseMimeType: "application/json",
             responseSchema: {
-              type: "object",
+              type: "OBJECT",
               properties: {
                 box_2d: {
-                  type: "array",
-                  items: { type: "integer" },
-                  description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] (0-1000)."
+                  type: "ARRAY",
+                  items: { type: "INTEGER" },
+                  description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] integers 0-1000."
                 },
                 card: {
-                  type: "object",
+                  type: "OBJECT",
                   properties: {
-                    x1: { type: "integer" },
-                    y1: { type: "integer" },
-                    x2: { type: "integer" },
-                    y2: { type: "integer" }
+                    x1: { type: "INTEGER" },
+                    y1: { type: "INTEGER" },
+                    x2: { type: "INTEGER" },
+                    y2: { type: "INTEGER" }
                   }
                 },
                 illustration_box: {
-                  type: "array",
-                  items: { type: "integer" },
-                  description: "Bounding box of the inner illustration as [ymin, xmin, ymax, xmax] (0-1000)."
+                  type: "ARRAY",
+                  items: { type: "INTEGER" },
+                  description: "Bounding box of the inner illustration as [ymin, xmin, ymax, xmax] integers 0-1000."
                 },
                 illustration: {
-                  type: "object",
+                  type: "OBJECT",
                   properties: {
-                    x1: { type: "integer" },
-                    y1: { type: "integer" },
-                    x2: { type: "integer" },
-                    y2: { type: "integer" }
+                    x1: { type: "INTEGER" },
+                    y1: { type: "INTEGER" },
+                    x2: { type: "INTEGER" },
+                    y2: { type: "INTEGER" }
                   }
                 },
-                cardName: { type: "string" },
-                cardNumber: { type: "string" },
-                setCode: { type: "string" },
-                setName: { type: "string" }
+                cardName: { type: "STRING" },
+                cardNumber: { type: "STRING" },
+                setCode: { type: "STRING" },
+                setName: { type: "STRING" }
               },
               required: ["cardName", "cardNumber", "setCode"]
             }
           }
+        };
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
         });
 
-        if (response.text) {
-          layoutText = response.text;
-          break;
+        if (res.ok) {
+          const json = await res.json();
+          const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) {
+            layoutText = text;
+            break;
+          }
         }
       } catch (err: any) {
-        console.warn(`[Stream Preview API] Model ${model} vision call failed:`, err?.message || err);
+        console.warn(`[Stream Preview API] Model ${model} REST call failed:`, err?.message || err);
+      }
+    }
+
+    // Fallback to @google/genai SDK if REST didn't return text
+    if (!layoutText) {
+      for (const model of models) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: [
+              {
+                inlineData: {
+                  data: base64Image,
+                  mimeType
+                }
+              },
+              visionPrompt
+            ],
+            config: {
+              responseMimeType: "application/json"
+            }
+          });
+
+          if (response.text) {
+            layoutText = response.text;
+            break;
+          }
+        } catch (sdkErr: any) {
+          console.warn(`[Stream Preview API] SDK ${model} failed:`, sdkErr?.message || sdkErr);
+        }
       }
     }
 
@@ -658,7 +558,7 @@ CRITICAL DETECTION INSTRUCTIONS:
     }
 
     if (!backgroundBuffer) {
-      // Extract inner illustration or upper half for style analysis & outpainting
+      // Extract inner illustration for style analysis & outpainting
       let ix1 = detectedIllustrationCoords?.x1 ?? (cx1 + Math.round(finalCardW * 0.1));
       let iy1 = detectedIllustrationCoords?.y1 ?? (cy1 + Math.round(finalCardH * 0.12));
       let ix2 = detectedIllustrationCoords?.x2 ?? (cx1 + Math.round(finalCardW * 0.9));

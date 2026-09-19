@@ -132,6 +132,9 @@ export const TCG_SETS: Record<string, TcgSetInfo> = {
 export const JAPANESE_POKEMON_MAP: Record<string, string> = {
   "ワンパチ": "Yamper",
   "モルペコ": "Morpeko",
+  "デンリュウ": "Ampharos",
+  "モココ": "Flaaffy",
+  "メリープ": "Mareep",
   "ピカチュウ": "Pikachu",
   "リザードン": "Charizard",
   "イーブイ": "Eevee",
