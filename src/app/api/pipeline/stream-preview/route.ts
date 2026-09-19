@@ -482,33 +482,24 @@ export async function POST(request: Request) {
       detectedCardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
     }
 
-    // Aspect ratio normalization (Standard TCG card ratio ~ 0.715)
+    // Safe coordinate determination - NEVER truncate card borders
     let cx1 = detectedCardCoords.x1;
     let cy1 = detectedCardCoords.y1;
     let cx2 = detectedCardCoords.x2;
     let cy2 = detectedCardCoords.y2;
-    const cardW = cx2 - cx1;
-    const cardH = cy2 - cy1;
 
-    if (cardW > 0 && cardH > 0) {
-      const ratio = cardW / cardH;
-      const centerX = (cx1 + cx2) / 2;
-      const centerY = (cy1 + cy2) / 2;
-      if (ratio < 0.60 || ratio > 0.85) {
-        const TARGET_RATIO = 0.715;
-        if (ratio > TARGET_RATIO) {
-          const newW = cardH * TARGET_RATIO;
-          cx1 = Math.round(centerX - newW / 2);
-          cx2 = Math.round(centerX + newW / 2);
-        } else {
-          const newH = cardW / TARGET_RATIO;
-          cy1 = Math.round(centerY - newH / 2);
-          cy2 = Math.round(centerY + newH / 2);
-        }
-      }
+    const detectedW = cx2 - cx1;
+    const detectedH = cy2 - cy1;
+
+    // If the image is already mostly the card (>= 90% coverage), use the full image to avoid cutting card edges
+    if (detectedW >= width * 0.90 && detectedH >= height * 0.90) {
+      cx1 = 0;
+      cy1 = 0;
+      cx2 = width;
+      cy2 = height;
     }
 
-    // Strict clamping
+    // Strict clamping to image bounds
     cx1 = Math.max(0, Math.min(cx1, width - 1));
     cy1 = Math.max(0, Math.min(cy1, height - 1));
     cx2 = Math.max(cx1 + 1, Math.min(cx2, width));
