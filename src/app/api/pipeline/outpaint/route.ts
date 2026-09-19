@@ -140,26 +140,68 @@ export async function POST(request: Request) {
         let generatedBase64 = "";
         let lastImageError;
 
-        // 1. Try Imagen 3 via generateImages
-        try {
-          console.log(`[Outpaint API] Attempting Imagen 3 generation for ratio ${targetRatio}...`);
-          const imagenRes = await ai.models.generateImages({
-            model: "imagen-3.0-generate-002",
-            prompt: outpaintPrompt,
-            config: {
-              numberOfImages: 1,
-              aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any),
-              outputMimeType: "image/jpeg"
+        // 1. Try Imagen 3 via Direct REST :predict
+        const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
+        for (const imagenModel of imagenModels) {
+          try {
+            console.log(`[Outpaint API] Attempting REST Imagen predict with ${imagenModel} for ratio ${targetRatio}...`);
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
+            const payload = {
+              instances: [
+                { prompt: outpaintPrompt }
+              ],
+              parameters: {
+                sampleCount: 1,
+                aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any),
+                outputMimeType: "image/jpeg"
+              }
+            };
+
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+              const json = await res.json();
+              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+              if (bytes) {
+                console.log(`[Outpaint API] REST ${imagenModel} generated image successfully for ratio ${targetRatio}`);
+                return bytes;
+              }
+            } else {
+              const errBody = await res.text();
+              console.warn(`[Outpaint API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
             }
-          });
-          const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-          if (imgBytes) {
-            console.log(`[Outpaint API] Imagen 3 generated image successfully for ratio ${targetRatio}`);
-            return imgBytes;
+          } catch (restErr: any) {
+            console.warn(`[Outpaint API] REST ${imagenModel} failed: ${restErr.message}`);
+            lastImageError = restErr;
           }
-        } catch (e: any) {
-          console.warn(`[Outpaint API] Imagen 3 failed: ${e.message}`);
-          lastImageError = e;
+        }
+
+        // 2. Try Imagen 3 via SDK generateImages
+        for (const imagenModel of imagenModels) {
+          try {
+            console.log(`[Outpaint API] Attempting SDK Imagen generation with ${imagenModel} for ratio ${targetRatio}...`);
+            const imagenRes = await ai.models.generateImages({
+              model: imagenModel,
+              prompt: outpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any),
+                outputMimeType: "image/jpeg"
+              }
+            });
+            const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+            if (imgBytes) {
+              console.log(`[Outpaint API] SDK ${imagenModel} generated image successfully for ratio ${targetRatio}`);
+              return imgBytes;
+            }
+          } catch (e: any) {
+            console.warn(`[Outpaint API] SDK ${imagenModel} failed: ${e.message}`);
+            lastImageError = e;
+          }
         }
 
         // 2. Try Gemini 3.6 / 2.5 Flash image generation
