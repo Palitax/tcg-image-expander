@@ -246,7 +246,7 @@ export async function POST(request: Request) {
 
     const base64Image = originalImageBuffer.toString("base64");
     
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
     let layoutText = "";
     let lastError;
 

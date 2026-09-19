@@ -79,7 +79,7 @@ export async function POST(request: Request) {
 
     try {
       // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
-      const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"];
+      const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
       let description = "";
       let lastError;
 
@@ -162,9 +162,9 @@ export async function POST(request: Request) {
           lastImageError = e;
         }
 
-        // 2. Try Gemini 2.0 Flash image generation
+        // 2. Try Gemini 3.6 / 2.5 Flash image generation
         try {
-          console.log(`[Outpaint API] Attempting gemini-2.0-flash for ratio ${targetRatio}...`);
+          console.log(`[Outpaint API] Attempting gemini-3.6-flash / gemini-2.5-flash for ratio ${targetRatio}...`);
           let contentsArray: any[] = [];
           if (mode === "backdrop" || isDisplay) {
             contentsArray = [outpaintPrompt];
@@ -180,30 +180,38 @@ export async function POST(request: Request) {
             ];
           }
 
-          const geminiImgRes = await generateContentWithRetry(ai, {
-            model: "gemini-2.0-flash",
-            contents: contentsArray,
-            config: {
-              responseModalities: ["IMAGE"],
-              imageConfig: {
-                aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any)
-              }
-            }
-          });
+          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+          for (const imgModel of fallbackImageModels) {
+            try {
+              const geminiImgRes = await generateContentWithRetry(ai, {
+                model: imgModel,
+                contents: contentsArray,
+                config: {
+                  responseModalities: ["IMAGE"],
+                  imageConfig: {
+                    aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any)
+                  }
+                }
+              });
 
-          const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
-          for (const part of parts) {
-            if (part.inlineData?.data) {
-              generatedBase64 = part.inlineData.data;
-              break;
+              const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
+              for (const part of parts) {
+                if (part.inlineData?.data) {
+                  generatedBase64 = part.inlineData.data;
+                  break;
+                }
+              }
+              if (generatedBase64) {
+                console.log(`[Outpaint API] ${imgModel} generated image successfully for ratio ${targetRatio}`);
+                return generatedBase64;
+              }
+            } catch (imgModelErr: any) {
+              console.warn(`[Outpaint API] ${imgModel} failed:`, imgModelErr?.message || imgModelErr);
+              lastImageError = imgModelErr;
             }
-          }
-          if (generatedBase64) {
-            console.log(`[Outpaint API] gemini-2.0-flash generated image successfully for ratio ${targetRatio}`);
-            return generatedBase64;
           }
         } catch (e: any) {
-          console.warn(`[Outpaint API] gemini-2.0-flash failed: ${e.message}`);
+          console.warn(`[Outpaint API] Fallback image generation failed: ${e.message}`);
           lastImageError = e;
         }
 

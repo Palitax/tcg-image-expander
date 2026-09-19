@@ -291,7 +291,7 @@ export async function POST(request: Request) {
     if (mimeType === "image/jpg") mimeType = "image/jpeg";
 
     // STEP 1: AI Vision Layout Analysis & Metadata OCR
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
     let layoutText = "";
 
     const visionPrompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please analyze this Trading Card Game (TCG) image:
@@ -622,34 +622,41 @@ export async function POST(request: Request) {
           console.warn("[Stream Preview API] Imagen 3 failed, attempting Gemini 2.0 Flash Exp:", imgErr?.message || imgErr);
         }
 
-        // 2. Secondary: Generate with Gemini 2.0 Flash fallback
+        // 2. Secondary: Generate with Gemini 3.6 / 2.5 Flash fallback
         if (!backgroundBuffer) {
-          try {
-            const geminiImgRes = await generateContentWithRetry(ai, {
-              model: "gemini-2.0-flash",
-              contents: [
-                {
-                  inlineData: {
-                    data: illustrationBase64,
-                    mimeType: "image/jpeg"
-                  }
-                },
-                outpaintPrompt
-              ],
-              config: {
-                responseModalities: ["IMAGE"],
-                imageConfig: { aspectRatio: "1:1" }
+          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+          for (const imgModel of fallbackImageModels) {
+            try {
+              const geminiImgRes = await generateContentWithRetry(ai, {
+                model: imgModel,
+                contents: [
+                  {
+                    inlineData: {
+                      data: illustrationBase64,
+                      mimeType: "image/jpeg"
+                    }
+                  },
+                  outpaintPrompt
+                ],
+                config: {
+                  responseModalities: ["IMAGE"],
+                  imageConfig: { aspectRatio: "1:1" }
+                }
+              });
+              const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
+              for (const part of parts) {
+                if (part.inlineData?.data) {
+                  backgroundBuffer = Buffer.from(part.inlineData.data, "base64");
+                  break;
+                }
               }
-            });
-            const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
-            for (const part of parts) {
-              if (part.inlineData?.data) {
-                backgroundBuffer = Buffer.from(part.inlineData.data, "base64");
+              if (backgroundBuffer) {
+                console.log(`[Stream Preview API] ${imgModel} generated backdrop successfully.`);
                 break;
               }
+            } catch (gErr: any) {
+              console.warn(`[Stream Preview API] ${imgModel} image generation failed:`, gErr?.message || gErr);
             }
-          } catch (gErr: any) {
-            console.warn("[Stream Preview API] Gemini image generation failed:", gErr?.message || gErr);
           }
         }
       } catch (outpaintErr) {

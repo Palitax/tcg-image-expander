@@ -84,7 +84,7 @@ export async function POST(request: Request) {
     }
 
     // Fallback list of modern active Gemini models
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
     let responseText = "";
     let lastError;
 
