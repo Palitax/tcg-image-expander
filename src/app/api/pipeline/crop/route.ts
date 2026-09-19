@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     const skipCardCrop = formData.get("skipCardCrop") === "true";
 
     if (!file) {
-      return NextResponse.json({ error: "No image file uploaded." }, { status: 400 });
+      return NextResponse.json({ error: "Keine Bilddatei hochgeladen." }, { status: 400 });
     }
 
     const arrayBuffer = await file.arrayBuffer();
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     const height = originalMetadata.height || 0;
 
     if (width === 0 || height === 0) {
-      return NextResponse.json({ error: "Failed to read image dimensions." }, { status: 400 });
+      return NextResponse.json({ error: "Bildabmessungen konnten nicht gelesen werden." }, { status: 400 });
     }
 
     // Try to auto-trim uniform borders (like white/black margins) from the card image
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64");
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
     let layoutText = "";
 
     const prompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
@@ -408,6 +408,6 @@ export async function POST(request: Request) {
 
   } catch (error: any) {
     console.error("Error in Crop API:", error);
-    return NextResponse.json({ error: error.message || "Internal server error during crop." }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Interner Serverfehler beim Zuschneiden der Karte." }, { status: 500 });
   }
 }

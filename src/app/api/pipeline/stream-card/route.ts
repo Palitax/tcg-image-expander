@@ -275,7 +275,7 @@ export async function POST(request: Request) {
     try {
       console.log(`[Stream Card API] Starting Gemini AI detection over direct REST API...`);
       const base64Image = originalCardBuffer.toString("base64");
-      const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
+      const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
       let layoutText = "";
 
       const prompt = `You are a high-precision Computer Vision model specialized in Trading Card Game (TCG) scanning and segmentation (Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana, Sports cards).

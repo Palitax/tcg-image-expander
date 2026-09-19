@@ -84,7 +84,7 @@ export async function POST(request: Request) {
     }
 
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
     let responseText = "";
     let lastError;
 
@@ -152,7 +152,7 @@ Return ONLY a JSON object matching the requested schema.`
     }
 
     if (!responseText) {
-      throw lastError || new Error("Failed to get response from Gemini API models.");
+      throw lastError || new Error("Keine Antwort von den Gemini-API-Modellen erhalten.");
     }
 
     const parsed = JSON.parse(responseText);
@@ -162,7 +162,7 @@ Return ONLY a JSON object matching the requested schema.`
   } catch (error: any) {
     console.error("[Identify API] Error:", error);
     return NextResponse.json(
-      { error: error.message || "An error occurred during card identification." },
+      { error: error.message || "Beim Identifizieren der Karte ist ein Fehler aufgetreten." },
       { status: 500 }
     );
   }

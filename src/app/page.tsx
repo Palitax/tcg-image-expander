@@ -196,7 +196,11 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
     const errorData = JSON.parse(rawText);
     console.error("[API Server Error Payload]", errorData);
     if (errorData && errorData.error) {
-      errorMessage = errorData.error;
+      if (typeof errorData.error === "string") {
+        errorMessage = errorData.error;
+      } else if (typeof errorData.error === "object") {
+        errorMessage = errorData.error.message || JSON.stringify(errorData.error);
+      }
     }
   } catch {
     if (rawText && rawText.trim()) {
@@ -2490,7 +2494,7 @@ export default function Home() {
       setActiveStepMessage("Bildgröße wird für Server optimiert...");
       
       const fileToProcess = await optimizeImageFile(rawFile);
-      setActiveStepMessage("Locating artwork bounding box...");
+      setActiveStepMessage("Artwork-Bereich wird lokalisiert...");
       
       const cropFormData = new FormData();
       cropFormData.append("cardImage", fileToProcess);
@@ -4949,13 +4953,13 @@ export default function Home() {
                         {usedCropFallback && (
                           <div className="flex items-center gap-2">
                             <Info className="w-4 h-4 text-purple-400 shrink-0" />
-                            <span>Default layout boundaries used.</span>
+                            <span>Standard-Layoutgrenzen verwendet.</span>
                           </div>
                         )}
                         {usedAmbientFallback && (
                           <div className="flex items-center gap-2">
                             <Info className="w-4 h-4 text-purple-400 shrink-0" />
-                            <span>Ambient Blur fallback used.</span>
+                            <span>Weichzeichner-Hintergrund (Ambient Blur) verwendet.</span>
                           </div>
                         )}
                         {usedAmbientFallback && ambientFallbackReason && (

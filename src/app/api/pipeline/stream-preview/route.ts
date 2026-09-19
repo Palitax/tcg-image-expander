@@ -291,7 +291,7 @@ export async function POST(request: Request) {
     if (mimeType === "image/jpg") mimeType = "image/jpeg";
 
     // STEP 1: AI Vision Layout Analysis & Metadata OCR
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
     let layoutText = "";
 
     // Robust AI Vision Detection using Google Gemini REST API & SDK
@@ -691,7 +691,7 @@ export async function POST(request: Request) {
 
         // 3. Tertiary: Generate with Gemini Multimodal Image fallback
         if (!backgroundBuffer) {
-          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
           for (const imgModel of fallbackImageModels) {
             try {
               console.log(`[Stream Preview API] Attempting multimodal image generation with ${imgModel}...`);

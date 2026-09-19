@@ -239,7 +239,7 @@ export async function POST(request: Request) {
     const height = originalMetadata.height || 0;
 
     if (width === 0 || height === 0) {
-      return NextResponse.json({ error: "Failed to read image dimensions." }, { status: 400 });
+      return NextResponse.json({ error: "Bildabmessungen konnten nicht gelesen werden." }, { status: 400 });
     }
 
     // Try to remove solid background using BFS contour extraction
@@ -259,7 +259,7 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64");
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
+    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
     let layoutText = "";
     let lastError;
 
@@ -481,6 +481,6 @@ export async function POST(request: Request) {
   } catch (error: any) {
     console.error("Error in Display Crop API:", error);
     writeDebugLog(`CRITICAL ERROR in Display Crop API: ${error.message}. Stack: ${error.stack || ""}`);
-    return NextResponse.json({ error: error.message || "Internal server error during crop." }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Interner Serverfehler beim Zuschneiden des Displays." }, { status: 500 });
   }
 }

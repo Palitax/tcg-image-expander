@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     const { croppedImage, aspectRatio, mode = "backdrop", isDisplay = false } = body;
 
     if (!croppedImage) {
-      return NextResponse.json({ error: "Missing croppedImage base64 data." }, { status: 400 });
+      return NextResponse.json({ error: "Fehlende croppedImage Base64-Daten." }, { status: 400 });
     }
 
     // Extract raw base64 from Data URL
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
 
     try {
       // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
-      const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
+      const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
       let description = "";
       let lastError;
 
@@ -118,7 +118,7 @@ export async function POST(request: Request) {
       }
 
       if (!description) {
-        throw lastError || new Error("Failed to generate description with Gemini.");
+        throw lastError || new Error("Hintergrundbeschreibung mit Gemini fehlgeschlagen.");
       }
 
       // Filter and sanitize description to prevent safety triggers in Imagen
@@ -222,7 +222,7 @@ export async function POST(request: Request) {
             ];
           }
 
-          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
           for (const imgModel of fallbackImageModels) {
             try {
               const geminiImgRes = await generateContentWithRetry(ai, {
@@ -260,7 +260,7 @@ export async function POST(request: Request) {
         if (generatedBase64) {
           return generatedBase64;
         }
-        throw lastImageError || new Error(`No image bytes returned for ratio ${targetRatio}.`);
+        throw lastImageError || new Error(`Keine Bilddaten für das Seitenverhältnis ${targetRatio} erhalten.`);
       };
 
       if (isDual) {
@@ -312,6 +312,6 @@ export async function POST(request: Request) {
 
   } catch (error: any) {
     console.error("Fatal error in Outpaint API:", error);
-    return NextResponse.json({ error: error.message || "Internal server error during outpaint." }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Interner Serverfehler während der Hintergrunderweiterung." }, { status: 500 });
   }
 }
