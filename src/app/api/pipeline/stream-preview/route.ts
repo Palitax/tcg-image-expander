@@ -291,7 +291,7 @@ export async function POST(request: Request) {
     if (mimeType === "image/jpg") mimeType = "image/jpeg";
 
     // STEP 1: AI Vision Layout Analysis & Metadata OCR
-    const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"];
     let layoutText = "";
 
     const visionPrompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please analyze this Trading Card Game (TCG) image:
