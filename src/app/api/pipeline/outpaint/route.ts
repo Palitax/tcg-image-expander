@@ -159,7 +159,10 @@ export async function POST(request: Request) {
               parameters: {
                 sampleCount: 1,
                 aspectRatio: standardRatio,
-                outputMimeType: "image/jpeg"
+                safetySetting: "block_only_high",
+                outputOptions: {
+                  mimeType: "image/jpeg"
+                }
               }
             };
 
