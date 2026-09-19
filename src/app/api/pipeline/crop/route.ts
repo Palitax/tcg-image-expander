@@ -274,7 +274,7 @@ export async function POST(request: Request) {
     if (hasSampleWatermark) {
       console.log("[Crop API] Watermark 'SAMPLE' detected. Attempting to remove it...");
       try {
-        const imageModels = ["gemini-2.0-flash-exp", "imagen-3.0-generate-002"];
+        const imageModels = ["gemini-2.0-flash", "imagen-3.0-generate-002"];
         let cleanedBase64 = "";
 
         for (const modelName of imageModels) {

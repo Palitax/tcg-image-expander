@@ -162,9 +162,9 @@ export async function POST(request: Request) {
           lastImageError = e;
         }
 
-        // 2. Try Gemini 2.0 Flash experimental image generation
+        // 2. Try Gemini 2.0 Flash image generation
         try {
-          console.log(`[Outpaint API] Attempting gemini-2.0-flash-exp for ratio ${targetRatio}...`);
+          console.log(`[Outpaint API] Attempting gemini-2.0-flash for ratio ${targetRatio}...`);
           let contentsArray: any[] = [];
           if (mode === "backdrop" || isDisplay) {
             contentsArray = [outpaintPrompt];
@@ -181,12 +181,12 @@ export async function POST(request: Request) {
           }
 
           const geminiImgRes = await generateContentWithRetry(ai, {
-            model: "gemini-2.0-flash-exp",
+            model: "gemini-2.0-flash",
             contents: contentsArray,
             config: {
               responseModalities: ["IMAGE"],
               imageConfig: {
-                aspectRatio: targetRatio
+                aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any)
               }
             }
           });
@@ -199,11 +199,11 @@ export async function POST(request: Request) {
             }
           }
           if (generatedBase64) {
-            console.log(`[Outpaint API] gemini-2.0-flash-exp generated image successfully for ratio ${targetRatio}`);
+            console.log(`[Outpaint API] gemini-2.0-flash generated image successfully for ratio ${targetRatio}`);
             return generatedBase64;
           }
         } catch (e: any) {
-          console.warn(`[Outpaint API] gemini-2.0-flash-exp failed: ${e.message}`);
+          console.warn(`[Outpaint API] gemini-2.0-flash failed: ${e.message}`);
           lastImageError = e;
         }
 

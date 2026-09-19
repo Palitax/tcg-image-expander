@@ -631,11 +631,11 @@ export async function POST(request: Request) {
           console.warn("[Stream Preview API] Imagen 3 failed, attempting Gemini 2.0 Flash Exp:", imgErr?.message || imgErr);
         }
 
-        // 2. Secondary: Generate with Gemini 2.0 Flash Exp fallback
+        // 2. Secondary: Generate with Gemini 2.0 Flash fallback
         if (!backgroundBuffer) {
           try {
             const geminiImgRes = await generateContentWithRetry(ai, {
-              model: "gemini-2.0-flash-exp",
+              model: "gemini-2.0-flash",
               contents: [
                 {
                   inlineData: {
