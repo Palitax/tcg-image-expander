@@ -140,11 +140,17 @@ export async function POST(request: Request) {
         let generatedBase64 = "";
         let lastImageError;
 
+        // Ensure targetRatio is mapped cleanly to supported Imagen ratios ("1:1", "3:4", "4:3", "9:16", "16:9")
+        const validRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
+        const standardRatio = validRatios.includes(targetRatio)
+          ? targetRatio
+          : (targetRatio === "dual" || targetRatio === "both" ? "16:9" : "3:4");
+
         // 1. Try Imagen 3 via Direct REST :predict
         const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
         for (const imagenModel of imagenModels) {
           try {
-            console.log(`[Outpaint API] Attempting REST Imagen predict with ${imagenModel} for ratio ${targetRatio}...`);
+            console.log(`[Outpaint API] Attempting REST Imagen predict with ${imagenModel} for ratio ${standardRatio}...`);
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
             const payload = {
               instances: [
@@ -152,7 +158,7 @@ export async function POST(request: Request) {
               ],
               parameters: {
                 sampleCount: 1,
-                aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any),
+                aspectRatio: standardRatio,
                 outputMimeType: "image/jpeg"
               }
             };
@@ -167,8 +173,9 @@ export async function POST(request: Request) {
               const json = await res.json();
               const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
               if (bytes) {
-                console.log(`[Outpaint API] REST ${imagenModel} generated image successfully for ratio ${targetRatio}`);
-                return bytes;
+                console.log(`[Outpaint API] REST ${imagenModel} generated image successfully for ratio ${standardRatio}`);
+                generatedBase64 = bytes;
+                break;
               }
             } else {
               const errBody = await res.text();
@@ -181,85 +188,109 @@ export async function POST(request: Request) {
         }
 
         // 2. Try Imagen 3 via SDK generateImages
-        for (const imagenModel of imagenModels) {
-          try {
-            console.log(`[Outpaint API] Attempting SDK Imagen generation with ${imagenModel} for ratio ${targetRatio}...`);
-            const imagenRes = await ai.models.generateImages({
-              model: imagenModel,
-              prompt: outpaintPrompt,
-              config: {
-                numberOfImages: 1,
-                aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any),
-                outputMimeType: "image/jpeg"
+        if (!generatedBase64) {
+          for (const imagenModel of imagenModels) {
+            try {
+              console.log(`[Outpaint API] Attempting SDK Imagen generation with ${imagenModel} for ratio ${standardRatio}...`);
+              const imagenRes = await ai.models.generateImages({
+                model: imagenModel,
+                prompt: outpaintPrompt,
+                config: {
+                  numberOfImages: 1,
+                  aspectRatio: standardRatio,
+                  outputMimeType: "image/jpeg"
+                }
+              });
+              const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+              if (imgBytes) {
+                console.log(`[Outpaint API] SDK ${imagenModel} generated image successfully for ratio ${standardRatio}`);
+                generatedBase64 = imgBytes;
+                break;
               }
-            });
-            const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-            if (imgBytes) {
-              console.log(`[Outpaint API] SDK ${imagenModel} generated image successfully for ratio ${targetRatio}`);
-              return imgBytes;
+            } catch (e: any) {
+              console.warn(`[Outpaint API] SDK ${imagenModel} failed: ${e.message}`);
+              lastImageError = e;
+            }
+          }
+        }
+
+        // 3. Try Gemini Multimodal Image fallback
+        if (!generatedBase64) {
+          try {
+            console.log(`[Outpaint API] Attempting gemini-3.6-flash / gemini-2.5-flash for ratio ${standardRatio}...`);
+            let contentsArray: any[] = [];
+            if (mode === "backdrop" || isDisplay) {
+              contentsArray = [outpaintPrompt];
+            } else {
+              contentsArray = [
+                {
+                  inlineData: {
+                    data: base64Data,
+                    mimeType: "image/png"
+                  }
+                },
+                outpaintPrompt
+              ];
+            }
+
+            const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
+            for (const imgModel of fallbackImageModels) {
+              // Try with imageConfig first, then fallback to without imageConfig if aspect ratio is not supported by the model
+              const configsToTry = [
+                {
+                  responseModalities: ["IMAGE"],
+                  imageConfig: {
+                    aspectRatio: standardRatio
+                  }
+                },
+                {
+                  responseModalities: ["IMAGE"]
+                }
+              ];
+
+              for (const config of configsToTry) {
+                try {
+                  const geminiImgRes = await generateContentWithRetry(ai, {
+                    model: imgModel,
+                    contents: contentsArray,
+                    config
+                  });
+
+                  const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
+                  for (const part of parts) {
+                    if (part.inlineData?.data) {
+                      generatedBase64 = part.inlineData.data;
+                      break;
+                    }
+                  }
+                  if (generatedBase64) {
+                    console.log(`[Outpaint API] ${imgModel} generated image successfully for ratio ${standardRatio}`);
+                    break;
+                  }
+                } catch (imgModelErr: any) {
+                  console.warn(`[Outpaint API] ${imgModel} failed:`, imgModelErr?.message || imgModelErr);
+                  lastImageError = imgModelErr;
+                }
+              }
+              if (generatedBase64) break;
             }
           } catch (e: any) {
-            console.warn(`[Outpaint API] SDK ${imagenModel} failed: ${e.message}`);
+            console.warn(`[Outpaint API] Fallback image generation failed: ${e.message}`);
             lastImageError = e;
           }
         }
 
-        // 2. Try Gemini 3.6 / 2.5 Flash image generation
-        try {
-          console.log(`[Outpaint API] Attempting gemini-3.6-flash / gemini-2.5-flash for ratio ${targetRatio}...`);
-          let contentsArray: any[] = [];
-          if (mode === "backdrop" || isDisplay) {
-            contentsArray = [outpaintPrompt];
-          } else {
-            contentsArray = [
-              {
-                inlineData: {
-                  data: base64Data,
-                  mimeType: "image/png"
-                }
-              },
-              outpaintPrompt
-            ];
-          }
-
-          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
-          for (const imgModel of fallbackImageModels) {
-            try {
-              const geminiImgRes = await generateContentWithRetry(ai, {
-                model: imgModel,
-                contents: contentsArray,
-                config: {
-                  responseModalities: ["IMAGE"],
-                  imageConfig: {
-                    aspectRatio: targetRatio === "dual" || targetRatio === "both" ? "16:9" : (targetRatio as any)
-                  }
-                }
-              });
-
-              const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
-              for (const part of parts) {
-                if (part.inlineData?.data) {
-                  generatedBase64 = part.inlineData.data;
-                  break;
-                }
-              }
-              if (generatedBase64) {
-                console.log(`[Outpaint API] ${imgModel} generated image successfully for ratio ${targetRatio}`);
-                return generatedBase64;
-              }
-            } catch (imgModelErr: any) {
-              console.warn(`[Outpaint API] ${imgModel} failed:`, imgModelErr?.message || imgModelErr);
-              lastImageError = imgModelErr;
-            }
-          }
-        } catch (e: any) {
-          console.warn(`[Outpaint API] Fallback image generation failed: ${e.message}`);
-          lastImageError = e;
-        }
-
         if (generatedBase64) {
-          return generatedBase64;
+          // Normalize and resize generated background to target dimensions using Sharp
+          const { width: targetW, height: targetH } = getDimensionsForRatio(targetRatio);
+          const rawBuffer = Buffer.from(generatedBase64, "base64");
+          const fittedBuffer = await sharp(rawBuffer)
+            .resize(targetW, targetH, { fit: "cover" })
+            .jpeg({ quality: 90 })
+            .toBuffer();
+          return fittedBuffer.toString("base64");
         }
+
         throw lastImageError || new Error(`Keine Bilddaten für das Seitenverhältnis ${targetRatio} erhalten.`);
       };
 
@@ -278,7 +309,16 @@ export async function POST(request: Request) {
     } catch (e: any) {
       console.warn("[Outpaint API] AI Outpainting failed. Error:", e.message);
       usedFallback = true;
-      fallbackReason = e.message || String(e);
+      const rawMsg = e.message || String(e);
+      if (rawMsg.includes("400") || rawMsg.includes("INVALID_ARGUMENT") || rawMsg.includes("Aspect ratio")) {
+        fallbackReason = "KI-Bildgenerierung konnte für dieses Seitenverhältnis kein Bild erzeugen.";
+      } else if (rawMsg.includes("429") || rawMsg.toLowerCase().includes("quota") || rawMsg.toLowerCase().includes("rate limit")) {
+        fallbackReason = "API-Ratenlimit oder Kontingent für Bildgenerierung erreicht.";
+      } else if (rawMsg.includes("403") || rawMsg.toLowerCase().includes("permission")) {
+        fallbackReason = "Keine Berechtigung für KI-Bildgenerierung mit diesem API-Key.";
+      } else {
+        fallbackReason = rawMsg;
+      }
       
       // GENERATE BLURRED AMBIENT BACKDROP (Bulletproof fallback)
       const blurredBgBuffer = await sharp(croppedBuffer)
