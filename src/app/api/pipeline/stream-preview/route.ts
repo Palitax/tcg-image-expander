@@ -2,12 +2,45 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import sharp, { OverlayOptions } from "sharp";
 import { enrichCardMetadata, CardMetadata } from "@/utils/tcgDatabase";
+import { INTER_BOLD_BASE64, INTER_MEDIUM_BASE64 } from "@/utils/streamFonts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Helper to generate SVG Stream Preview frame & typography overlay
+// Helper to call generateContent with retry on transient errors (503, 429)
+async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (e: any) {
+      const errorStr = String(e.message || e);
+      const isUnavailable =
+        errorStr.includes("503") ||
+        errorStr.toLowerCase().includes("demand") ||
+        errorStr.toLowerCase().includes("unavailable") ||
+        e.status === 503 ||
+        e.statusCode === 503;
+      const isRateLimit =
+        errorStr.includes("429") ||
+        errorStr.toLowerCase().includes("rate limit") ||
+        errorStr.toLowerCase().includes("quota") ||
+        e.status === 429 ||
+        e.statusCode === 429;
+
+      if ((isUnavailable || isRateLimit) && i < retries) {
+        const waitTime = delay * Math.pow(2, i);
+        console.warn(`[Stream Preview API] Transient error: "${errorStr}". Retrying in ${waitTime}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Failed to generate content after retries.");
+}
+
+// Helper to generate SVG Stream Preview frame & typography overlay with embedded Inter fonts
 function buildStreamPreviewSvg(metadata: CardMetadata, width = 1024, height = 1024): Buffer {
   const line1 = [metadata.cardName, metadata.cardNumber, metadata.setCode].filter(Boolean).join(" - ");
   const line2 = metadata.setName || "";
@@ -27,36 +60,79 @@ function buildStreamPreviewSvg(metadata: CardMetadata, width = 1024, height = 10
   const safeLine3 = escapeXml(line3);
 
   // Dynamic font sizing for long card names
-  let line1FontSize = 42;
-  if (safeLine1.length > 30) line1FontSize = 34;
-  if (safeLine1.length > 40) line1FontSize = 28;
+  let line1FontSize = 40;
+  if (safeLine1.length > 28) line1FontSize = 34;
+  if (safeLine1.length > 38) line1FontSize = 28;
+  if (safeLine1.length > 48) line1FontSize = 24;
 
-  let line2FontSize = 34;
+  let line2FontSize = 32;
   if (safeLine2.length > 25) line2FontSize = 28;
   if (safeLine2.length > 35) line2FontSize = 24;
 
   const svgContent = `
 <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <style>
+      @font-face {
+        font-family: 'InterStream';
+        src: url('data:font/truetype;charset=utf-8;base64,${INTER_BOLD_BASE64}') format('truetype');
+        font-weight: 800;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: 'InterStream';
+        src: url('data:font/truetype;charset=utf-8;base64,${INTER_MEDIUM_BASE64}') format('truetype');
+        font-weight: 500;
+        font-style: normal;
+      }
+      .badge-text {
+        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
+        font-size: 23px;
+        font-weight: 800;
+        fill: #ffffff;
+      }
+      .title-text {
+        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
+        font-size: ${line1FontSize}px;
+        font-weight: 800;
+        fill: #ffffff;
+        text-anchor: middle;
+      }
+      .set-text {
+        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
+        font-size: ${line2FontSize}px;
+        font-weight: 800;
+        fill: #ffffff;
+        text-anchor: middle;
+      }
+      .slogan-text {
+        font-family: 'InterStream', system-ui, -apple-system, sans-serif;
+        font-size: 22px;
+        font-weight: 500;
+        fill: #ffffff;
+        text-anchor: middle;
+      }
+    </style>
+
     <!-- Stream Preview Accent Glow Gradient -->
     <linearGradient id="lineGlow" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.9" />
-      <stop offset="50%" stop-color="#c084fc" stop-opacity="0.8" />
-      <stop offset="100%" stop-color="#f472b6" stop-opacity="0.9" />
+      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.95" />
+      <stop offset="50%" stop-color="#c084fc" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#f472b6" stop-opacity="0.95" />
     </linearGradient>
 
     <!-- Bottom Vignette for text contrast -->
     <linearGradient id="bottomVignette" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#000000" stop-opacity="0" />
-      <stop offset="25%" stop-color="#000000" stop-opacity="0.38" />
-      <stop offset="65%" stop-color="#000000" stop-opacity="0.82" />
-      <stop offset="100%" stop-color="#000000" stop-opacity="0.95" />
+      <stop offset="25%" stop-color="#000000" stop-opacity="0.45" />
+      <stop offset="65%" stop-color="#000000" stop-opacity="0.88" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.98" />
     </linearGradient>
 
     <!-- Top Vignette for STREAM PREVIEW badge -->
     <linearGradient id="topVignette" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0.65" />
-      <stop offset="60%" stop-color="#000000" stop-opacity="0.25" />
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.75" />
+      <stop offset="60%" stop-color="#000000" stop-opacity="0.30" />
       <stop offset="100%" stop-color="#000000" stop-opacity="0" />
     </linearGradient>
 
@@ -73,32 +149,32 @@ function buildStreamPreviewSvg(metadata: CardMetadata, width = 1024, height = 10
   <rect x="0" y="0" width="${width}" height="120" fill="url(#topVignette)" />
 
   <!-- Bottom Dark Vignette for Text Contrast -->
-  <rect x="0" y="680" width="${width}" height="344" fill="url(#bottomVignette)" />
+  <rect x="0" y="650" width="${width}" height="374" fill="url(#bottomVignette)" />
 
   <!-- Top Left Badge -->
-  <text x="42" y="55" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#ffffff" letter-spacing="1.2">STREAM PREVIEW</text>
+  <text x="42" y="54" class="badge-text">STREAM PREVIEW</text>
 
   <!-- Framing Neon Lines -->
   <!-- Top & Right framing path -->
-  <path d="M 42 68 L 944 68 Q 980 68 980 104 L 980 916 Q 980 950 944 950 L 780 950" fill="none" stroke="url(#lineGlow)" stroke-width="1.8" filter="url(#glow)" />
+  <path d="M 265 46 L 950 46 Q 982 46 982 78 L 982 916 Q 982 948 950 948 L 780 948" fill="none" stroke="url(#lineGlow)" stroke-width="2" filter="url(#glow)" />
   
   <!-- Left & Bottom framing path -->
-  <path d="M 42 68 L 42 916 Q 42 950 78 950 L 244 950" fill="none" stroke="url(#lineGlow)" stroke-width="1.8" filter="url(#glow)" />
+  <path d="M 42 78 L 42 916 Q 42 948 74 948 L 244 948" fill="none" stroke="url(#lineGlow)" stroke-width="2" filter="url(#glow)" />
 
   <!-- Outer side accent brackets -->
-  <path d="M 26 120 L 26 880 Q 26 915 52 915 L 70 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.2" opacity="0.55" />
-  <path d="M 998 120 L 998 880 Q 998 915 972 915 L 954 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.2" opacity="0.55" />
+  <path d="M 26 120 L 26 880 Q 26 915 52 915 L 70 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.4" opacity="0.55" />
+  <path d="M 998 120 L 998 880 Q 998 915 972 915 L 954 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.4" opacity="0.55" />
 
   <!-- Line 1: Card Name - Number - Set Code -->
-  <text x="512" y="868" font-family="Arial, Helvetica, sans-serif" font-size="${line1FontSize}" font-weight="800" fill="#ffffff" text-anchor="middle">${safeLine1}</text>
+  <text x="512" y="864" class="title-text">${safeLine1}</text>
 
   <!-- Line 2: Set Name -->
-  <text x="512" y="912" font-family="Arial, Helvetica, sans-serif" font-size="${line2FontSize}" font-weight="700" fill="#ffffff" text-anchor="middle">${safeLine2}</text>
+  <text x="512" y="908" class="set-text">${safeLine2}</text>
 
   <!-- Line 3: Bottom Slogan flanked with accent lines -->
-  <line x1="80" y1="948" x2="236" y2="948" stroke="url(#lineGlow)" stroke-width="1.5" />
-  <text x="512" y="954" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="500" fill="#ffffff" letter-spacing="1.2" text-anchor="middle">${safeLine3}</text>
-  <line x1="788" y1="948" x2="944" y2="948" stroke="url(#lineGlow)" stroke-width="1.5" />
+  <line x1="80" y1="948" x2="234" y2="948" stroke="url(#lineGlow)" stroke-width="1.6" />
+  <text x="512" y="954" class="slogan-text">${safeLine3}</text>
+  <line x1="790" y1="948" x2="944" y2="948" stroke="url(#lineGlow)" stroke-width="1.6" />
 </svg>`;
 
   return Buffer.from(svgContent);
@@ -139,7 +215,7 @@ async function compositeStreamPreviewLayers(params: {
   metadata: CardMetadata;
   cardScale?: number;
   shadowStyle?: "soft" | "intense" | "glow" | "none";
-  cardCenterYRatio?: number; // default ~0.47
+  cardCenterYRatio?: number; // default ~0.46
 }): Promise<Buffer> {
   const {
     backgroundBuffer,
@@ -147,7 +223,7 @@ async function compositeStreamPreviewLayers(params: {
     metadata,
     cardScale = 0.68,
     shadowStyle = "soft",
-    cardCenterYRatio = 0.47
+    cardCenterYRatio = 0.46
   } = params;
 
   const bgMetadata = await sharp(backgroundBuffer).metadata();
@@ -163,7 +239,7 @@ async function compositeStreamPreviewLayers(params: {
   let targetCardH = Math.round(bgHeight * clampedScale);
   let targetCardW = Math.round((rawCardW / rawCardH) * targetCardH);
 
-  const maxW = Math.round(bgWidth * 0.75);
+  const maxW = Math.round(bgWidth * 0.72);
   if (targetCardW > maxW) {
     targetCardW = maxW;
     targetCardH = Math.round((rawCardH / rawCardW) * targetCardW);
@@ -178,25 +254,25 @@ async function compositeStreamPreviewLayers(params: {
 
   // 1. Shadow Layer
   if (shadowStyle !== "none") {
-    const shadowPadding = Math.max(12, Math.min(40, Math.round(targetCardW * 0.08)));
+    const shadowPadding = Math.max(16, Math.min(48, Math.round(targetCardW * 0.09)));
     const shadowW = targetCardW + shadowPadding * 2;
     const shadowH = targetCardH + shadowPadding * 2;
     const shadowRadius = Math.round(targetCardW * 0.038);
 
-    let shadowAlpha = 0.65;
+    let shadowAlpha = 0.75;
     let shadowR = 0;
     let shadowG = 0;
     let shadowB = 0;
-    let blurSigma = Math.max(10, Math.min(26, Math.round(shadowPadding * 0.65)));
+    let blurSigma = Math.max(12, Math.min(28, Math.round(shadowPadding * 0.68)));
 
     if (shadowStyle === "intense") {
-      shadowAlpha = 0.85;
-      blurSigma = Math.max(12, Math.min(28, Math.round(shadowPadding * 0.75)));
+      shadowAlpha = 0.90;
+      blurSigma = Math.max(14, Math.min(30, Math.round(shadowPadding * 0.78)));
     } else if (shadowStyle === "glow") {
       shadowR = 210;
       shadowG = 90;
       shadowB = 240;
-      shadowAlpha = 0.75;
+      shadowAlpha = 0.80;
     }
 
     const shadowMask = Buffer.from(
@@ -361,13 +437,14 @@ export async function POST(request: Request) {
     const visionPrompt = `You are a high-precision Computer Vision model specialized in Trading Card Game (TCG) analysis (Pokémon, One Piece, Yu-Gi-Oh, Magic: The Gathering, Lorcana).
 Image dimensions: ${width}x${height} pixels.
 
-CRITICAL INSTRUCTIONS:
-1. "card": Locate the EXACT bounding box [ymin, xmin, ymax, xmax] (integers 0-1000) of the physical cardboard card itself. Exclude transparent sleeve overhangs, scanner glass, or background.
-2. "illustration": Locate the bounding box [ymin, xmin, ymax, xmax] (integers 0-1000) of the inner artwork illustration.
-3. "cardName": Extract the official English TCG name of this card/character (translate Japanese, Korean, Chinese names to their official English name e.g. 'モルペコ' -> 'Morpeko', 'リザードン' -> 'Charizard').
-4. "cardNumber": Locate the collector/card number printed at the bottom corner (e.g. '076/066', '151/165', 'OP05-119').
-5. "setCode": Extract the set registration code or symbol printed at the bottom corner (e.g. 'SV4K', 'SV2a', 'MEW', 'OP05', 'OBF', 'PAL', 'S12a').
-6. "setName": Identify the official English set name for this card and set code (e.g. 'Ancient Roar', 'Pokémon Card 151', 'Paradox Rift', 'Awakening of the New Era', 'Shiny Treasure ex').`;
+CRITICAL DETECTION INSTRUCTIONS:
+1. "card": Locate the EXACT bounding box [ymin, xmin, ymax, xmax] (integers 0-1000) of the physical cardboard trading card.
+   IMPORTANT: The card may be enclosed inside a clear plastic sleeve, penny sleeve, top loader, magnetic one-touch case, or slab. You MUST find the bounding box of the ACTUAL printed cardboard card itself, excluding the clear plastic margins, borders, or tabs of the holder!
+2. "illustration": Locate the bounding box [ymin, xmin, ymax, xmax] (integers 0-1000) of the inner artwork illustration inside the card frame.
+3. "cardName": Extract the official English TCG name of this card/character (translate Japanese, Korean, Chinese names to their official English name e.g. 'ワンパチ' -> 'Yamper', 'モルペコ' -> 'Morpeko', 'リザードン' -> 'Charizard').
+4. "cardNumber": Locate the collector/card number printed at the bottom corner (e.g. '086/080', '076/066', '151/165', 'OP05-119').
+5. "setCode": Extract the set registration code or symbol printed at the bottom corner (e.g. 'SV9', 'SV4K', 'SV2a', 'MEW', 'OP05', 'OBF', 'PAL', 'S12a').
+6. "setName": Identify the official English set name for this card and set code (e.g. 'Battle Partners', 'Ancient Roar', 'Pokémon Card 151', 'Paradox Rift', 'Awakening of the New Era').`;
 
     for (const model of models) {
       try {
@@ -393,10 +470,28 @@ CRITICAL INSTRUCTIONS:
                   items: { type: "integer" },
                   description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] (0-1000)."
                 },
+                card: {
+                  type: "object",
+                  properties: {
+                    x1: { type: "integer" },
+                    y1: { type: "integer" },
+                    x2: { type: "integer" },
+                    y2: { type: "integer" }
+                  }
+                },
                 illustration_box: {
                   type: "array",
                   items: { type: "integer" },
                   description: "Bounding box of the inner illustration as [ymin, xmin, ymax, xmax] (0-1000)."
+                },
+                illustration: {
+                  type: "object",
+                  properties: {
+                    x1: { type: "integer" },
+                    y1: { type: "integer" },
+                    x2: { type: "integer" },
+                    y2: { type: "integer" }
+                  }
                 },
                 cardName: { type: "string" },
                 cardNumber: { type: "string" },
@@ -441,6 +536,18 @@ CRITICAL INSTRUCTIONS:
             x2: Math.round((xmax / 1000) * width),
             y2: Math.round((ymax / 1000) * height)
           };
+        } else if (parsed.card) {
+          let rx1 = Number(parsed.card.x1);
+          let ry1 = Number(parsed.card.y1);
+          let rx2 = Number(parsed.card.x2);
+          let ry2 = Number(parsed.card.y2);
+          if (rx2 <= 1000 && ry2 <= 1000) {
+            rx1 = Math.round((rx1 / 1000) * width);
+            ry1 = Math.round((ry1 / 1000) * height);
+            rx2 = Math.round((rx2 / 1000) * width);
+            ry2 = Math.round((ry2 / 1000) * height);
+          }
+          detectedCardCoords = { x1: rx1, y1: ry1, x2: rx2, y2: ry2 };
         }
 
         if (parsed.illustration_box && Array.isArray(parsed.illustration_box) && parsed.illustration_box.length === 4) {
@@ -451,6 +558,18 @@ CRITICAL INSTRUCTIONS:
             x2: Math.round((xmax / 1000) * width),
             y2: Math.round((ymax / 1000) * height)
           };
+        } else if (parsed.illustration) {
+          let ix1 = Number(parsed.illustration.x1);
+          let iy1 = Number(parsed.illustration.y1);
+          let ix2 = Number(parsed.illustration.x2);
+          let iy2 = Number(parsed.illustration.y2);
+          if (ix2 <= 1000 && iy2 <= 1000) {
+            ix1 = Math.round((ix1 / 1000) * width);
+            iy1 = Math.round((iy1 / 1000) * height);
+            ix2 = Math.round((ix2 / 1000) * width);
+            iy2 = Math.round((iy2 / 1000) * height);
+          }
+          detectedIllustrationCoords = { x1: ix1, y1: iy1, x2: ix2, y2: iy2 };
         }
       } catch (e) {
         console.warn("[Stream Preview API] JSON parse failed:", e);
@@ -463,20 +582,20 @@ CRITICAL INSTRUCTIONS:
       detectedCardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
     }
 
-    // Normalize aspect ratio if needed
-    const cardW = detectedCardCoords.x2 - detectedCardCoords.x1;
-    const cardH = detectedCardCoords.y2 - detectedCardCoords.y1;
+    // Aspect ratio normalization (Standard TCG card ratio ~ 0.715)
     let cx1 = detectedCardCoords.x1;
     let cy1 = detectedCardCoords.y1;
     let cx2 = detectedCardCoords.x2;
     let cy2 = detectedCardCoords.y2;
+    const cardW = cx2 - cx1;
+    const cardH = cy2 - cy1;
 
     if (cardW > 0 && cardH > 0) {
       const ratio = cardW / cardH;
       const centerX = (cx1 + cx2) / 2;
       const centerY = (cy1 + cy2) / 2;
       if (ratio < 0.60 || ratio > 0.85) {
-        const TARGET_RATIO = 0.714;
+        const TARGET_RATIO = 0.715;
         if (ratio > TARGET_RATIO) {
           const newW = cardH * TARGET_RATIO;
           cx1 = Math.round(centerX - newW / 2);
@@ -504,7 +623,7 @@ CRITICAL INSTRUCTIONS:
       .png()
       .toBuffer();
 
-    const cornerRadius = Math.max(2, Math.round(finalCardW * 0.038));
+    const cornerRadius = Math.max(4, Math.round(finalCardW * 0.038));
     const roundedMask = Buffer.from(
       `<svg width="${finalCardW}" height="${finalCardH}"><rect x="0" y="0" width="${finalCardW}" height="${finalCardH}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
     );
@@ -560,12 +679,12 @@ CRITICAL INSTRUCTIONS:
 
       try {
         // Style description prompt
-        const describePrompt = `Analyze this trading card artwork illustration. Describe the environmental scenery, backdrop elements, aesthetic art style, color palette, brushstrokes, and lighting. You MUST ignore all characters, text, numbers, and card borders. Return only the descriptive scenery prompt for background generation.`;
+        const describePrompt = `Analyze this trading card illustration. Write a detailed prompt to generate a matching background scenery/backdrop. Your description MUST focus ONLY on the environment, scenery, backdrop elements, artistic style (e.g. anime sketch, watercolor, oil painting), color palette, lighting, brushstrokes, and general aesthetic. You MUST completely ignore and exclude any characters, figures, humans, text, or card borders in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery.`;
 
         let description = "";
         for (const model of models) {
           try {
-            const descRes = await ai.models.generateContent({
+            const descRes = await generateContentWithRetry(ai, {
               model,
               contents: [
                 {
@@ -590,9 +709,9 @@ CRITICAL INSTRUCTIONS:
           .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy motif")
           .trim();
 
-        const outpaintPrompt = `A beautiful, high-quality scenery backdrop: ${sanitizedDesc}. High quality, detailed, continuous landscape in the same anime aesthetic and art style. Exclude any characters, card borders, or text.`;
+        const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDesc}. High quality, detailed, continuous landscape in the same anime aesthetic and art style. Exclude any characters, figures, card borders, or text.`;
 
-        // Generate with Imagen 3
+        // 1. Primary: Generate with Imagen 3
         try {
           console.log(`[Stream Preview API] Generating 1:1 backdrop with Imagen 3...`);
           const imagenRes = await ai.models.generateImages({
@@ -612,12 +731,20 @@ CRITICAL INSTRUCTIONS:
           console.warn("[Stream Preview API] Imagen 3 failed, attempting Gemini 2.0 Flash Exp:", imgErr?.message || imgErr);
         }
 
-        // Generate with Gemini 2.0 Flash Exp fallback
+        // 2. Secondary: Generate with Gemini 2.0 Flash Exp fallback
         if (!backgroundBuffer) {
           try {
-            const geminiImgRes = await ai.models.generateContent({
+            const geminiImgRes = await generateContentWithRetry(ai, {
               model: "gemini-2.0-flash-exp",
-              contents: [outpaintPrompt],
+              contents: [
+                {
+                  inlineData: {
+                    data: illustrationBase64,
+                    mimeType: "image/jpeg"
+                  }
+                },
+                outpaintPrompt
+              ],
               config: {
                 responseModalities: ["IMAGE"],
                 imageConfig: { aspectRatio: "1:1" }
@@ -638,7 +765,7 @@ CRITICAL INSTRUCTIONS:
         console.warn("[Stream Preview API] AI outpainting failed:", outpaintErr);
       }
 
-      // Bulletproof ambient blur fallback
+      // 3. Bulletproof ambient blur fallback
       if (!backgroundBuffer) {
         console.log("[Stream Preview API] Using soft ambient Gaussian blur fallback backdrop.");
         usedFallback = true;

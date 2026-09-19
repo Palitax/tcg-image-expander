@@ -128,6 +128,52 @@ export const TCG_SETS: Record<string, TcgSetInfo> = {
   "LOR6": { code: "Set 6", name: "Azurite Sea", series: "Disney Lorcana", language: "All" }
 };
 
+// Common Japanese Pokémon Katakana to English Name Map
+export const JAPANESE_POKEMON_MAP: Record<string, string> = {
+  "ワンパチ": "Yamper",
+  "モルペコ": "Morpeko",
+  "ピカチュウ": "Pikachu",
+  "リザードン": "Charizard",
+  "イーブイ": "Eevee",
+  "ミュウ": "Mew",
+  "ミュウツー": "Mewtwo",
+  "ゲッコウガ": "Greninja",
+  "ルギア": "Lugia",
+  "レックウザ": "Rayquaza",
+  "ゲンガー": "Gengar",
+  "ギラティナ": "Giratina",
+  "アルセウス": "Arceus",
+  "ミミッキュ": "Mimikyu",
+  "サーナイト": "Gardevoir",
+  "ブラッキー": "Umbreon",
+  "ニンフィア": "Sylveon",
+  "エーフィ": "Espeon",
+  "グレイシア": "Glaceon",
+  "リーフィア": "Leafeon",
+  "サンダース": "Jolteon",
+  "シャワーズ": "Vaporeon",
+  "ブースター": "Flareon",
+  "コライドン": "Koraidon",
+  "ミライドン": "Miraidon",
+  "オーガポン": "Ogerpon",
+  "テラパゴス": "Terapagos",
+  "タケルライコ": "Raging Bolt",
+  "ウガツホムラ": "Gouging Fire",
+  "ウネルミナモ": "Walking Wake",
+  "テツノカシラ": "Iron Crown",
+  "テツノイサハ": "Iron Leaves",
+  "テツノイワオ": "Iron Boulder",
+  "パオジアン": "Chien-Pao",
+  "ディンルー": "Ting-Lu",
+  "チオンジェン": "Wo-Chien",
+  "イーユイ": "Chi-Yu",
+  "パルキア": "Palkia",
+  "ディアルガ": "Dialga",
+  "カイリュー": "Dragonite",
+  "カメックス": "Blastoise",
+  "フシギバナ": "Venusaur"
+};
+
 export interface CardMetadata {
   cardName: string;
   cardNumber: string;
@@ -158,6 +204,19 @@ export function enrichCardMetadata(params: {
   let cardNumber = (params.cardNumber || "").trim();
   let setCode = (params.setCode || "").trim();
   let setName = (params.setName || "").trim();
+
+  // If cardName matches Japanese map, translate it
+  if (JAPANESE_POKEMON_MAP[cardName]) {
+    cardName = JAPANESE_POKEMON_MAP[cardName];
+  } else {
+    // Check if cardName starts with Japanese katakana
+    for (const [jp, en] of Object.entries(JAPANESE_POKEMON_MAP)) {
+      if (cardName.includes(jp)) {
+        cardName = cardName.replace(jp, en);
+        break;
+      }
+    }
+  }
 
   // Clean cardNumber if it includes set code prefix (e.g. OP05-119 or 076/066 AR)
   if (cardNumber.includes("-") && !setCode) {
