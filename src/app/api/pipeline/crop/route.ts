@@ -181,19 +181,48 @@ export async function POST(request: Request) {
       }
     }
 
-    const imageRatio = width / height;
-    const isDirectCardImage = imageRatio >= 0.58 && imageRatio <= 0.84;
-
-    if (skipCardCrop || isCleanCardImage || isDirectCardImage) {
-      console.log(`[Crop API] Using full image dimensions for card coordinates (skipCardCrop=${skipCardCrop}, isDirectCard=${isDirectCardImage}).`);
+    if (skipCardCrop) {
+      console.log(`[Crop API] User explicitly requested skipCardCrop. Using full image dimensions.`);
       cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
-      if (!illustrationCoords) {
-        illustrationCoords = {
-          x1: Math.round(width * 0.12),
-          y1: Math.round(height * 0.14),
-          x2: Math.round(width * 0.88),
-          y2: Math.round(height * 0.58)
+    } else if (cardCoords) {
+      const rawW = cardCoords.x2 - cardCoords.x1;
+      const rawH = cardCoords.y2 - cardCoords.y1;
+
+      const isAlreadyEdgeScan =
+        rawW >= width * 0.96 &&
+        rawH >= height * 0.96 &&
+        cardCoords.x1 <= width * 0.025 &&
+        cardCoords.y1 <= height * 0.025;
+
+      if (isAlreadyEdgeScan || isCleanCardImage) {
+        console.log(`[Crop API] Edge-to-edge card scan detected. Preserving full canvas.`);
+        cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
+      } else {
+        // Physical card aspect ratio verification (1.397 - 1.458)
+        let adjX1 = cardCoords.x1;
+        let adjY1 = cardCoords.y1;
+        let adjX2 = cardCoords.x2;
+        let adjY2 = cardCoords.y2;
+
+        if (rawH < rawW * 1.38) {
+          const expectedH = Math.round(rawW * 1.415);
+          adjY2 = Math.min(height, adjY1 + expectedH);
+          if (adjY2 - adjY1 < expectedH) {
+            adjY1 = Math.max(0, adjY2 - expectedH);
+          }
+          console.log(`[Crop API] Corrected card height from ${rawH} to ${adjY2 - adjY1} (ratio 1.415) to prevent bottom text clipping.`);
+        }
+
+        const padX = Math.round(rawW * 0.008);
+        const padY = Math.round((adjY2 - adjY1) * 0.008);
+
+        cardCoords = {
+          x1: Math.max(0, adjX1 - padX),
+          y1: Math.max(0, adjY1 - padY),
+          x2: Math.min(width, adjX2 + padX),
+          y2: Math.min(height, adjY2 + padY)
         };
+        console.log(`[Crop API] Clean card crop without toploader:`, cardCoords);
       }
     }
 
@@ -247,7 +276,7 @@ export async function POST(request: Request) {
     if (hasSampleWatermark) {
       console.log("[Crop API] Watermark 'SAMPLE' detected. Attempting to remove it...");
       try {
-        const imageModels = ["imagen-3.0-generate-002", "gemini-3.6-flash", "gemini-2.5-flash"];
+        const imageModels = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
         let cleanedBase64 = "";
 
         for (const modelName of imageModels) {
@@ -264,7 +293,7 @@ export async function POST(request: Request) {
                 }
               ],
               generationConfig: {
-                responseModalities: ["IMAGE"]
+                responseModalities: ["TEXT", "IMAGE"]
               }
             };
 
@@ -302,30 +331,23 @@ export async function POST(request: Request) {
       }
     }
 
-    // Only normalize aspect ratio if severely distorted (outside 0.60 - 0.85) to preserve full borders
-    if (!skipCardCrop && !isDirectCardImage && !isCleanCardImage) {
+    // If coordinates are severely distorted (outside 0.55 - 0.88), gently normalize
+    if (!skipCardCrop && !isCleanCardImage && cardCoords) {
       const cardW = cardCoords.x2 - cardCoords.x1;
       const cardH = cardCoords.y2 - cardCoords.y1;
-      if (cardW > 0 && cardH > 0) {
-        if (cardW >= width * 0.88 && cardH >= height * 0.88) {
-          cardCoords.x1 = 0;
-          cardCoords.y1 = 0;
-          cardCoords.x2 = width;
-          cardCoords.y2 = height;
-        } else {
-          const currentRatio = cardW / cardH;
-          if (currentRatio > 0.82) {
-            const expectedH = Math.round(cardW / 0.714);
-            cardCoords.y2 = Math.min(height, cardCoords.y1 + expectedH);
-            if (cardCoords.y1 + expectedH > height) {
-              cardCoords.y1 = Math.max(0, height - expectedH);
-            }
-          } else if (currentRatio < 0.58) {
-            const expectedW = Math.round(cardH * 0.714);
-            const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
-            cardCoords.x1 = Math.max(0, Math.round(centerX - expectedW / 2));
-            cardCoords.x2 = Math.min(width, Math.round(centerX + expectedW / 2));
+      if (cardW > 0 && cardH > 0 && (cardW < width * 0.95 || cardH < height * 0.95)) {
+        const currentRatio = cardW / cardH;
+        if (currentRatio > 0.82) {
+          const expectedH = Math.round(cardW * 1.415);
+          cardCoords.y2 = Math.min(height, cardCoords.y1 + expectedH);
+          if (cardCoords.y1 + expectedH > height) {
+            cardCoords.y1 = Math.max(0, height - expectedH);
           }
+        } else if (currentRatio < 0.58) {
+          const expectedW = Math.round(cardH * 0.714);
+          const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+          cardCoords.x1 = Math.max(0, Math.round(centerX - expectedW / 2));
+          cardCoords.x2 = Math.min(width, Math.round(centerX + expectedW / 2));
         }
       }
     }

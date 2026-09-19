@@ -195,7 +195,7 @@ export async function POST(request: Request) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(5500)
+              signal: AbortSignal.timeout(8000)
             });
 
             if (res.ok) {
@@ -207,7 +207,8 @@ export async function POST(request: Request) {
                 break;
               }
             } else {
-              console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}. Falling back to Gemini image generation...`);
+              const errText = await res.text();
+              console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}:`, errText.slice(0, 160));
             }
           } catch (restErr: any) {
             console.warn(`[Outpaint API] REST Imagen failed:`, restErr?.message || restErr);
@@ -215,11 +216,36 @@ export async function POST(request: Request) {
           }
         }
 
-        // 2. Secondary: Gemini Multimodal Image Generation
-        // (WITHOUT aspectRatio in imageConfig to avoid 400 INVALID_ARGUMENT; Sharp center-crops to target dimensions)
+        // 2. Secondary: Imagen 3 via @google/genai SDK generateImages
         if (!generatedBase64) {
-          const geminiImgModels = ["gemini-2.5-flash", "gemini-3.6-flash"];
-          for (const imgModel of geminiImgModels) {
+          try {
+            console.log(`[Outpaint API] Attempting Imagen 3 SDK generateImages for ratio ${targetRatio}...`);
+            const validRatio = targetRatio === "dual" || targetRatio === "both" ? "16:9" : targetRatio;
+            const imagenRes = await ai.models.generateImages({
+              model: "imagen-3.0-generate-002",
+              prompt: outpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: validRatio as any,
+                outputMimeType: "image/jpeg"
+              }
+            });
+            const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+            if (imgBytes) {
+              console.log("[Outpaint API] Imagen 3 SDK generated image successfully!");
+              generatedBase64 = imgBytes;
+            }
+          } catch (sdkErr: any) {
+            console.warn("[Outpaint API] Imagen 3 SDK failed:", sdkErr?.message || sdkErr);
+            lastImageError = sdkErr;
+          }
+        }
+
+        // 3. Tertiary: Gemini Dedicated Image Generation Models (gemini-2.5-flash-image, gemini-3.1-flash-image-preview)
+        // (Note: Models require responseModalities: ["TEXT", "IMAGE"])
+        if (!generatedBase64) {
+          const dedicatedImgModels = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
+          for (const imgModel of dedicatedImgModels) {
             if (generatedBase64) break;
             try {
               console.log(`[Outpaint API] Attempting Gemini image generation with ${imgModel} for target ratio ${targetRatio}...`);
@@ -252,7 +278,7 @@ export async function POST(request: Request) {
               const payload = {
                 contents: contentsArray,
                 generationConfig: {
-                  responseModalities: ["IMAGE"]
+                  responseModalities: ["TEXT", "IMAGE"]
                 }
               };
 

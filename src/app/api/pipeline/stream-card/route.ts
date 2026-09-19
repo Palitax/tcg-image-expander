@@ -379,16 +379,51 @@ CRITICAL INSTRUCTIONS:
       console.warn("[Stream Card API] Gemini vision failed:", aiErr?.message || aiErr);
     }
 
-    // Direct card scan check (aspect ratio ~0.58 to 0.84)
-    const imageRatio = width / height;
-    const isAlreadyCardImage = imageRatio >= 0.58 && imageRatio <= 0.84;
+    if (cardCoords) {
+      const rawW = cardCoords.x2 - cardCoords.x1;
+      const rawH = cardCoords.y2 - cardCoords.y1;
 
-    if (isAlreadyCardImage) {
-      cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
-    } else if (!cardCoords || (cardCoords.x2 - cardCoords.x1) < 50 || (cardCoords.y2 - cardCoords.y1) < 50) {
-      console.log("[Stream Card API] AI coordinates missing or invalid. Triggering Computer Vision fallback...");
-      usedFallback = true;
-      cardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
+      const isAlreadyEdgeScan =
+        rawW >= width * 0.96 &&
+        rawH >= height * 0.96 &&
+        cardCoords.x1 <= width * 0.025 &&
+        cardCoords.y1 <= height * 0.025;
+
+      if (isAlreadyEdgeScan) {
+        cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
+      } else {
+        // Physical card ratio correction (1.397 - 1.458)
+        let adjX1 = cardCoords.x1;
+        let adjY1 = cardCoords.y1;
+        let adjX2 = cardCoords.x2;
+        let adjY2 = cardCoords.y2;
+
+        if (rawH < rawW * 1.38) {
+          const expectedH = Math.round(rawW * 1.415);
+          adjY2 = Math.min(height, adjY1 + expectedH);
+          if (adjY2 - adjY1 < expectedH) {
+            adjY1 = Math.max(0, adjY2 - expectedH);
+          }
+        }
+
+        const padX = Math.round(rawW * 0.008);
+        const padY = Math.round((adjY2 - adjY1) * 0.008);
+
+        cardCoords = {
+          x1: Math.max(0, adjX1 - padX),
+          y1: Math.max(0, adjY1 - padY),
+          x2: Math.min(width, adjX2 + padX),
+          y2: Math.min(height, adjY2 + padY)
+        };
+      }
+    } else {
+      const imageRatio = width / height;
+      if (imageRatio >= 0.65 && imageRatio <= 0.75) {
+        cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
+      } else {
+        usedFallback = true;
+        cardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
+      }
     }
 
     // Sanitize coordinates and prevent any NaN or infinite values
@@ -396,32 +431,6 @@ CRITICAL INSTRUCTIONS:
     let safeY1 = Number.isFinite(cardCoords.y1) ? cardCoords.y1 : 0;
     let safeX2 = Number.isFinite(cardCoords.x2) ? cardCoords.x2 : width;
     let safeY2 = Number.isFinite(cardCoords.y2) ? cardCoords.y2 : height;
-
-    const detectedW = Math.max(10, safeX2 - safeX1);
-    const detectedH = Math.max(10, safeY2 - safeY1);
-
-    if (!isAlreadyCardImage && detectedW > 0 && detectedH > 0) {
-      if (detectedW >= width * 0.88 && detectedH >= height * 0.88) {
-        safeX1 = 0;
-        safeY1 = 0;
-        safeX2 = width;
-        safeY2 = height;
-      } else {
-        const detectedRatio = detectedW / detectedH;
-        if (detectedRatio > 0.82) {
-          const expectedH = Math.round(detectedW / 0.714);
-          safeY2 = Math.min(height, safeY1 + expectedH);
-          if (safeY1 + expectedH > height) {
-            safeY1 = Math.max(0, height - expectedH);
-          }
-        } else if (detectedRatio < 0.58) {
-          const expectedW = Math.round(detectedH * 0.714);
-          const centerX = (safeX1 + safeX2) / 2;
-          safeX1 = Math.max(0, Math.round(centerX - expectedW / 2));
-          safeX2 = Math.min(width, Math.round(centerX + expectedW / 2));
-        }
-      }
-    }
 
     let adjX1 = safeX1;
     let adjY1 = safeY1;
