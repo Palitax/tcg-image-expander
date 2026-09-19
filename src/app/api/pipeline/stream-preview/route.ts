@@ -294,17 +294,18 @@ export async function POST(request: Request) {
     const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
     let layoutText = "";
 
+    // Robust AI Vision Detection using Google Gemini REST API & SDK
     const visionPrompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please analyze this Trading Card Game (TCG) image:
-1. "card": Bounding box coordinates [ymin, xmin, ymax, xmax] (integers 0-1000) of the physical cardboard trading card.
+1. "box_2d": Bounding box coordinates [ymin, xmin, ymax, xmax] as 4 integers normalized from 0 to 1000 (0=top/left, 1000=bottom/right) of the physical cardboard trading card.
    CRITICAL RULES:
-   - Identify the actual card frame / cardboard rectangle.
-   - Ignore and exclude any external semi-rigid card savers, top loaders, magnetic one-touch cases, penny sleeves, grading slabs, scanner glass, or background tables.
-   - The bounding box must tightly wrap the physical cardboard rectangle of the card itself!
-2. "illustration": Bounding box coordinates [ymin, xmin, ymax, xmax] (integers 0-1000) of the inner artwork illustration inside the card frame.
+   - Identify the actual cardboard card frame / rectangle.
+   - Exclude and ignore any external semi-rigid card savers, top loaders, magnetic cases, penny sleeves, grading slabs, scanner glass, or background tables.
+   - The bounding box must wrap the entire physical printed trading card from top border to bottom border!
+2. "illustration_box": Bounding box coordinates [ymin, xmin, ymax, xmax] as 4 integers normalized from 0 to 1000 of the inner artwork illustration inside the card frame.
 3. "cardName": Extract the official English TCG name of this card/character (translate Japanese e.g. 'デンリュウ' -> 'Ampharos', 'ワンパチ' -> 'Yamper', 'モルペコ' -> 'Morpeko', 'リザードン' -> 'Charizard').
 4. "cardNumber": Locate the collector/card number printed at the bottom corner (e.g. '088/083', '086/080', '076/066', '151/165').
-5. "setCode": Extract the set registration code or symbol printed at the bottom corner (e.g. 'SV8', 'SV9', 'SV4K', 'SV2a', 'OP05', 'OBF', 'PAL', 'S12a').
-6. "setName": Identify the official English set name for this card and set code (e.g. 'Supercharged Breaker', 'Battle Partners', 'Ancient Roar', 'Pokémon Card 151').`;
+5. "setCode": Extract the set registration code or symbol printed at the bottom corner (e.g. 'SV8', 'SV9', 'SV4K', 'SV4a', 'SV2a', 'OP05', 'OBF', 'PAL', 'S12a').
+6. "setName": Identify the official English set name for this card and set code (e.g. 'Supercharged Breaker', 'Battle Partners', 'Ancient Roar', 'Paldean Fates', 'Pokémon Card 151').`;
 
     // Try REST fetch first for maximum reliability across serverless environments
     for (const model of models) {
@@ -330,28 +331,10 @@ export async function POST(request: Request) {
                   items: { type: "INTEGER" },
                   description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] integers 0-1000."
                 },
-                card: {
-                  type: "OBJECT",
-                  properties: {
-                    x1: { type: "INTEGER" },
-                    y1: { type: "INTEGER" },
-                    x2: { type: "INTEGER" },
-                    y2: { type: "INTEGER" }
-                  }
-                },
                 illustration_box: {
                   type: "ARRAY",
                   items: { type: "INTEGER" },
                   description: "Bounding box of the inner illustration as [ymin, xmin, ymax, xmax] integers 0-1000."
-                },
-                illustration: {
-                  type: "OBJECT",
-                  properties: {
-                    x1: { type: "INTEGER" },
-                    y1: { type: "INTEGER" },
-                    x2: { type: "INTEGER" },
-                    y2: { type: "INTEGER" }
-                  }
                 },
                 cardName: { type: "STRING" },
                 cardNumber: { type: "STRING" },
@@ -436,18 +419,6 @@ export async function POST(request: Request) {
             x2: Math.round((xmax / 1000) * width),
             y2: Math.round((ymax / 1000) * height)
           };
-        } else if (parsed.card) {
-          let rx1 = Number(parsed.card.x1);
-          let ry1 = Number(parsed.card.y1);
-          let rx2 = Number(parsed.card.x2);
-          let ry2 = Number(parsed.card.y2);
-          if (rx2 <= 1000 && ry2 <= 1000) {
-            rx1 = Math.round((rx1 / 1000) * width);
-            ry1 = Math.round((ry1 / 1000) * height);
-            rx2 = Math.round((rx2 / 1000) * width);
-            ry2 = Math.round((ry2 / 1000) * height);
-          }
-          detectedCardCoords = { x1: rx1, y1: ry1, x2: rx2, y2: ry2 };
         }
 
         if (parsed.illustration_box && Array.isArray(parsed.illustration_box) && parsed.illustration_box.length === 4) {
@@ -458,45 +429,53 @@ export async function POST(request: Request) {
             x2: Math.round((xmax / 1000) * width),
             y2: Math.round((ymax / 1000) * height)
           };
-        } else if (parsed.illustration) {
-          let ix1 = Number(parsed.illustration.x1);
-          let iy1 = Number(parsed.illustration.y1);
-          let ix2 = Number(parsed.illustration.x2);
-          let iy2 = Number(parsed.illustration.y2);
-          if (ix2 <= 1000 && iy2 <= 1000) {
-            ix1 = Math.round((ix1 / 1000) * width);
-            iy1 = Math.round((iy1 / 1000) * height);
-            ix2 = Math.round((ix2 / 1000) * width);
-            iy2 = Math.round((iy2 / 1000) * height);
-          }
-          detectedIllustrationCoords = { x1: ix1, y1: iy1, x2: ix2, y2: iy2 };
         }
       } catch (e) {
         console.warn("[Stream Preview API] JSON parse failed:", e);
       }
     }
 
-    // Fallback detection if AI coords missing
-    if (!detectedCardCoords || detectedCardCoords.x2 - detectedCardCoords.x1 < 50) {
-      usedFallback = true;
-      detectedCardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
-    }
+    // Robust Card Bounding Box Extraction:
+    // If the uploaded image is already a clean card scan (aspect ratio ~0.58 to 0.84), use the entire image intact!
+    const imageRatio = width / height;
+    const isAlreadyCardImage = imageRatio >= 0.58 && imageRatio <= 0.84;
 
-    // Safe coordinate determination - NEVER truncate card borders
-    let cx1 = detectedCardCoords.x1;
-    let cy1 = detectedCardCoords.y1;
-    let cx2 = detectedCardCoords.x2;
-    let cy2 = detectedCardCoords.y2;
+    let cx1 = 0;
+    let cy1 = 0;
+    let cx2 = width;
+    let cy2 = height;
 
-    const detectedW = cx2 - cx1;
-    const detectedH = cy2 - cy1;
+    if (!isAlreadyCardImage && detectedCardCoords) {
+      cx1 = detectedCardCoords.x1;
+      cy1 = detectedCardCoords.y1;
+      cx2 = detectedCardCoords.x2;
+      cy2 = detectedCardCoords.y2;
 
-    // If the image is already mostly the card (>= 90% coverage), use the full image to avoid cutting card edges
-    if (detectedW >= width * 0.90 && detectedH >= height * 0.90) {
-      cx1 = 0;
-      cy1 = 0;
-      cx2 = width;
-      cy2 = height;
+      const detectedW = cx2 - cx1;
+      const detectedH = cy2 - cy1;
+
+      // If detected box takes up nearly the full image, don't crop
+      if (detectedW >= width * 0.88 && detectedH >= height * 0.88) {
+        cx1 = 0;
+        cy1 = 0;
+        cx2 = width;
+        cy2 = height;
+      } else if (detectedW > 0 && detectedH > 0) {
+        const detectedRatio = detectedW / detectedH;
+        // If detected box is suspiciously square or horizontal (Gemini only detected top illustration), expand vertically
+        if (detectedRatio > 0.82) {
+          const expectedH = Math.round(detectedW / 0.714);
+          cy2 = Math.min(height, cy1 + expectedH);
+          if (cy1 + expectedH > height) {
+            cy1 = Math.max(0, height - expectedH);
+          }
+        } else if (detectedRatio < 0.58) {
+          const expectedW = Math.round(detectedH * 0.714);
+          const centerX = (cx1 + cx2) / 2;
+          cx1 = Math.max(0, Math.round(centerX - expectedW / 2));
+          cx2 = Math.min(width, Math.round(centerX + expectedW / 2));
+        }
+      }
     }
 
     // Strict clamping to image bounds
@@ -508,7 +487,7 @@ export async function POST(request: Request) {
     const finalCardW = cx2 - cx1;
     const finalCardH = cy2 - cy1;
 
-    // STEP 2: Extract Card Cutout with rounded corners
+    // STEP 2: Extract Full Card Cutout with rounded corners
     const extractedCard = await sharp(originalCardBuffer)
       .extract({ left: cx1, top: cy1, width: finalCardW, height: finalCardH })
       .png()
@@ -603,23 +582,28 @@ export async function POST(request: Request) {
         const outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDesc}. High quality, detailed, continuous landscape in the same anime aesthetic and art style. Exclude any characters, figures, card borders, or text.`;
 
         // 1. Primary: Generate with Imagen 3
-        try {
-          console.log(`[Stream Preview API] Generating 1:1 backdrop with Imagen 3...`);
-          const imagenRes = await ai.models.generateImages({
-            model: "imagen-3.0-generate-002",
-            prompt: outpaintPrompt,
-            config: {
-              numberOfImages: 1,
-              aspectRatio: "1:1",
-              outputMimeType: "image/jpeg"
+        const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
+        for (const imagenModel of imagenModels) {
+          try {
+            console.log(`[Stream Preview API] Generating 1:1 backdrop with ${imagenModel}...`);
+            const imagenRes = await ai.models.generateImages({
+              model: imagenModel,
+              prompt: outpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: "1:1",
+                outputMimeType: "image/jpeg"
+              }
+            });
+            const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+            if (imgBytes) {
+              backgroundBuffer = Buffer.from(imgBytes, "base64");
+              console.log(`[Stream Preview API] ${imagenModel} generated backdrop successfully.`);
+              break;
             }
-          });
-          const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-          if (imgBytes) {
-            backgroundBuffer = Buffer.from(imgBytes, "base64");
+          } catch (imgErr: any) {
+            console.warn(`[Stream Preview API] ${imagenModel} failed:`, imgErr?.message || imgErr);
           }
-        } catch (imgErr: any) {
-          console.warn("[Stream Preview API] Imagen 3 failed, attempting Gemini 2.0 Flash Exp:", imgErr?.message || imgErr);
         }
 
         // 2. Secondary: Generate with Gemini 3.6 / 2.5 Flash fallback

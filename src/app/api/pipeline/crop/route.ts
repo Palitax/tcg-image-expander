@@ -70,13 +70,12 @@ export async function POST(request: Request) {
     let layoutText = "";
 
     const prompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
-1. "card": Bounding box coordinates (x1, y1, x2, y2) of the physical trading card itself.
+1. "box_2d": Bounding box coordinates [ymin, xmin, ymax, xmax] as 4 integers normalized from 0 to 1000 (0=top/left, 1000=bottom/right) of the physical trading card itself.
    Rules for locating the card bounds:
    - Identify the actual card frame or borders (which contain name text, rarity codes, cost symbols, copyright).
    - Ignore any external mount boards, white sheets/margins, transparent penny sleeves, toploaders, scanner bed glass, or background scenery.
    - The bounding box must tightly wrap the physical cardboard of the card.
-   - For full-art, borderless, or extended-art cards: the artwork might overflow beyond the card borders. Focus on the core card rectangle itself.
-2. "illustration": Bounding box coordinates (x1, y1, x2, y2) of the clean inner illustration/artwork area inside the card.
+2. "illustration_box": Bounding box coordinates [ymin, xmin, ymax, xmax] as 4 integers normalized from 0 to 1000 of the clean inner illustration/artwork area inside the card.
 3. "hasSampleWatermark": Set to true if the card has a "SAMPLE" text watermark overlaid on it, otherwise false.
 4. "isCleanCardImage": Set to true if the uploaded image contains ONLY the physical trading card itself, with NO outer backing or background.
 5. "cardName": The text title/name of the card (detecting and translating Japanese, Korean, Chinese names to their official English TCG equivalent). Empty string if not found.
@@ -95,7 +94,7 @@ export async function POST(request: Request) {
               ]
             }
           ],
-            generationConfig: {
+          generationConfig: {
             responseMimeType: "application/json",
             responseSchema: {
               type: "OBJECT",
@@ -105,31 +104,17 @@ export async function POST(request: Request) {
                   items: { type: "INTEGER" },
                   description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] integers 0-1000."
                 },
-                card: {
-                  type: "OBJECT",
-                  properties: {
-                    x1: { type: "INTEGER" },
-                    y1: { type: "INTEGER" },
-                    x2: { type: "INTEGER" },
-                    y2: { type: "INTEGER" }
-                  },
-                  required: ["x1", "y1", "x2", "y2"]
-                },
-                illustration: {
-                  type: "OBJECT",
-                  properties: {
-                    x1: { type: "INTEGER" },
-                    y1: { type: "INTEGER" },
-                    x2: { type: "INTEGER" },
-                    y2: { type: "INTEGER" }
-                  },
-                  required: ["x1", "y1", "x2", "y2"]
+                illustration_box: {
+                  type: "ARRAY",
+                  items: { type: "INTEGER" },
+                  description: "Bounding box of the inner illustration as [ymin, xmin, ymax, xmax] integers 0-1000."
                 },
                 hasSampleWatermark: { type: "BOOLEAN" },
+                isCleanCardImage: { type: "BOOLEAN" },
                 cardName: { type: "STRING" },
                 cardNumber: { type: "STRING" }
               },
-              required: ["card", "illustration", "cardName", "cardNumber"]
+              required: ["box_2d", "cardName", "cardNumber"]
             }
           }
         };
@@ -153,9 +138,10 @@ export async function POST(request: Request) {
       }
     }
 
-    let cardCoords;
-    let illustrationCoords;
+    let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
+    let illustrationCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
     let hasSampleWatermark = false;
+    let isCleanCardImage = false;
     let usedFallback = false;
     let cardName = "";
     let cardNumber = "";
@@ -164,6 +150,7 @@ export async function POST(request: Request) {
       try {
         const parsed = JSON.parse(layoutText);
         hasSampleWatermark = !!parsed.hasSampleWatermark;
+        isCleanCardImage = !!parsed.isCleanCardImage;
         cardName = parsed.cardName || "";
         cardNumber = parsed.cardNumber || "";
 
@@ -175,34 +162,16 @@ export async function POST(request: Request) {
             x2: Math.round((xmax / 1000) * width),
             y2: Math.round((ymax / 1000) * height)
           };
-        } else if (parsed.card) {
-          let rx1 = Number(parsed.card.x1);
-          let ry1 = Number(parsed.card.y1);
-          let rx2 = Number(parsed.card.x2);
-          let ry2 = Number(parsed.card.y2);
-
-          if (rx2 <= 1000 && ry2 <= 1000) {
-            rx1 = Math.round((rx1 / 1000) * width);
-            ry1 = Math.round((ry1 / 1000) * height);
-            rx2 = Math.round((rx2 / 1000) * width);
-            ry2 = Math.round((ry2 / 1000) * height);
-          }
-          cardCoords = { x1: rx1, y1: ry1, x2: rx2, y2: ry2 };
         }
 
-        if (parsed.illustration) {
-          let ix1 = Number(parsed.illustration.x1);
-          let iy1 = Number(parsed.illustration.y1);
-          let ix2 = Number(parsed.illustration.x2);
-          let iy2 = Number(parsed.illustration.y2);
-
-          if (ix2 <= 1000 && iy2 <= 1000) {
-            ix1 = Math.round((ix1 / 1000) * width);
-            iy1 = Math.round((iy1 / 1000) * height);
-            ix2 = Math.round((ix2 / 1000) * width);
-            iy2 = Math.round((iy2 / 1000) * height);
-          }
-          illustrationCoords = { x1: ix1, y1: iy1, x2: ix2, y2: iy2 };
+        if (parsed.illustration_box && Array.isArray(parsed.illustration_box) && parsed.illustration_box.length === 4) {
+          const [ymin, xmin, ymax, xmax] = parsed.illustration_box.map(Number);
+          illustrationCoords = {
+            x1: Math.round((xmin / 1000) * width),
+            y1: Math.round((ymin / 1000) * height),
+            x2: Math.round((xmax / 1000) * width),
+            y2: Math.round((ymax / 1000) * height)
+          };
         }
 
         console.log("[Crop API] AI successfully detected layout. Card:", cardCoords, "Illustration:", illustrationCoords);
@@ -211,14 +180,17 @@ export async function POST(request: Request) {
       }
     }
 
-    if (skipCardCrop) {
-      console.log(`[Crop API] Using full image dimensions for card coordinates (skipCardCrop: ${skipCardCrop}).`);
+    const imageRatio = width / height;
+    const isDirectCardImage = imageRatio >= 0.58 && imageRatio <= 0.84;
+
+    if (skipCardCrop || isCleanCardImage || isDirectCardImage) {
+      console.log(`[Crop API] Using full image dimensions for card coordinates (skipCardCrop=${skipCardCrop}, isDirectCard=${isDirectCardImage}).`);
       cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
       if (!illustrationCoords) {
         illustrationCoords = {
-          x1: Math.round(width * 0.15),
-          y1: Math.round(height * 0.18),
-          x2: Math.round(width * 0.85),
+          x1: Math.round(width * 0.12),
+          y1: Math.round(height * 0.14),
+          x2: Math.round(width * 0.88),
           y2: Math.round(height * 0.58)
         };
       }
@@ -330,24 +302,28 @@ export async function POST(request: Request) {
     }
 
     // Only normalize aspect ratio if severely distorted (outside 0.60 - 0.85) to preserve full borders
-    if (!skipCardCrop) {
+    if (!skipCardCrop && !isDirectCardImage && !isCleanCardImage) {
       const cardW = cardCoords.x2 - cardCoords.x1;
       const cardH = cardCoords.y2 - cardCoords.y1;
       if (cardW > 0 && cardH > 0) {
-        const currentRatio = cardW / cardH;
-        const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
-        const centerY = (cardCoords.y1 + cardCoords.y2) / 2;
-
-        if (currentRatio < 0.60 || currentRatio > 0.85) {
-          const TARGET_RATIO = 0.715;
-          if (currentRatio > TARGET_RATIO) {
-            const newW = cardH * TARGET_RATIO;
-            cardCoords.x1 = centerX - newW / 2;
-            cardCoords.x2 = centerX + newW / 2;
-          } else {
-            const newH = cardW / TARGET_RATIO;
-            cardCoords.y1 = centerY - newH / 2;
-            cardCoords.y2 = centerY + newH / 2;
+        if (cardW >= width * 0.88 && cardH >= height * 0.88) {
+          cardCoords.x1 = 0;
+          cardCoords.y1 = 0;
+          cardCoords.x2 = width;
+          cardCoords.y2 = height;
+        } else {
+          const currentRatio = cardW / cardH;
+          if (currentRatio > 0.82) {
+            const expectedH = Math.round(cardW / 0.714);
+            cardCoords.y2 = Math.min(height, cardCoords.y1 + expectedH);
+            if (cardCoords.y1 + expectedH > height) {
+              cardCoords.y1 = Math.max(0, height - expectedH);
+            }
+          } else if (currentRatio < 0.58) {
+            const expectedW = Math.round(cardH * 0.714);
+            const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+            cardCoords.x1 = Math.max(0, Math.round(centerX - expectedW / 2));
+            cardCoords.x2 = Math.min(width, Math.round(centerX + expectedW / 2));
           }
         }
       }

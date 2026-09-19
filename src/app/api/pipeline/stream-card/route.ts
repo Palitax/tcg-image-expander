@@ -282,7 +282,7 @@ export async function POST(request: Request) {
 Image dimensions: ${width}x${height} pixels.
 
 CRITICAL INSTRUCTIONS:
-1. The uploaded image is a scan of a trading card placed on a scanner bed, background, or inside a clear plastic penny sleeve / toploader.
+1. The uploaded image is a scan or photo of a trading card placed on a background or inside a clear plastic penny sleeve / toploader.
 2. Clear penny sleeves typically extend past the edges of the card at the top, bottom, and sides with transparent plastic flaps, glare, seams, or reflection lines.
 3. YOUR JOB: Locate the EXACT BOUNDING BOX of the PHYSICAL PRINTED CARDBOARD CARD ITSELF.
 4. EXCLUDE all transparent penny sleeve plastic overhangs, plastic flaps, scanner bed glass, white/grey margins, shadows, and labels.
@@ -320,16 +320,6 @@ CRITICAL INSTRUCTIONS:
                     type: "ARRAY",
                     items: { type: "INTEGER" },
                     description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] integers from 0 to 1000."
-                  },
-                  card: {
-                    type: "OBJECT",
-                    properties: {
-                      x1: { type: "INTEGER", description: "Top-left X (0-1000)" },
-                      y1: { type: "INTEGER", description: "Top-left Y (0-1000)" },
-                      x2: { type: "INTEGER", description: "Bottom-right X (0-1000)" },
-                      y2: { type: "INTEGER", description: "Bottom-right Y (0-1000)" }
-                    },
-                    required: ["x1", "y1", "x2", "y2"]
                   },
                   isCardBack: {
                     type: "BOOLEAN",
@@ -382,68 +372,60 @@ CRITICAL INSTRUCTIONS:
             y2: Math.round((ymax / 1000) * height)
           };
           console.log(`[Stream Card API] Parsed box_2d [${ymin}, ${xmin}, ${ymax}, ${xmax}] -> exact pixels:`, cardCoords);
-        } else if (parsed.card && typeof parsed.card.x1 === "number" && typeof parsed.card.x2 === "number") {
-          let rx1 = Number(parsed.card.x1);
-          let ry1 = Number(parsed.card.y1);
-          let rx2 = Number(parsed.card.x2);
-          let ry2 = Number(parsed.card.y2);
-
-          // If normalized 0-1000
-          if (rx2 <= 1000 && ry2 <= 1000) {
-            rx1 = Math.round((rx1 / 1000) * width);
-            ry1 = Math.round((ry1 / 1000) * height);
-            rx2 = Math.round((rx2 / 1000) * width);
-            ry2 = Math.round((ry2 / 1000) * height);
-          }
-
-          cardCoords = { x1: rx1, y1: ry1, x2: rx2, y2: ry2 };
-          console.log("[Stream Card API] Parsed card object -> exact pixels:", cardCoords);
         }
       }
     } catch (aiErr: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
       console.warn("[Stream Card API] Gemini vision failed:", aiErr?.message || aiErr);
     }
 
-    // High-precision Computer-Vision Fallback if AI detection was unavailable or incomplete
-    if (!cardCoords || (cardCoords.x2 - cardCoords.x1) < 50 || (cardCoords.y2 - cardCoords.y1) < 50) {
+    // Direct card scan check (aspect ratio ~0.58 to 0.84)
+    const imageRatio = width / height;
+    const isAlreadyCardImage = imageRatio >= 0.58 && imageRatio <= 0.84;
+
+    if (isAlreadyCardImage) {
+      cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
+    } else if (!cardCoords || (cardCoords.x2 - cardCoords.x1) < 50 || (cardCoords.y2 - cardCoords.y1) < 50) {
       console.log("[Stream Card API] AI coordinates missing or invalid. Triggering Computer Vision fallback...");
       usedFallback = true;
       cardCoords = await detectCardBordersCV(originalCardBuffer, width, height);
     }
 
     // Sanitize coordinates and prevent any NaN or infinite values
-    const safeX1 = Number.isFinite(cardCoords.x1) ? cardCoords.x1 : 0;
-    const safeY1 = Number.isFinite(cardCoords.y1) ? cardCoords.y1 : 0;
-    const safeX2 = Number.isFinite(cardCoords.x2) ? cardCoords.x2 : width;
-    const safeY2 = Number.isFinite(cardCoords.y2) ? cardCoords.y2 : height;
+    let safeX1 = Number.isFinite(cardCoords.x1) ? cardCoords.x1 : 0;
+    let safeY1 = Number.isFinite(cardCoords.y1) ? cardCoords.y1 : 0;
+    let safeX2 = Number.isFinite(cardCoords.x2) ? cardCoords.x2 : width;
+    let safeY2 = Number.isFinite(cardCoords.y2) ? cardCoords.y2 : height;
 
     const detectedW = Math.max(10, safeX2 - safeX1);
     const detectedH = Math.max(10, safeY2 - safeY1);
+
+    if (!isAlreadyCardImage && detectedW > 0 && detectedH > 0) {
+      if (detectedW >= width * 0.88 && detectedH >= height * 0.88) {
+        safeX1 = 0;
+        safeY1 = 0;
+        safeX2 = width;
+        safeY2 = height;
+      } else {
+        const detectedRatio = detectedW / detectedH;
+        if (detectedRatio > 0.82) {
+          const expectedH = Math.round(detectedW / 0.714);
+          safeY2 = Math.min(height, safeY1 + expectedH);
+          if (safeY1 + expectedH > height) {
+            safeY1 = Math.max(0, height - expectedH);
+          }
+        } else if (detectedRatio < 0.58) {
+          const expectedW = Math.round(detectedH * 0.714);
+          const centerX = (safeX1 + safeX2) / 2;
+          safeX1 = Math.max(0, Math.round(centerX - expectedW / 2));
+          safeX2 = Math.min(width, Math.round(centerX + expectedW / 2));
+        }
+      }
+    }
 
     let adjX1 = safeX1;
     let adjY1 = safeY1;
     let adjX2 = safeX2;
     let adjY2 = safeY2;
-
-    // Only normalize if severely distorted (outside 0.60 - 0.85 range) to preserve full borders
-    if (detectedW > 0 && detectedH > 0) {
-      const currentRatio = detectedW / detectedH;
-      const centerX = (safeX1 + safeX2) / 2;
-      const centerY = (safeY1 + safeY2) / 2;
-
-      if (currentRatio < 0.60 || currentRatio > 0.85) {
-        const TARGET_RATIO = 0.714;
-        if (currentRatio > TARGET_RATIO) {
-          const newW = detectedH * TARGET_RATIO;
-          adjX1 = Math.round(centerX - newW / 2);
-          adjX2 = Math.round(centerX + newW / 2);
-        } else {
-          const newH = detectedW / TARGET_RATIO;
-          adjY1 = Math.round(centerY - newH / 2);
-          adjY2 = Math.round(centerY + newH / 2);
-        }
-      }
-    }
 
     // Strict mathematical clamping to prevent any out-of-bounds Sharp extraction errors
     const clampedLeft = Math.max(0, Math.min(Math.round(adjX1), width - 1));
