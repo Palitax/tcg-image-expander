@@ -195,7 +195,7 @@ export async function POST(request: Request) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(7000)
+              signal: AbortSignal.timeout(5500)
             });
 
             if (res.ok) {
@@ -207,19 +207,80 @@ export async function POST(request: Request) {
                 break;
               }
             } else {
-              const errBody = await res.text();
-              console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}:`, errBody.slice(0, 150));
-              // Fast fail on permission/quota/not found
-              if (res.status === 403 || res.status === 404 || res.status === 429) {
-                console.warn(`[Outpaint API] Key lacks Imagen permissions or quota (${res.status}). Aborting to Ambient Blur.`);
-                throw new Error(`Imagen-Fehler (${res.status}): Berechtigung oder Kontingent nicht verfügbar.`);
-              }
+              console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}. Falling back to Gemini image generation...`);
             }
           } catch (restErr: any) {
-            console.warn(`[Outpaint API] REST Imagen failed: ${restErr.message}`);
+            console.warn(`[Outpaint API] REST Imagen failed:`, restErr?.message || restErr);
             lastImageError = restErr;
-            if (restErr.message?.includes("403") || restErr.message?.includes("429") || restErr.message?.includes("Imagen-Fehler")) {
-              throw restErr;
+          }
+        }
+
+        // 2. Secondary: Gemini Multimodal Image Generation
+        // (WITHOUT aspectRatio in imageConfig to avoid 400 INVALID_ARGUMENT; Sharp center-crops to target dimensions)
+        if (!generatedBase64) {
+          const geminiImgModels = ["gemini-2.5-flash", "gemini-3.6-flash"];
+          for (const imgModel of geminiImgModels) {
+            if (generatedBase64) break;
+            try {
+              console.log(`[Outpaint API] Attempting Gemini image generation with ${imgModel} for target ratio ${targetRatio}...`);
+              let contentsArray: any[] = [];
+              if (mode === "backdrop" || isDisplay) {
+                contentsArray = [
+                  {
+                    parts: [
+                      { text: `High quality continuous scenery backdrop wallpaper: ${outpaintPrompt}` }
+                    ]
+                  }
+                ];
+              } else {
+                contentsArray = [
+                  {
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType: "image/png",
+                          data: base64Data
+                        }
+                      },
+                      { text: `Seamless extended background environment: ${outpaintPrompt}` }
+                    ]
+                  }
+                ];
+              }
+
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+              const payload = {
+                contents: contentsArray,
+                generationConfig: {
+                  responseModalities: ["IMAGE"]
+                }
+              };
+
+              const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(8000)
+              });
+
+              if (res.ok) {
+                const json = await res.json();
+                const parts = json?.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  const imgData = part.inlineData?.data || (part as any).inline_data?.data;
+                  if (imgData) {
+                    console.log(`[Outpaint API] ${imgModel} REST generated image successfully!`);
+                    generatedBase64 = imgData;
+                    break;
+                  }
+                }
+              } else {
+                const errText = await res.text();
+                console.warn(`[Outpaint API] ${imgModel} REST error ${res.status}:`, errText.slice(0, 160));
+              }
+            } catch (gErr: any) {
+              console.warn(`[Outpaint API] ${imgModel} REST failed:`, gErr?.message || gErr);
+              lastImageError = gErr;
             }
           }
         }

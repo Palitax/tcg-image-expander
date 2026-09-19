@@ -403,42 +403,42 @@ export async function POST(request: Request) {
     }
 
     // Robust Card Bounding Box Extraction:
-    // Extract the physical cardboard card itself, stripping away any plastic card savers, penny sleeves, or scanner background.
+    // If the uploaded image is already a card scan/image (standard TCG ratio ~0.58 - 0.84),
+    // NEVER crop into it! Preserve 100% of the card bounds.
+    const imageRatio = width / height;
+    const isDirectCardImage = imageRatio >= 0.58 && imageRatio <= 0.84;
+
     let cx1 = 0;
     let cy1 = 0;
     let cx2 = width;
     let cy2 = height;
 
-    if (detectedCardCoords) {
-      cx1 = detectedCardCoords.x1;
-      cy1 = detectedCardCoords.y1;
-      cx2 = detectedCardCoords.x2;
-      cy2 = detectedCardCoords.y2;
+    if (isDirectCardImage) {
+      console.log(`[Stream Preview API] Direct card image detected (ratio ${imageRatio.toFixed(3)}). Preserving 100% of card bounds.`);
+      cx1 = 0;
+      cy1 = 0;
+      cx2 = width;
+      cy2 = height;
+    } else if (detectedCardCoords) {
+      const detectedW = detectedCardCoords.x2 - detectedCardCoords.x1;
+      const detectedH = detectedCardCoords.y2 - detectedCardCoords.y1;
 
-      const detectedW = cx2 - cx1;
-      const detectedH = cy2 - cy1;
-
-      // Only skip cropping if the card truly occupies >= 98% of the image (direct borderless scan)
-      if (detectedW >= width * 0.98 && detectedH >= height * 0.98 && cx1 <= width * 0.015 && cy1 <= height * 0.015) {
+      // If detected card occupies >= 82% of width and height, treat as full card image
+      if (detectedW >= width * 0.82 && detectedH >= height * 0.82) {
+        console.log(`[Stream Preview API] Detected card occupies ${((detectedW / width) * 100).toFixed(1)}% of canvas. Preserving full dimensions.`);
         cx1 = 0;
         cy1 = 0;
         cx2 = width;
         cy2 = height;
-      } else if (detectedW > 0 && detectedH > 0) {
-        const detectedRatio = detectedW / detectedH;
-        // If detected box is square/horizontal (Gemini only detected top illustration), expand vertically to standard card ratio 0.714
-        if (detectedRatio > 0.82) {
-          const expectedH = Math.round(detectedW / 0.714);
-          cy2 = Math.min(height, cy1 + expectedH);
-          if (cy1 + expectedH > height) {
-            cy1 = Math.max(0, height - expectedH);
-          }
-        } else if (detectedRatio < 0.58) {
-          const expectedW = Math.round(detectedH * 0.714);
-          const centerX = (cx1 + cx2) / 2;
-          cx1 = Math.max(0, Math.round(centerX - expectedW / 2));
-          cx2 = Math.min(width, Math.round(centerX + expectedW / 2));
-        }
+      } else {
+        // Photograph of card on table or sleeve: add 2% safe outer padding so borders/text are NEVER cut off
+        const padX = Math.round(detectedW * 0.02);
+        const padY = Math.round(detectedH * 0.02);
+        cx1 = Math.max(0, detectedCardCoords.x1 - padX);
+        cy1 = Math.max(0, detectedCardCoords.y1 - padY);
+        cx2 = Math.min(width, detectedCardCoords.x2 + padX);
+        cy2 = Math.min(height, detectedCardCoords.y2 + padY);
+        console.log(`[Stream Preview API] Card cropped with safe padding: [${cx1}, ${cy1}, ${cx2}, ${cy2}]`);
       }
     }
 
@@ -459,7 +459,8 @@ export async function POST(request: Request) {
       .png()
       .toBuffer();
 
-    const cornerRadius = Math.max(4, Math.round(finalCardW * 0.038));
+    // Corner rounding: authentic die-cut corner radius (3.2% of card width)
+    const cornerRadius = Math.max(4, Math.round(finalCardW * 0.032));
     const roundedMask = Buffer.from(
       `<svg width="${finalCardW}" height="${finalCardH}"><rect x="0" y="0" width="${finalCardW}" height="${finalCardH}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
     );
@@ -556,68 +557,141 @@ export async function POST(request: Request) {
 
         console.log(`[Stream Preview API] Outpainting prompt: "${outpaintPrompt.slice(0, 120)}..."`);
 
-        // Fast Imagen 3 generation with instant break on permission/quota errors
-        const candidateRatios = ["1:1", "4:3"];
-        for (const candidateRatio of candidateRatios) {
-          if (backgroundBuffer) break;
+        // 1. Primary: Fast Imagen 3 generation attempt
+        try {
+          console.log("[Stream Preview API] Attempting Imagen 3 predict (1:1)...");
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
+          const payload = {
+            instances: [{ prompt: outpaintPrompt }],
+            parameters: {
+              sampleCount: 1,
+              aspectRatio: "1:1",
+              safetySetting: "block_only_high",
+              outputOptions: { mimeType: "image/jpeg" }
+            }
+          };
 
-          try {
-            console.log(`[Stream Preview API] Requesting Imagen 3 predict (ratio: ${candidateRatio})...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              instances: [
-                { prompt: outpaintPrompt }
-              ],
-              parameters: {
-                sampleCount: 1,
-                aspectRatio: candidateRatio,
-                safetySetting: "block_only_high",
-                outputOptions: {
-                  mimeType: "image/jpeg"
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(5500)
+          });
+
+          if (res.ok) {
+            const json = await res.json();
+            const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+            if (bytes) {
+              const rawBuf = Buffer.from(bytes, "base64");
+              backgroundBuffer = await sharp(rawBuf)
+                .resize(1024, 1024, { fit: "cover", position: "centre" })
+                .jpeg({ quality: 92 })
+                .toBuffer();
+              console.log(`[Stream Preview API] Imagen 3 generated backdrop successfully (${backgroundBuffer.length} bytes).`);
+            }
+          } else {
+            console.warn(`[Stream Preview API] Imagen 3 HTTP ${res.status}. Falling back to Gemini image generation...`);
+          }
+        } catch (imgErr: any) {
+          console.warn("[Stream Preview API] Imagen 3 call failed:", imgErr?.message || imgErr);
+        }
+
+        // 2. Secondary: Gemini 2.5 Flash Multimodal Image Generation
+        // (WITHOUT aspectRatio in imageConfig to avoid 400 INVALID_ARGUMENT; Sharp center-crops to 1:1)
+        if (!backgroundBuffer) {
+          const geminiImgModels = ["gemini-2.5-flash", "gemini-3.6-flash"];
+          for (const imgModel of geminiImgModels) {
+            if (backgroundBuffer) break;
+            try {
+              console.log(`[Stream Preview API] Attempting REST image generation with ${imgModel}...`);
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+              const payload = {
+                contents: [
+                  {
+                    parts: [
+                      { text: `High quality continuous scenery backdrop wallpaper: ${outpaintPrompt}` }
+                    ]
+                  }
+                ],
+                generationConfig: {
+                  responseModalities: ["IMAGE"]
                 }
-              }
-            };
+              };
 
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(6500)
+              const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(7500)
+              });
+
+              if (res.ok) {
+                const json = await res.json();
+                const parts = json?.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  const imgData = part.inlineData?.data || (part as any).inline_data?.data;
+                  if (imgData) {
+                    console.log(`[Stream Preview API] ${imgModel} REST generated image successfully! Resizing to 1024x1024 (1:1)...`);
+                    const rawBuf = Buffer.from(imgData, "base64");
+                    backgroundBuffer = await sharp(rawBuf)
+                      .resize(1024, 1024, { fit: "cover", position: "centre" })
+                      .jpeg({ quality: 92 })
+                      .toBuffer();
+                    break;
+                  }
+                }
+              } else {
+                const errText = await res.text();
+                console.warn(`[Stream Preview API] ${imgModel} REST error ${res.status}:`, errText.slice(0, 160));
+              }
+            } catch (gErr: any) {
+              console.warn(`[Stream Preview API] ${imgModel} REST failed:`, gErr?.message || gErr);
+            }
+          }
+        }
+
+        // 3. Tertiary: SDK Gemini generateContent with IMAGE modality
+        if (!backgroundBuffer) {
+          try {
+            console.log("[Stream Preview API] Attempting SDK generateContent with image modality...");
+            const geminiRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              contents: [
+                {
+                  parts: [
+                    { text: `High quality continuous scenery backdrop wallpaper: ${outpaintPrompt}` }
+                  ]
+                }
+              ],
+              config: {
+                responseModalities: ["IMAGE"]
+              }
             });
 
-            if (res.ok) {
-              const json = await res.json();
-              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-              if (bytes) {
-                const rawBuf = Buffer.from(bytes, "base64");
+            const parts = (geminiRes as any).candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              const imgData = part.inlineData?.data || (part as any).inline_data?.data;
+              if (imgData) {
+                console.log("[Stream Preview API] SDK Gemini generated image successfully! Resizing to 1024x1024...");
+                const rawBuf = Buffer.from(imgData, "base64");
                 backgroundBuffer = await sharp(rawBuf)
                   .resize(1024, 1024, { fit: "cover", position: "centre" })
                   .jpeg({ quality: 92 })
                   .toBuffer();
-                console.log(`[Stream Preview API] Imagen 3 generated backdrop successfully (${backgroundBuffer.length} bytes).`);
-                break;
-              }
-            } else {
-              const errBody = await res.text();
-              console.warn(`[Stream Preview API] Imagen 3 HTTP ${res.status}:`, errBody.slice(0, 150));
-              // If permission denied, quota exceeded, or model not found on key, break immediately to avoid wasting time
-              if (res.status === 403 || res.status === 404 || res.status === 429) {
-                console.warn(`[Stream Preview API] Key lacks Imagen permissions or quota (${res.status}). Skipping directly to Ambient Blur.`);
                 break;
               }
             }
-          } catch (restImgErr: any) {
-            console.warn(`[Stream Preview API] Imagen 3 call error:`, restImgErr?.message || restImgErr);
-            break;
+          } catch (sdkImgErr: any) {
+            console.warn("[Stream Preview API] SDK image generation failed:", sdkImgErr?.message || sdkImgErr);
           }
         }
       } catch (outpaintErr) {
         console.warn("[Stream Preview API] AI backdrop generation exception:", outpaintErr);
       }
 
-      // Bulletproof instant ambient blur fallback (<30ms)
+      // 4. Bulletproof ambient blur fallback if all AI image generators fail
       if (!backgroundBuffer) {
-        console.log("[Stream Preview API] Using high-quality Ambient Blur backdrop.");
+        console.log("[Stream Preview API] All AI image generators failed. Falling back to ambient blur backdrop.");
         usedFallback = true;
         backgroundBuffer = await sharp(croppedIllustrationBuffer)
           .resize(1024, 1024, { fit: "cover" })
