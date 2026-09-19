@@ -98,8 +98,7 @@ export async function POST(request: Request) {
     let fallbackReason = "";
 
     try {
-      // STEP 3A: Describe cropped image style using Gemini (flash fallback chain)
-      const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
+      // STEP 3A: Describe cropped image style using Gemini (fast lean models)
       let description = "";
       let lastError;
 
@@ -109,36 +108,45 @@ export async function POST(request: Request) {
           ? "Analyze this trading card illustration. Write a detailed prompt to generate a matching background scenery/backdrop. Your description MUST focus ONLY on the environment, scenery, backdrop elements, artistic style (e.g. anime sketch, watercolor, oil painting), color palette, lighting, brushstrokes, and general aesthetic. You MUST completely ignore and exclude any characters, figures, or humans in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery."
           : "Analyze this trading card illustration. Describe the environmental scenery, artistic style (e.g. anime, oil painting, watercolor), key color palette, lighting, and general aesthetic. You MUST completely ignore and exclude any character figures, card text, card borders, play cost symbols, and power attributes from your description. Return only the description.");
 
-      for (const model of models) {
+      const styleModels = ["gemini-2.5-flash", "gemini-1.5-flash"];
+      for (const model of styleModels) {
         try {
           console.log(`[Outpaint API] Describing style with model ${model} (mode: ${mode}, isDisplay: ${isDisplay})`);
-          const styleResponse = await generateContentWithRetry(ai, {
-            model,
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+          const payload = {
             contents: [
               {
-                inlineData: {
-                  data: base64Data,
-                  mimeType: "image/png"
-                }
-              },
-              describePrompt
+                parts: [
+                  { inlineData: { mimeType: "image/png", data: base64Data } },
+                  { text: describePrompt }
+                ]
+              }
             ]
+          };
+
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(4000)
           });
-          if (styleResponse.text) {
-            description = styleResponse.text;
-            break;
+
+          if (res.ok) {
+            const json = await res.json();
+            const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) {
+              description = text;
+              break;
+            }
           }
         } catch (e: any) {
-          console.warn(`[Outpaint API] Description using ${model} failed: ${e.message}`);
+          console.warn(`[Outpaint API] Description with ${model} failed: ${e.message}`);
           lastError = e;
-          if (e.message?.toLowerCase().includes("safety") || e.message?.toLowerCase().includes("block")) {
-            throw e;
-          }
         }
       }
 
       if (!description) {
-        throw lastError || new Error("Hintergrundbeschreibung mit Gemini fehlgeschlagen.");
+        description = "Fantasy scenery background in vibrant colorful aesthetic";
       }
 
       // Filter and sanitize description to prevent safety triggers in Imagen
@@ -161,143 +169,57 @@ export async function POST(request: Request) {
         let lastImageError;
 
         const candidateRatios = getCandidateRatios(targetRatio);
-        const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
 
         for (const candidateRatio of candidateRatios) {
           if (generatedBase64) break;
 
           // 1. Try Imagen 3 via Direct REST :predict
-          for (const imagenModel of imagenModels) {
-            try {
-              console.log(`[Outpaint API] Attempting REST Imagen predict with ${imagenModel} for candidate ratio ${candidateRatio} (target: ${targetRatio})...`);
-              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
-              const payload = {
-                instances: [
-                  { prompt: outpaintPrompt }
-                ],
-                parameters: {
-                  sampleCount: 1,
-                  aspectRatio: candidateRatio,
-                  safetySetting: "block_only_high",
-                  outputOptions: {
-                    mimeType: "image/jpeg"
-                  }
+          try {
+            console.log(`[Outpaint API] Attempting REST Imagen predict for candidate ratio ${candidateRatio} (target: ${targetRatio})...`);
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
+            const payload = {
+              instances: [
+                { prompt: outpaintPrompt }
+              ],
+              parameters: {
+                sampleCount: 1,
+                aspectRatio: candidateRatio,
+                safetySetting: "block_only_high",
+                outputOptions: {
+                  mimeType: "image/jpeg"
                 }
-              };
-
-              const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-              });
-
-              if (res.ok) {
-                const json = await res.json();
-                const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-                if (bytes) {
-                  console.log(`[Outpaint API] REST ${imagenModel} generated image successfully for ratio ${candidateRatio}`);
-                  generatedBase64 = bytes;
-                  break;
-                }
-              } else {
-                const errBody = await res.text();
-                console.warn(`[Outpaint API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
               }
-            } catch (restErr: any) {
-              console.warn(`[Outpaint API] REST ${imagenModel} failed: ${restErr.message}`);
-              lastImageError = restErr;
-            }
-          }
+            };
 
-          // 2. Try Imagen 3 via SDK generateImages
-          if (!generatedBase64) {
-            for (const imagenModel of imagenModels) {
-              try {
-                console.log(`[Outpaint API] Attempting SDK Imagen generation with ${imagenModel} for candidate ratio ${candidateRatio}...`);
-                const imagenRes = await ai.models.generateImages({
-                  model: imagenModel,
-                  prompt: outpaintPrompt,
-                  config: {
-                    numberOfImages: 1,
-                    aspectRatio: candidateRatio,
-                    outputMimeType: "image/jpeg"
-                  }
-                });
-                const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-                if (imgBytes) {
-                  console.log(`[Outpaint API] SDK ${imagenModel} generated image successfully for ratio ${candidateRatio}`);
-                  generatedBase64 = imgBytes;
-                  break;
-                }
-              } catch (e: any) {
-                console.warn(`[Outpaint API] SDK ${imagenModel} failed: ${e.message}`);
-                lastImageError = e;
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+              signal: AbortSignal.timeout(7000)
+            });
+
+            if (res.ok) {
+              const json = await res.json();
+              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+              if (bytes) {
+                console.log(`[Outpaint API] REST Imagen generated image successfully for ratio ${candidateRatio}`);
+                generatedBase64 = bytes;
+                break;
+              }
+            } else {
+              const errBody = await res.text();
+              console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}:`, errBody.slice(0, 150));
+              // Fast fail on permission/quota/not found
+              if (res.status === 403 || res.status === 404 || res.status === 429) {
+                console.warn(`[Outpaint API] Key lacks Imagen permissions or quota (${res.status}). Aborting to Ambient Blur.`);
+                throw new Error(`Imagen-Fehler (${res.status}): Berechtigung oder Kontingent nicht verfügbar.`);
               }
             }
-          }
-
-          // 3. Try Gemini Multimodal Image fallback
-          if (!generatedBase64) {
-            try {
-              console.log(`[Outpaint API] Attempting gemini-3.6-flash / gemini-2.5-flash for candidate ratio ${candidateRatio}...`);
-              let contentsArray: any[] = [];
-              if (mode === "backdrop" || isDisplay) {
-                contentsArray = [outpaintPrompt];
-              } else {
-                contentsArray = [
-                  {
-                    inlineData: {
-                      data: base64Data,
-                      mimeType: "image/png"
-                    }
-                  },
-                  outpaintPrompt
-                ];
-              }
-
-              const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
-              for (const imgModel of fallbackImageModels) {
-                const configsToTry = [
-                  {
-                    responseModalities: ["IMAGE"],
-                    imageConfig: {
-                      aspectRatio: candidateRatio
-                    }
-                  },
-                  {
-                    responseModalities: ["IMAGE"]
-                  }
-                ];
-
-                for (const config of configsToTry) {
-                  try {
-                    const geminiImgRes = await generateContentWithRetry(ai, {
-                      model: imgModel,
-                      contents: contentsArray,
-                      config
-                    });
-
-                    const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
-                    for (const part of parts) {
-                      if (part.inlineData?.data) {
-                        generatedBase64 = part.inlineData.data;
-                        break;
-                      }
-                    }
-                    if (generatedBase64) {
-                      console.log(`[Outpaint API] ${imgModel} generated image successfully for ratio ${candidateRatio}`);
-                      break;
-                    }
-                  } catch (imgModelErr: any) {
-                    console.warn(`[Outpaint API] ${imgModel} failed:`, imgModelErr?.message || imgModelErr);
-                    lastImageError = imgModelErr;
-                  }
-                }
-                if (generatedBase64) break;
-              }
-            } catch (e: any) {
-              console.warn(`[Outpaint API] Fallback image generation failed: ${e.message}`);
-              lastImageError = e;
+          } catch (restErr: any) {
+            console.warn(`[Outpaint API] REST Imagen failed: ${restErr.message}`);
+            lastImageError = restErr;
+            if (restErr.message?.includes("403") || restErr.message?.includes("429") || restErr.message?.includes("Imagen-Fehler")) {
+              throw restErr;
             }
           }
         }

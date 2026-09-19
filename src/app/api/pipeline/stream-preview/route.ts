@@ -8,37 +8,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Helper to call generateContent with retry on transient errors (503, 429)
-async function generateContentWithRetry(ai: any, params: any, retries = 2, delay = 1000) {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await ai.models.generateContent(params);
-    } catch (e: any) {
-      const errorStr = String(e.message || e);
-      const isUnavailable =
-        errorStr.includes("503") ||
-        errorStr.toLowerCase().includes("demand") ||
-        errorStr.toLowerCase().includes("unavailable") ||
-        e.status === 503 ||
-        e.statusCode === 503;
-      const isRateLimit =
-        errorStr.includes("429") ||
-        errorStr.toLowerCase().includes("rate limit") ||
-        errorStr.toLowerCase().includes("quota") ||
-        e.status === 429 ||
-        e.statusCode === 429;
-
-      if ((isUnavailable || isRateLimit) && i < retries) {
-        const waitTime = delay * Math.pow(2, i);
-        console.warn(`[Stream Preview API] Transient error: "${errorStr}". Retrying in ${waitTime}ms...`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-        continue;
-      }
-      throw e;
-    }
-  }
-  throw new Error("Failed to generate content after retries.");
-}
 
 // Programmatic computer-vision card detector fallback
 async function detectCardBordersCV(
@@ -290,8 +259,8 @@ export async function POST(request: Request) {
     let mimeType = cardFile.type || "image/jpeg";
     if (mimeType === "image/jpg") mimeType = "image/jpeg";
 
-    // STEP 1: AI Vision Layout Analysis & Metadata OCR
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
+    // STEP 1: AI Vision Layout Analysis & Metadata OCR (Fast, lean models with strict timeout)
+    const visionModels = ["gemini-2.5-flash", "gemini-1.5-flash"];
     let layoutText = "";
 
     // Robust AI Vision Detection using Google Gemini REST API & SDK
@@ -308,7 +277,7 @@ export async function POST(request: Request) {
 6. "setName": Identify the official English set name for this card and set code (e.g. 'Supercharged Breaker', 'Battle Partners', 'Ancient Roar', 'Paldean Fates', 'Pokémon Card 151').`;
 
     // Try REST fetch first for maximum reliability across serverless environments
-    for (const model of models) {
+    for (const model of visionModels) {
       try {
         console.log(`[Stream Preview API] Trying model ${model} for vision analysis...`);
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -349,7 +318,8 @@ export async function POST(request: Request) {
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(4500)
         });
 
         if (res.ok) {
@@ -367,31 +337,28 @@ export async function POST(request: Request) {
 
     // Fallback to @google/genai SDK if REST didn't return text
     if (!layoutText) {
-      for (const model of models) {
-        try {
-          const response = await ai.models.generateContent({
-            model,
-            contents: [
-              {
-                inlineData: {
-                  data: base64Image,
-                  mimeType
-                }
-              },
-              visionPrompt
-            ],
-            config: {
-              responseMimeType: "application/json"
-            }
-          });
-
-          if (response.text) {
-            layoutText = response.text;
-            break;
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: [
+            {
+              inlineData: {
+                data: base64Image,
+                mimeType
+              }
+            },
+            visionPrompt
+          ],
+          config: {
+            responseMimeType: "application/json"
           }
-        } catch (sdkErr: any) {
-          console.warn(`[Stream Preview API] SDK ${model} failed:`, sdkErr?.message || sdkErr);
+        });
+
+        if (response.text) {
+          layoutText = response.text;
         }
+      } catch (sdkErr: any) {
+        console.warn(`[Stream Preview API] SDK vision analysis fallback failed:`, sdkErr?.message || sdkErr);
       }
     }
 
@@ -547,73 +514,39 @@ export async function POST(request: Request) {
       const illustrationBase64 = croppedIllustrationBuffer.toString("base64");
 
       try {
-        // Style description prompt
+        // Fast style description prompt (single fast call with strict 3.5s timeout)
         const describePrompt = `Analyze this trading card illustration. Write a vivid, detailed prompt describing ONLY the environment scenery, landscape, room setting, background elements, artistic style (e.g. anime watercolor, vibrant fantasy digital art), color palette, lighting, and general aesthetic. You MUST completely ignore and exclude any characters, pokemon creatures, figures, humans, text, or card borders in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery.`;
 
         let description = "";
 
-        // 1. Direct REST fetch for description
-        for (const model of models) {
-          try {
-            console.log(`[Stream Preview Outpaint] Describing style via REST ${model}...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              contents: [
-                {
-                  parts: [
-                    { inlineData: { mimeType: "image/jpeg", data: illustrationBase64 } },
-                    { text: describePrompt }
-                  ]
-                }
-              ]
-            };
-
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
-
-            if (res.ok) {
-              const json = await res.json();
-              const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) {
-                description = text;
-                break;
-              }
-            }
-          } catch (e: any) {
-            console.warn(`[Stream Preview Outpaint] REST describer ${model} failed:`, e?.message || e);
-          }
-        }
-
-        // 2. SDK fallback for description
-        if (!description) {
-          for (const model of models) {
-            try {
-              const descRes = await generateContentWithRetry(ai, {
-                model,
-                contents: [
-                  {
-                    inlineData: {
-                      data: illustrationBase64,
-                      mimeType: "image/jpeg"
-                    }
-                  },
-                  describePrompt
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+          const payload = {
+            contents: [
+              {
+                parts: [
+                  { inlineData: { mimeType: "image/jpeg", data: illustrationBase64 } },
+                  { text: describePrompt }
                 ]
-              });
-              if (descRes.text) {
-                description = descRes.text;
-                break;
               }
-            } catch (e: any) {
-              console.warn(`[Stream Preview Outpaint] SDK describer ${model} failed:`, e?.message || e);
-            }
+            ]
+          };
+
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(3500)
+          });
+
+          if (res.ok) {
+            const json = await res.json();
+            description = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
           }
+        } catch (e: any) {
+          console.warn("[Stream Preview API] Fast describer timed out or failed:", e?.message || e);
         }
 
-        // Clean and construct the Imagen 3 expansion prompt
         const cleanDesc = (description || "Fantasy scenery background in vibrant colorful aesthetic")
           .replace(/^(here is a prompt|prompt:|description:|sure, here is|an anime)/gi, "")
           .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy motif")
@@ -621,147 +554,70 @@ export async function POST(request: Request) {
 
         const outpaintPrompt = `Anime scenery wallpaper, seamless extended background environment: ${cleanDesc}. Vibrant, highly detailed fantasy environment, beautiful lighting, consistent color palette, masterwork art style. Exclude all characters, figures, pokemon, text, symbols, and card borders.`;
 
-        console.log(`[Stream Preview API] Outpainting prompt: "${outpaintPrompt.slice(0, 160)}..."`);
+        console.log(`[Stream Preview API] Outpainting prompt: "${outpaintPrompt.slice(0, 120)}..."`);
 
-        // Try candidate aspect ratios in order: 1:1 first, then 4:3, 3:4, 16:9 and crop to 1:1
-        const candidateRatios = ["1:1", "4:3", "3:4", "16:9"];
-        const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
-
+        // Fast Imagen 3 generation with instant break on permission/quota errors
+        const candidateRatios = ["1:1", "4:3"];
         for (const candidateRatio of candidateRatios) {
           if (backgroundBuffer) break;
 
-          // 1. Primary: Generate backdrop with Imagen 3 via Direct REST API
-          for (const imagenModel of imagenModels) {
-            try {
-              console.log(`[Stream Preview API] Attempting REST predict with ${imagenModel} for candidate ratio ${candidateRatio}...`);
-              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
-              const payload = {
-                instances: [
-                  { prompt: outpaintPrompt }
-                ],
-                parameters: {
-                  sampleCount: 1,
-                  aspectRatio: candidateRatio,
-                  safetySetting: "block_only_high",
-                  outputOptions: {
-                    mimeType: "image/jpeg"
-                  }
+          try {
+            console.log(`[Stream Preview API] Requesting Imagen 3 predict (ratio: ${candidateRatio})...`);
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
+            const payload = {
+              instances: [
+                { prompt: outpaintPrompt }
+              ],
+              parameters: {
+                sampleCount: 1,
+                aspectRatio: candidateRatio,
+                safetySetting: "block_only_high",
+                outputOptions: {
+                  mimeType: "image/jpeg"
                 }
-              };
-
-              const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-              });
-
-              if (res.ok) {
-                const json = await res.json();
-                const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-                if (bytes) {
-                  const rawBuf = Buffer.from(bytes, "base64");
-                  backgroundBuffer = await sharp(rawBuf)
-                    .resize(1024, 1024, { fit: "cover", position: "centre" })
-                    .jpeg({ quality: 92 })
-                    .toBuffer();
-                  console.log(`[Stream Preview API] REST ${imagenModel} generated backdrop successfully (${backgroundBuffer.length} bytes).`);
-                  break;
-                }
-              } else {
-                const errBody = await res.text();
-                console.warn(`[Stream Preview API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
               }
-            } catch (restImgErr: any) {
-              console.warn(`[Stream Preview API] REST ${imagenModel} failed:`, restImgErr?.message || restImgErr);
-            }
-          }
+            };
 
-          // 2. Secondary: Generate with Imagen 3 via @google/genai SDK
-          if (!backgroundBuffer) {
-            for (const imagenModel of imagenModels) {
-              try {
-                console.log(`[Stream Preview API] Attempting SDK generateImages with ${imagenModel} for candidate ratio ${candidateRatio}...`);
-                const imagenRes = await ai.models.generateImages({
-                  model: imagenModel,
-                  prompt: outpaintPrompt,
-                  config: {
-                    numberOfImages: 1,
-                    aspectRatio: candidateRatio,
-                    outputMimeType: "image/jpeg"
-                  }
-                });
-                const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-                if (imgBytes) {
-                  const rawBuf = Buffer.from(imgBytes, "base64");
-                  backgroundBuffer = await sharp(rawBuf)
-                    .resize(1024, 1024, { fit: "cover", position: "centre" })
-                    .jpeg({ quality: 92 })
-                    .toBuffer();
-                  console.log(`[Stream Preview API] SDK ${imagenModel} generated backdrop successfully.`);
-                  break;
-                }
-              } catch (imgErr: any) {
-                console.warn(`[Stream Preview API] SDK ${imagenModel} failed:`, imgErr?.message || imgErr);
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+              signal: AbortSignal.timeout(6500)
+            });
+
+            if (res.ok) {
+              const json = await res.json();
+              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+              if (bytes) {
+                const rawBuf = Buffer.from(bytes, "base64");
+                backgroundBuffer = await sharp(rawBuf)
+                  .resize(1024, 1024, { fit: "cover", position: "centre" })
+                  .jpeg({ quality: 92 })
+                  .toBuffer();
+                console.log(`[Stream Preview API] Imagen 3 generated backdrop successfully (${backgroundBuffer.length} bytes).`);
+                break;
+              }
+            } else {
+              const errBody = await res.text();
+              console.warn(`[Stream Preview API] Imagen 3 HTTP ${res.status}:`, errBody.slice(0, 150));
+              // If permission denied, quota exceeded, or model not found on key, break immediately to avoid wasting time
+              if (res.status === 403 || res.status === 404 || res.status === 429) {
+                console.warn(`[Stream Preview API] Key lacks Imagen permissions or quota (${res.status}). Skipping directly to Ambient Blur.`);
+                break;
               }
             }
-          }
-
-          // 3. Tertiary: Generate with Gemini Multimodal Image fallback
-          if (!backgroundBuffer) {
-            const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
-            for (const imgModel of fallbackImageModels) {
-              try {
-                console.log(`[Stream Preview API] Attempting multimodal image generation with ${imgModel} for candidate ratio ${candidateRatio}...`);
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
-                const payload = {
-                  contents: [
-                    {
-                      parts: [
-                        { inlineData: { mimeType: "image/jpeg", data: illustrationBase64 } },
-                        { text: outpaintPrompt }
-                      ]
-                    }
-                  ],
-                  generationConfig: {
-                    responseModalities: ["IMAGE"]
-                  }
-                };
-
-                const res = await fetch(url, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(payload)
-                });
-
-                if (res.ok) {
-                  const json = await res.json();
-                  const parts = json?.candidates?.[0]?.content?.parts || [];
-                  for (const part of parts) {
-                    if (part.inlineData?.data) {
-                      const rawBuf = Buffer.from(part.inlineData.data, "base64");
-                      backgroundBuffer = await sharp(rawBuf)
-                        .resize(1024, 1024, { fit: "cover", position: "centre" })
-                        .jpeg({ quality: 92 })
-                        .toBuffer();
-                      console.log(`[Stream Preview API] Multimodal ${imgModel} generated backdrop successfully.`);
-                      break;
-                    }
-                  }
-                  if (backgroundBuffer) break;
-                }
-              } catch (gErr: any) {
-                console.warn(`[Stream Preview API] ${imgModel} image generation failed:`, gErr?.message || gErr);
-              }
-            }
+          } catch (restImgErr: any) {
+            console.warn(`[Stream Preview API] Imagen 3 call error:`, restImgErr?.message || restImgErr);
+            break;
           }
         }
       } catch (outpaintErr) {
-        console.warn("[Stream Preview API] AI outpainting failed:", outpaintErr);
+        console.warn("[Stream Preview API] AI backdrop generation exception:", outpaintErr);
       }
 
-      // 4. Bulletproof ambient blur fallback
+      // Bulletproof instant ambient blur fallback (<30ms)
       if (!backgroundBuffer) {
-        console.warn("[Stream Preview API] All AI image generators failed. Falling back to ambient blur backdrop.");
+        console.log("[Stream Preview API] Using high-quality Ambient Blur backdrop.");
         usedFallback = true;
         backgroundBuffer = await sharp(croppedIllustrationBuffer)
           .resize(1024, 1024, { fit: "cover" })

@@ -259,7 +259,7 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64");
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
+    const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
     let layoutText = "";
     let lastError;
 

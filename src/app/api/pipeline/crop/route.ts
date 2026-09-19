@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     const base64Image = originalImageBuffer.toString("base64");
     
     // Fallback list of modern active Gemini models
-    const models = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
+    const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
     let layoutText = "";
 
     const prompt = `The dimensions of the uploaded image are ${width}x${height} pixels. Please identify:
@@ -122,7 +122,8 @@ export async function POST(request: Request) {
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(5000)
         });
 
         if (res.ok) {
