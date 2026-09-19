@@ -28,7 +28,7 @@ async function generateContentWithRetry(ai: any, params: any, retries = 2, delay
   throw new Error("Failed to generate content after retries.");
 }
 
-// Map aspect ratio string to dimensions for the fallback blurred background
+// Map aspect ratio string to dimensions for background
 const getDimensionsForRatio = (ratio: string): { width: number; height: number } => {
   switch (ratio) {
     case "1:1":
@@ -37,9 +37,29 @@ const getDimensionsForRatio = (ratio: string): { width: number; height: number }
       return { width: 576, height: 1024 };
     case "16:9":
       return { width: 1024, height: 576 };
+    case "4:3":
+      return { width: 1024, height: 768 };
     case "3:4":
     default:
       return { width: 768, height: 1024 };
+  }
+};
+
+// Returns prioritized list of aspect ratios to attempt with the AI models
+const getCandidateRatios = (targetRatio: string): string[] => {
+  switch (targetRatio) {
+    case "1:1":
+      // If 1:1 is requested, try 1:1 first, then fallback to 4:3, 3:4, or 16:9 and crop to 1:1
+      return ["1:1", "4:3", "3:4", "16:9"];
+    case "9:16":
+      return ["9:16", "3:4", "1:1", "16:9"];
+    case "16:9":
+      return ["16:9", "4:3", "1:1", "3:4"];
+    case "4:3":
+      return ["4:3", "16:9", "1:1", "3:4"];
+    case "3:4":
+    default:
+      return ["3:4", "9:16", "1:1", "4:3", "16:9"];
   }
 };
 
@@ -140,156 +160,156 @@ export async function POST(request: Request) {
         let generatedBase64 = "";
         let lastImageError;
 
-        // Ensure targetRatio is mapped cleanly to supported Imagen ratios ("1:1", "3:4", "4:3", "9:16", "16:9")
-        const validRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
-        const standardRatio = validRatios.includes(targetRatio)
-          ? targetRatio
-          : (targetRatio === "dual" || targetRatio === "both" ? "16:9" : "3:4");
-
-        // 1. Try Imagen 3 via Direct REST :predict
+        const candidateRatios = getCandidateRatios(targetRatio);
         const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
-        for (const imagenModel of imagenModels) {
-          try {
-            console.log(`[Outpaint API] Attempting REST Imagen predict with ${imagenModel} for ratio ${standardRatio}...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              instances: [
-                { prompt: outpaintPrompt }
-              ],
-              parameters: {
-                sampleCount: 1,
-                aspectRatio: standardRatio,
-                safetySetting: "block_only_high",
-                outputOptions: {
-                  mimeType: "image/jpeg"
-                }
-              }
-            };
 
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
+        for (const candidateRatio of candidateRatios) {
+          if (generatedBase64) break;
 
-            if (res.ok) {
-              const json = await res.json();
-              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-              if (bytes) {
-                console.log(`[Outpaint API] REST ${imagenModel} generated image successfully for ratio ${standardRatio}`);
-                generatedBase64 = bytes;
-                break;
-              }
-            } else {
-              const errBody = await res.text();
-              console.warn(`[Outpaint API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
-            }
-          } catch (restErr: any) {
-            console.warn(`[Outpaint API] REST ${imagenModel} failed: ${restErr.message}`);
-            lastImageError = restErr;
-          }
-        }
-
-        // 2. Try Imagen 3 via SDK generateImages
-        if (!generatedBase64) {
+          // 1. Try Imagen 3 via Direct REST :predict
           for (const imagenModel of imagenModels) {
             try {
-              console.log(`[Outpaint API] Attempting SDK Imagen generation with ${imagenModel} for ratio ${standardRatio}...`);
-              const imagenRes = await ai.models.generateImages({
-                model: imagenModel,
-                prompt: outpaintPrompt,
-                config: {
-                  numberOfImages: 1,
-                  aspectRatio: standardRatio,
-                  outputMimeType: "image/jpeg"
+              console.log(`[Outpaint API] Attempting REST Imagen predict with ${imagenModel} for candidate ratio ${candidateRatio} (target: ${targetRatio})...`);
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
+              const payload = {
+                instances: [
+                  { prompt: outpaintPrompt }
+                ],
+                parameters: {
+                  sampleCount: 1,
+                  aspectRatio: candidateRatio,
+                  safetySetting: "block_only_high",
+                  outputOptions: {
+                    mimeType: "image/jpeg"
+                  }
                 }
+              };
+
+              const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
               });
-              const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-              if (imgBytes) {
-                console.log(`[Outpaint API] SDK ${imagenModel} generated image successfully for ratio ${standardRatio}`);
-                generatedBase64 = imgBytes;
-                break;
+
+              if (res.ok) {
+                const json = await res.json();
+                const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+                if (bytes) {
+                  console.log(`[Outpaint API] REST ${imagenModel} generated image successfully for ratio ${candidateRatio}`);
+                  generatedBase64 = bytes;
+                  break;
+                }
+              } else {
+                const errBody = await res.text();
+                console.warn(`[Outpaint API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
+              }
+            } catch (restErr: any) {
+              console.warn(`[Outpaint API] REST ${imagenModel} failed: ${restErr.message}`);
+              lastImageError = restErr;
+            }
+          }
+
+          // 2. Try Imagen 3 via SDK generateImages
+          if (!generatedBase64) {
+            for (const imagenModel of imagenModels) {
+              try {
+                console.log(`[Outpaint API] Attempting SDK Imagen generation with ${imagenModel} for candidate ratio ${candidateRatio}...`);
+                const imagenRes = await ai.models.generateImages({
+                  model: imagenModel,
+                  prompt: outpaintPrompt,
+                  config: {
+                    numberOfImages: 1,
+                    aspectRatio: candidateRatio,
+                    outputMimeType: "image/jpeg"
+                  }
+                });
+                const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+                if (imgBytes) {
+                  console.log(`[Outpaint API] SDK ${imagenModel} generated image successfully for ratio ${candidateRatio}`);
+                  generatedBase64 = imgBytes;
+                  break;
+                }
+              } catch (e: any) {
+                console.warn(`[Outpaint API] SDK ${imagenModel} failed: ${e.message}`);
+                lastImageError = e;
+              }
+            }
+          }
+
+          // 3. Try Gemini Multimodal Image fallback
+          if (!generatedBase64) {
+            try {
+              console.log(`[Outpaint API] Attempting gemini-3.6-flash / gemini-2.5-flash for candidate ratio ${candidateRatio}...`);
+              let contentsArray: any[] = [];
+              if (mode === "backdrop" || isDisplay) {
+                contentsArray = [outpaintPrompt];
+              } else {
+                contentsArray = [
+                  {
+                    inlineData: {
+                      data: base64Data,
+                      mimeType: "image/png"
+                    }
+                  },
+                  outpaintPrompt
+                ];
+              }
+
+              const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
+              for (const imgModel of fallbackImageModels) {
+                const configsToTry = [
+                  {
+                    responseModalities: ["IMAGE"],
+                    imageConfig: {
+                      aspectRatio: candidateRatio
+                    }
+                  },
+                  {
+                    responseModalities: ["IMAGE"]
+                  }
+                ];
+
+                for (const config of configsToTry) {
+                  try {
+                    const geminiImgRes = await generateContentWithRetry(ai, {
+                      model: imgModel,
+                      contents: contentsArray,
+                      config
+                    });
+
+                    const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
+                    for (const part of parts) {
+                      if (part.inlineData?.data) {
+                        generatedBase64 = part.inlineData.data;
+                        break;
+                      }
+                    }
+                    if (generatedBase64) {
+                      console.log(`[Outpaint API] ${imgModel} generated image successfully for ratio ${candidateRatio}`);
+                      break;
+                    }
+                  } catch (imgModelErr: any) {
+                    console.warn(`[Outpaint API] ${imgModel} failed:`, imgModelErr?.message || imgModelErr);
+                    lastImageError = imgModelErr;
+                  }
+                }
+                if (generatedBase64) break;
               }
             } catch (e: any) {
-              console.warn(`[Outpaint API] SDK ${imagenModel} failed: ${e.message}`);
+              console.warn(`[Outpaint API] Fallback image generation failed: ${e.message}`);
               lastImageError = e;
             }
           }
         }
 
-        // 3. Try Gemini Multimodal Image fallback
-        if (!generatedBase64) {
-          try {
-            console.log(`[Outpaint API] Attempting gemini-3.6-flash / gemini-2.5-flash for ratio ${standardRatio}...`);
-            let contentsArray: any[] = [];
-            if (mode === "backdrop" || isDisplay) {
-              contentsArray = [outpaintPrompt];
-            } else {
-              contentsArray = [
-                {
-                  inlineData: {
-                    data: base64Data,
-                    mimeType: "image/png"
-                  }
-                },
-                outpaintPrompt
-              ];
-            }
-
-            const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
-            for (const imgModel of fallbackImageModels) {
-              // Try with imageConfig first, then fallback to without imageConfig if aspect ratio is not supported by the model
-              const configsToTry = [
-                {
-                  responseModalities: ["IMAGE"],
-                  imageConfig: {
-                    aspectRatio: standardRatio
-                  }
-                },
-                {
-                  responseModalities: ["IMAGE"]
-                }
-              ];
-
-              for (const config of configsToTry) {
-                try {
-                  const geminiImgRes = await generateContentWithRetry(ai, {
-                    model: imgModel,
-                    contents: contentsArray,
-                    config
-                  });
-
-                  const parts = geminiImgRes.candidates?.[0]?.content?.parts || [];
-                  for (const part of parts) {
-                    if (part.inlineData?.data) {
-                      generatedBase64 = part.inlineData.data;
-                      break;
-                    }
-                  }
-                  if (generatedBase64) {
-                    console.log(`[Outpaint API] ${imgModel} generated image successfully for ratio ${standardRatio}`);
-                    break;
-                  }
-                } catch (imgModelErr: any) {
-                  console.warn(`[Outpaint API] ${imgModel} failed:`, imgModelErr?.message || imgModelErr);
-                  lastImageError = imgModelErr;
-                }
-              }
-              if (generatedBase64) break;
-            }
-          } catch (e: any) {
-            console.warn(`[Outpaint API] Fallback image generation failed: ${e.message}`);
-            lastImageError = e;
-          }
-        }
-
         if (generatedBase64) {
-          // Normalize and resize generated background to target dimensions using Sharp
+          // Normalize and resize/crop generated background to target dimensions using Sharp
           const { width: targetW, height: targetH } = getDimensionsForRatio(targetRatio);
+          console.log(`[Outpaint API] Formatting generated background with Sharp to exact target size ${targetW}x${targetH} (fit: cover)...`);
           const rawBuffer = Buffer.from(generatedBase64, "base64");
           const fittedBuffer = await sharp(rawBuffer)
-            .resize(targetW, targetH, { fit: "cover" })
-            .jpeg({ quality: 90 })
+            .resize(targetW, targetH, { fit: "cover", position: "centre" })
+            .jpeg({ quality: 92 })
             .toBuffer();
           return fittedBuffer.toString("base64");
         }

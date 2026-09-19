@@ -623,93 +623,29 @@ export async function POST(request: Request) {
 
         console.log(`[Stream Preview API] Outpainting prompt: "${outpaintPrompt.slice(0, 160)}..."`);
 
-        // 1. Primary: Generate 1:1 backdrop with Imagen 3 via Direct REST API
+        // Try candidate aspect ratios in order: 1:1 first, then 4:3, 3:4, 16:9 and crop to 1:1
+        const candidateRatios = ["1:1", "4:3", "3:4", "16:9"];
         const imagenModels = ["imagen-3.0-generate-002", "imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"];
-        for (const imagenModel of imagenModels) {
-          try {
-            console.log(`[Stream Preview API] Attempting REST predict with ${imagenModel}...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              instances: [
-                { prompt: outpaintPrompt }
-              ],
-              parameters: {
-                sampleCount: 1,
-                aspectRatio: "1:1",
-                safetySetting: "block_only_high",
-                outputOptions: {
-                  mimeType: "image/jpeg"
-                }
-              }
-            };
 
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
+        for (const candidateRatio of candidateRatios) {
+          if (backgroundBuffer) break;
 
-            if (res.ok) {
-              const json = await res.json();
-              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-              if (bytes) {
-                backgroundBuffer = Buffer.from(bytes, "base64");
-                console.log(`[Stream Preview API] REST ${imagenModel} generated backdrop successfully (${backgroundBuffer.length} bytes).`);
-                break;
-              }
-            } else {
-              const errBody = await res.text();
-              console.warn(`[Stream Preview API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
-            }
-          } catch (restImgErr: any) {
-            console.warn(`[Stream Preview API] REST ${imagenModel} failed:`, restImgErr?.message || restImgErr);
-          }
-        }
-
-        // 2. Secondary: Generate with Imagen 3 via @google/genai SDK
-        if (!backgroundBuffer) {
+          // 1. Primary: Generate backdrop with Imagen 3 via Direct REST API
           for (const imagenModel of imagenModels) {
             try {
-              console.log(`[Stream Preview API] Attempting SDK generateImages with ${imagenModel}...`);
-              const imagenRes = await ai.models.generateImages({
-                model: imagenModel,
-                prompt: outpaintPrompt,
-                config: {
-                  numberOfImages: 1,
-                  aspectRatio: "1:1",
-                  outputMimeType: "image/jpeg"
-                }
-              });
-              const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-              if (imgBytes) {
-                backgroundBuffer = Buffer.from(imgBytes, "base64");
-                console.log(`[Stream Preview API] SDK ${imagenModel} generated backdrop successfully.`);
-                break;
-              }
-            } catch (imgErr: any) {
-              console.warn(`[Stream Preview API] SDK ${imagenModel} failed:`, imgErr?.message || imgErr);
-            }
-          }
-        }
-
-        // 3. Tertiary: Generate with Gemini Multimodal Image fallback
-        if (!backgroundBuffer) {
-          const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
-          for (const imgModel of fallbackImageModels) {
-            try {
-              console.log(`[Stream Preview API] Attempting multimodal image generation with ${imgModel}...`);
-              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+              console.log(`[Stream Preview API] Attempting REST predict with ${imagenModel} for candidate ratio ${candidateRatio}...`);
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imagenModel}:predict?key=${encodeURIComponent(apiKey)}`;
               const payload = {
-                contents: [
-                  {
-                    parts: [
-                      { inlineData: { mimeType: "image/jpeg", data: illustrationBase64 } },
-                      { text: outpaintPrompt }
-                    ]
-                  }
+                instances: [
+                  { prompt: outpaintPrompt }
                 ],
-                generationConfig: {
-                  responseModalities: ["IMAGE"]
+                parameters: {
+                  sampleCount: 1,
+                  aspectRatio: candidateRatio,
+                  safetySetting: "block_only_high",
+                  outputOptions: {
+                    mimeType: "image/jpeg"
+                  }
                 }
               };
 
@@ -721,18 +657,101 @@ export async function POST(request: Request) {
 
               if (res.ok) {
                 const json = await res.json();
-                const parts = json?.candidates?.[0]?.content?.parts || [];
-                for (const part of parts) {
-                  if (part.inlineData?.data) {
-                    backgroundBuffer = Buffer.from(part.inlineData.data, "base64");
-                    console.log(`[Stream Preview API] Multimodal ${imgModel} generated backdrop successfully.`);
-                    break;
-                  }
+                const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+                if (bytes) {
+                  const rawBuf = Buffer.from(bytes, "base64");
+                  backgroundBuffer = await sharp(rawBuf)
+                    .resize(1024, 1024, { fit: "cover", position: "centre" })
+                    .jpeg({ quality: 92 })
+                    .toBuffer();
+                  console.log(`[Stream Preview API] REST ${imagenModel} generated backdrop successfully (${backgroundBuffer.length} bytes).`);
+                  break;
                 }
-                if (backgroundBuffer) break;
+              } else {
+                const errBody = await res.text();
+                console.warn(`[Stream Preview API] REST ${imagenModel} HTTP ${res.status}:`, errBody.slice(0, 200));
               }
-            } catch (gErr: any) {
-              console.warn(`[Stream Preview API] ${imgModel} image generation failed:`, gErr?.message || gErr);
+            } catch (restImgErr: any) {
+              console.warn(`[Stream Preview API] REST ${imagenModel} failed:`, restImgErr?.message || restImgErr);
+            }
+          }
+
+          // 2. Secondary: Generate with Imagen 3 via @google/genai SDK
+          if (!backgroundBuffer) {
+            for (const imagenModel of imagenModels) {
+              try {
+                console.log(`[Stream Preview API] Attempting SDK generateImages with ${imagenModel} for candidate ratio ${candidateRatio}...`);
+                const imagenRes = await ai.models.generateImages({
+                  model: imagenModel,
+                  prompt: outpaintPrompt,
+                  config: {
+                    numberOfImages: 1,
+                    aspectRatio: candidateRatio,
+                    outputMimeType: "image/jpeg"
+                  }
+                });
+                const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+                if (imgBytes) {
+                  const rawBuf = Buffer.from(imgBytes, "base64");
+                  backgroundBuffer = await sharp(rawBuf)
+                    .resize(1024, 1024, { fit: "cover", position: "centre" })
+                    .jpeg({ quality: 92 })
+                    .toBuffer();
+                  console.log(`[Stream Preview API] SDK ${imagenModel} generated backdrop successfully.`);
+                  break;
+                }
+              } catch (imgErr: any) {
+                console.warn(`[Stream Preview API] SDK ${imagenModel} failed:`, imgErr?.message || imgErr);
+              }
+            }
+          }
+
+          // 3. Tertiary: Generate with Gemini Multimodal Image fallback
+          if (!backgroundBuffer) {
+            const fallbackImageModels = ["gemini-3.6-flash", "gemini-2.5-flash"];
+            for (const imgModel of fallbackImageModels) {
+              try {
+                console.log(`[Stream Preview API] Attempting multimodal image generation with ${imgModel} for candidate ratio ${candidateRatio}...`);
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+                const payload = {
+                  contents: [
+                    {
+                      parts: [
+                        { inlineData: { mimeType: "image/jpeg", data: illustrationBase64 } },
+                        { text: outpaintPrompt }
+                      ]
+                    }
+                  ],
+                  generationConfig: {
+                    responseModalities: ["IMAGE"]
+                  }
+                };
+
+                const res = await fetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                  const json = await res.json();
+                  const parts = json?.candidates?.[0]?.content?.parts || [];
+                  for (const part of parts) {
+                    if (part.inlineData?.data) {
+                      const rawBuf = Buffer.from(part.inlineData.data, "base64");
+                      backgroundBuffer = await sharp(rawBuf)
+                        .resize(1024, 1024, { fit: "cover", position: "centre" })
+                        .jpeg({ quality: 92 })
+                        .toBuffer();
+                      console.log(`[Stream Preview API] Multimodal ${imgModel} generated backdrop successfully.`);
+                      break;
+                    }
+                  }
+                  if (backgroundBuffer) break;
+                }
+              } catch (gErr: any) {
+                console.warn(`[Stream Preview API] ${imgModel} image generation failed:`, gErr?.message || gErr);
+              }
             }
           }
         }
