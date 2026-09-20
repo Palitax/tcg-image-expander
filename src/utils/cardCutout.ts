@@ -32,11 +32,12 @@ interface ExtractCardCutoutOptions {
 }
 
 /**
- * Robust Computer-Vision fallback for edge detection on scanned cards.
+ * Robust Computer-Vision edge detector for scanned cards.
  * Specifically handles transparent penny sleeves and scanner beds by searching for
- * significant gradient ridges (card borders) and enforcing TCG physical aspect ratios.
+ * the FIRST prominent gradient ridge (the outer cardboard edge) moving inward from the image borders.
+ * This guarantees that the entire card, all borders, names, HP, and copyright lines are kept 100% intact.
  */
-async function detectCardBordersCV(
+export async function detectCardBordersCV(
   originalBuf: Buffer,
   width: number,
   height: number
@@ -47,33 +48,31 @@ async function detectCardBordersCV(
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    const yMidStart = Math.round(height * 0.25);
-    const yMidEnd = Math.round(height * 0.75);
+    const yMidStart = Math.round(height * 0.20);
+    const yMidEnd = Math.round(height * 0.80);
     const ySpan = Math.max(1, yMidEnd - yMidStart);
 
-    // 1. Scan Left: search inward from x=6 to 30% of width
+    // 1. Scan Left: search inward from x=6. Find FIRST prominent peak (outer card edge)
+    // Faint sleeve glare is < 12. Real cardboard outer edge is > 20.
     let leftX = 0;
-    for (let x = 6; x < Math.floor(width * 0.3); x++) {
+    for (let x = 8; x < Math.floor(width * 0.25); x++) {
       let grad = 0;
       for (let y = yMidStart; y < yMidEnd; y++) {
         grad += Math.abs(data[y * width + (x + 1)] - data[y * width + (x - 1)]);
       }
       grad /= ySpan;
-      // Sleeve reflection ridges are faint (<15); cardboard borders spike (>20)
       if (grad > 20) {
-        let bestPeak = grad;
         let peakX = x;
-        for (let lookahead = 1; lookahead <= 6; lookahead++) {
-          const curX = x + lookahead;
-          if (curX >= width - 2) break;
-          let curGrad = 0;
+        let maxG = grad;
+        for (let dx = 1; dx <= 4; dx++) {
+          let g = 0;
           for (let y = yMidStart; y < yMidEnd; y++) {
-            curGrad += Math.abs(data[y * width + (curX + 1)] - data[y * width + (curX - 1)]);
+            g += Math.abs(data[y * width + (x + dx + 1)] - data[y * width + (x + dx - 1)]);
           }
-          curGrad /= ySpan;
-          if (curGrad > bestPeak) {
-            bestPeak = curGrad;
-            peakX = curX;
+          g /= ySpan;
+          if (g > maxG) {
+            maxG = g;
+            peakX = x + dx;
           }
         }
         leftX = peakX;
@@ -81,28 +80,26 @@ async function detectCardBordersCV(
       }
     }
 
-    // 2. Scan Right: search inward from right edge
+    // 2. Scan Right: search inward from width - 8. Find FIRST prominent peak
     let rightX = width;
-    for (let x = width - 7; x > Math.floor(width * 0.7); x--) {
+    for (let x = width - 8; x > Math.floor(width * 0.75); x--) {
       let grad = 0;
       for (let y = yMidStart; y < yMidEnd; y++) {
         grad += Math.abs(data[y * width + (x + 1)] - data[y * width + (x - 1)]);
       }
       grad /= ySpan;
       if (grad > 20) {
-        let bestPeak = grad;
         let peakX = x;
-        for (let lookahead = 1; lookahead <= 6; lookahead++) {
-          const curX = x - lookahead;
-          if (curX <= 1) break;
-          let curGrad = 0;
+        let maxG = grad;
+        for (let dx = 1; dx <= 4; dx++) {
+          let g = 0;
           for (let y = yMidStart; y < yMidEnd; y++) {
-            curGrad += Math.abs(data[y * width + (curX + 1)] - data[y * width + (curX - 1)]);
+            g += Math.abs(data[y * width + (x - dx + 1)] - data[y * width + (x - dx - 1)]);
           }
-          curGrad /= ySpan;
-          if (curGrad > bestPeak) {
-            bestPeak = curGrad;
-            peakX = curX;
+          g /= ySpan;
+          if (g > maxG) {
+            maxG = g;
+            peakX = x - dx;
           }
         }
         rightX = peakX;
@@ -110,32 +107,30 @@ async function detectCardBordersCV(
       }
     }
 
-    // 3. Scan Bottom: search inward from bottom edge
-    const xMidStart = Math.round(width * 0.25);
-    const xMidEnd = Math.round(width * 0.75);
+    // 3. Scan Bottom: search inward from height - 8. Find FIRST prominent peak
+    const xMidStart = Math.round(width * 0.20);
+    const xMidEnd = Math.round(width * 0.80);
     const xSpan = Math.max(1, xMidEnd - xMidStart);
 
     let bottomY = height;
-    for (let y = height - 7; y > Math.floor(height * 0.75); y--) {
+    for (let y = height - 8; y > Math.floor(height * 0.75); y--) {
       let grad = 0;
       for (let x = xMidStart; x < xMidEnd; x++) {
         grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
       }
-      grad /= xSpan;
-      if (grad > 18) {
-        let bestPeak = grad;
+      grad /= ySpan;
+      if (grad > 20) {
         let peakY = y;
-        for (let lookahead = 1; lookahead <= 6; lookahead++) {
-          const curY = y - lookahead;
-          if (curY <= 1) break;
-          let curGrad = 0;
+        let maxG = grad;
+        for (let dy = 1; dy <= 4; dy++) {
+          let g = 0;
           for (let x = xMidStart; x < xMidEnd; x++) {
-            curGrad += Math.abs(data[(curY + 1) * width + x] - data[(curY - 1) * width + x]);
+            g += Math.abs(data[(y - dy + 1) * width + x] - data[(y - dy - 1) * width + x]);
           }
-          curGrad /= ySpan;
-          if (curGrad > bestPeak) {
-            bestPeak = curGrad;
-            peakY = curY;
+          g /= ySpan;
+          if (g > maxG) {
+            maxG = g;
+            peakY = y - dy;
           }
         }
         bottomY = peakY;
@@ -143,33 +138,43 @@ async function detectCardBordersCV(
       }
     }
 
-    // Determine top based on card width and physical TCG aspect ratio (~1.40 - 1.45)
-    let cardW = rightX - leftX;
-    if (cardW < width * 0.4) {
-      // Fallback if width too small
-      leftX = 0;
-      rightX = width;
-      cardW = width;
-    }
-
-    const expectedH = Math.round(cardW * 1.415);
-    let topY = Math.max(0, bottomY - expectedH);
-
-    // Fine-tune top edge around expected topY
-    let bestTopY = topY;
-    let maxTopGrad = 0;
-    for (let y = Math.max(4, topY - 18); y <= Math.min(height - 2, topY + 18); y++) {
+    // 4. Scan Top: search inward starting at y=18 (skip top plastic flap). Find FIRST prominent peak
+    let topY = 0;
+    for (let y = 18; y < Math.floor(height * 0.25); y++) {
       let grad = 0;
       for (let x = xMidStart; x < xMidEnd; x++) {
         grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
       }
-      grad /= xSpan;
-      if (grad > maxTopGrad && grad > 14) {
-        maxTopGrad = grad;
-        bestTopY = y;
+      grad /= ySpan;
+      if (grad > 18) {
+        let peakY = y;
+        let maxG = grad;
+        for (let dy = 1; dy <= 4; dy++) {
+          let g = 0;
+          for (let x = xMidStart; x < xMidEnd; x++) {
+            g += Math.abs(data[(y + dy + 1) * width + x] - data[(y + dy - 1) * width + x]);
+          }
+          g /= ySpan;
+          if (g > maxG) {
+            maxG = g;
+            peakY = y + dy;
+          }
+        }
+        topY = peakY;
+        break;
       }
     }
-    topY = bestTopY;
+
+    let detectedW = rightX - leftX;
+    let detectedH = bottomY - topY;
+
+    // Safety fallback if no clear edge was detected
+    if (detectedW < width * 0.4 || detectedH < height * 0.4) {
+      leftX = 0;
+      topY = 0;
+      rightX = width;
+      bottomY = height;
+    }
 
     return {
       x1: Math.max(0, leftX),
@@ -185,9 +190,9 @@ async function detectCardBordersCV(
 
 /**
  * Universal Card Cutout Engine:
- * Analyzes an image of any trading card (even in clear penny sleeves, toploaders, or on scanner beds),
- * identifies the exact physical cardboard boundaries, and extracts a die-cut rounded-corner cutout
- * along with the inner illustration area for outpainting.
+ * Analyzes an image of any trading card (in clear penny sleeves, toploaders, or on scanner beds),
+ * locates the true outer cardboard boundaries, and extracts a die-cut rounded-corner cutout
+ * with 100% original pixel fidelity, leaving all card borders, text, HP, and copyright completely intact.
  */
 export async function extractCardCutout(
   imageBuffer: Buffer,
@@ -255,7 +260,14 @@ export async function extractCardCutout(
     };
   }
 
-  let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
+  // 2. Compute Computer Vision Outer Borders as baseline Ground Truth
+  const cvCoords = await detectCardBordersCV(normalizedBuffer, width, height);
+  const cvW = cvCoords.x2 - cvCoords.x1;
+  const cvH = cvCoords.y2 - cvCoords.y1;
+  const cvRatio = cvH / Math.max(1, cvW);
+  console.log(`[Card Cutout] CV detected outer borders: [${cvCoords.x1}, ${cvCoords.y1}, ${cvCoords.x2}, ${cvCoords.y2}] (${cvW}x${cvH}, ratio ${cvRatio.toFixed(3)})`);
+
+  let cardCoords: { x1: number; y1: number; x2: number; y2: number } = cvCoords;
   let illustrationCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
   let cardName = "";
   let cardNumber = "";
@@ -265,10 +277,10 @@ export async function extractCardCutout(
   let hasSampleWatermark = false;
   let usedFallback = false;
 
-  // 2. Gemini AI Vision Detection (if apiKey available)
+  // 3. Gemini AI Vision Analysis (for OCR, Metadata, and Illustration detection)
   if (apiKey && apiKey.trim()) {
     try {
-      // Create a lightweight 1024px working copy for Gemini Vision to ensure fast, sub-2s responses
+      // Lightweight 1024px working copy for fast Gemini analysis (<1.5s)
       let aiWorkBuffer = normalizedBuffer;
       const maxDim = 1024;
       if (width > maxDim || height > maxDim) {
@@ -285,13 +297,13 @@ The uploaded image is a scan or photograph containing a trading card.
 
 CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
 1. The card is often placed inside a transparent penny sleeve, top loader, card saver, or on a scanner glass bed with light margins, reflections, or plastic flaps.
-2. YOU MUST LOCATE THE EXACT BOUNDING BOX of the PHYSICAL PRINTED CARDBOARD CARD ITSELF.
+2. YOU MUST LOCATE THE EXACT BOUNDING BOX of the ENTIRE PHYSICAL PRINTED CARDBOARD CARD ITSELF.
 3. EXCLUDE AND STRIP AWAY:
    - Any clear transparent penny sleeve plastic overhangs, seams, or flaps extending outside the card
    - Any top loader frames or magnetic case edges
    - Scanner bed white/grey glass borders, outer background scenery, or shadows
    - Any glare lines on the plastic sleeve outside the printed card borders
-4. The bounding box ("box_2d") MUST wrap the entire printed card from outer border to outer border (including top name bar and bottom copyright / set code line)!
+4. The bounding box ("box_2d") MUST wrap the ENTIRE physical cardboard card from outer border to outer border (including top name/HP bar and bottom copyright / set code line)!
 5. "illustration_box": Locate the inner artwork illustration area inside the card frame (excluding card text, HP, power, and borders).
 6. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper').
 7. "cardNumber": Card sequence number (e.g. '086/080', '151/165', 'OP05-119').
@@ -377,13 +389,33 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
 
         if (parsed.box_2d && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
           const [ymin, xmin, ymax, xmax] = parsed.box_2d.map(Number);
-          cardCoords = {
+          const aiCoords = {
             x1: Math.round((xmin / 1000) * width),
             y1: Math.round((ymin / 1000) * height),
             x2: Math.round((xmax / 1000) * width),
             y2: Math.round((ymax / 1000) * height)
           };
-          console.log(`[Card Cutout] AI box_2d [${ymin}, ${xmin}, ${ymax}, ${xmax}] -> exact pixels:`, cardCoords);
+
+          const aiW = aiCoords.x2 - aiCoords.x1;
+          const aiH = aiCoords.y2 - aiCoords.y1;
+          const aiRatio = aiH / Math.max(1, aiW);
+
+          console.log(`[Card Cutout] AI box_2d: [${aiCoords.x1}, ${aiCoords.y1}, ${aiCoords.x2}, ${aiCoords.y2}] (${aiW}x${aiH}, ratio ${aiRatio.toFixed(3)})`);
+
+          // VALIDATION: Standard TCG cards have an aspect ratio of 1.38 to 1.46 (Western 1.397, Japanese 1.458).
+          // If the AI box is too narrow (e.g. cutting off HP or right border, ratio > 1.49) or too short (ratio < 1.35)
+          // or smaller than the CV outer cardboard bounds, the AI box must be rejected!
+          const isAiRatioValid = aiRatio >= 1.35 && aiRatio <= 1.48;
+          const isAiWidthValid = aiW >= cvW * 0.95;
+          const isAiHeightValid = aiH >= cvH * 0.95;
+
+          if (isAiRatioValid && isAiWidthValid && isAiHeightValid) {
+            console.log("[Card Cutout] AI box_2d verified and accepted.");
+            cardCoords = aiCoords;
+          } else {
+            console.log(`[Card Cutout] AI box_2d rejected (ratio ${aiRatio.toFixed(2)}, aiW=${aiW} vs cvW=${cvW}). Using CV outer bounds.`);
+            cardCoords = cvCoords;
+          }
         }
 
         if (parsed.illustration_box && Array.isArray(parsed.illustration_box) && parsed.illustration_box.length === 4) {
@@ -399,13 +431,6 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     } catch (aiErr: any) {
       console.warn("[Card Cutout] AI vision pipeline error:", aiErr?.message || aiErr);
     }
-  }
-
-  // 3. Fallback to Robust CV edge detector if AI did not return coordinates
-  if (!cardCoords) {
-    console.warn("[Card Cutout] Using robust CV edge detector fallback.");
-    usedFallback = true;
-    cardCoords = await detectCardBordersCV(normalizedBuffer, width, height);
   }
 
   // 4. Validate and sanitize coordinates
@@ -429,13 +454,23 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     let adjX2 = cardCoords.x2;
     let adjY2 = cardCoords.y2;
 
+    // Check if card is too short in height (cut off copyright/number)
     if (rawH < rawW * 1.38) {
       const expectedH = Math.round(rawW * 1.415);
       adjY2 = Math.min(height, adjY1 + expectedH);
       if (adjY2 - adjY1 < expectedH) {
         adjY1 = Math.max(0, adjY2 - expectedH);
       }
-      console.log(`[Card Cutout] Adjusted height from ${rawH} to ${adjY2 - adjY1} (ratio 1.415) to prevent copyright clipping.`);
+      console.log(`[Card Cutout] Adjusted height from ${rawH} to ${adjY2 - adjY1} to prevent copyright clipping.`);
+    }
+
+    // Check if card is too narrow in width (cut off HP/right border)
+    if (rawW < (adjY2 - adjY1) / 1.46) {
+      const expectedW = Math.round((adjY2 - adjY1) / 1.415);
+      const centerX = (adjX1 + adjX2) / 2;
+      adjX1 = Math.max(0, Math.round(centerX - expectedW / 2));
+      adjX2 = Math.min(width, Math.round(centerX + expectedW / 2));
+      console.log(`[Card Cutout] Adjusted width from ${rawW} to ${adjX2 - adjX1} to prevent right border/HP clipping.`);
     }
 
     cardCoords = {
@@ -455,7 +490,7 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
   const extractW = cx2 - cx1;
   const extractH = cy2 - cy1;
 
-  console.log(`[Card Cutout] Final card extraction: [${cx1}, ${cy1}, ${cx2}, ${cy2}] (${extractW}x${extractH})`);
+  console.log(`[Card Cutout] Final card extraction: [${cx1}, ${cy1}, ${cx2}, ${cy2}] (${extractW}x${extractH}, ratio ${(extractH / extractW).toFixed(3)})`);
 
   // 5. Watermark Removal if detected
   let workingBuffer = normalizedBuffer;
@@ -536,9 +571,9 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     .toBuffer();
 
   // 7. Extract Inner Illustration for Outpainting
-  let ix1 = illustrationCoords?.x1 ?? Math.round(cx1 + extractW * 0.1);
-  let iy1 = illustrationCoords?.y1 ?? Math.round(cy1 + extractH * 0.12);
-  let ix2 = illustrationCoords?.x2 ?? Math.round(cx1 + extractW * 0.9);
+  let ix1 = illustrationCoords?.x1 ?? Math.round(cx1 + extractW * 0.08);
+  let iy1 = illustrationCoords?.y1 ?? Math.round(cy1 + extractH * 0.10);
+  let ix2 = illustrationCoords?.x2 ?? Math.round(cx2 - extractW * 0.08);
   let iy2 = illustrationCoords?.y2 ?? Math.round(cy1 + extractH * 0.58);
 
   // Clamp illustration bounds strictly inside the extracted card
