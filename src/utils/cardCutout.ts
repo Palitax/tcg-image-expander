@@ -477,23 +477,30 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     cardCoords = await detectCardBordersCV(normalizedBuffer, width, height);
   }
 
-  // 4. Inward Border Refinement & Sleeve Stripping
-  try {
-    const { data: greyData } = await sharp(normalizedBuffer)
-      .greyscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
+  // 4. Inward Border Refinement & Sleeve Stripping (ONLY FOR CV FALLBACK!)
+  // When Gemini AI successfully detects the card bounding box, we do NOT run 1D gradient refinement.
+  // Gemini has full semantic awareness of card headers, borders, and sleeves.
+  // 1D gradient scans lack semantic awareness and jump into inner artwork/headers or mistake copyright lines for sleeve edges.
+  if (usedFallback) {
+    try {
+      const { data: greyData } = await sharp(normalizedBuffer)
+        .greyscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
 
-    const refined = refineCardCutoutBorders(greyData, width, height, cardCoords);
-    console.log(`[Card Cutout] Sleeve-stripped cardboard coordinates: [${refined.x1}, ${refined.y1}, ${refined.x2}, ${refined.y2}]`);
-    cardCoords = refined;
-  } catch (refineErr: any) {
-    console.warn("[Card Cutout] Border refinement skipped:", refineErr?.message || refineErr);
+      const refined = refineCardCutoutBorders(greyData, width, height, cardCoords);
+      console.log(`[Card Cutout CV] Verfeinerte Fallback-Kartonkoordinaten: [${refined.x1}, ${refined.y1}, ${refined.x2}, ${refined.y2}]`);
+      cardCoords = refined;
+    } catch (refineErr: any) {
+      console.warn("[Card Cutout CV] Border refinement skipped:", refineErr?.message || refineErr);
+    }
+  } else {
+    console.log(`[Card Cutout] Verwende direkte semantische Gemini-Koordinaten: [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}]`);
   }
 
-  // 5. Mathematical TCG Aspect Ratio Guard & Rigid Geometry Anchor
-  // Physical standard: 63mm x 88mm = 1.3968 (Pokémon, One Piece, MTG, Lorcana)
-  // Japanese Small: 59mm x 86mm = 1.4576 (Yu-Gi-Oh)
+  // 5. Mathematical TCG Aspect Ratio Guard & Plausibility Check
+  // Standard card ratio: 63mm x 88mm = 1.3968 (Pokémon, MTG, One Piece, Lorcana)
+  // Japanese small ratio: 59mm x 86mm = 1.4576 (Yu-Gi-Oh)
   let rawW = cardCoords.x2 - cardCoords.x1;
   let rawH = cardCoords.y2 - cardCoords.y1;
   let ratio = rawH / Math.max(1, rawW);
@@ -508,46 +515,55 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
   if (isGenuineEdgeToEdge) {
     console.log("[Card Cutout] Echter randloser Kartenscan erkannt.");
     cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
-  } else {
+  } else if (usedFallback) {
+    // Rigid aspect ratio enforcement ONLY when using heuristic CV Fallback
     const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
     const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.3968;
     const expectedH = Math.round(rawW * TARGET_RATIO);
 
-    // 5a. Header / Top Border Breathing Room Protection:
-    // In any genuine trading card, the distance between the top cardboard edge and the illustration/header
-    // is at least ~3.2% of the card height (~22-25px on a 700px card).
-    // If Gemini's illustrationCoords is present and cardCoords.y1 is too close to it, cardCoords.y1 was clipped!
-    if (illustrationCoords && illustrationCoords.y1 > cardCoords.y1) {
-      const topDistance = illustrationCoords.y1 - cardCoords.y1;
-      const minTopMargin = Math.round(expectedH * 0.035);
-      if (topDistance < minTopMargin) {
-        const topShortage = minTopMargin - topDistance;
-        console.log(`[Card Cutout] Oberer Rand war um ${topShortage}px zu eng am Motiv (Abstand ${topDistance}px < min ${minTopMargin}px). Rand nach oben erweitert!`);
-        cardCoords.y1 = Math.max(0, cardCoords.y1 - topShortage);
-        cardCoords.y2 = cardCoords.y1 + expectedH;
-        rawH = cardCoords.y2 - cardCoords.y1;
-        ratio = rawH / Math.max(1, rawW);
-      }
-    }
-
-    // 5b. Width & Height Harmonization:
-    // If ratio < TARGET_RATIO - 0.012 (card too wide): Trim width inward symmetrically from left and right
-    if (ratio < (TARGET_RATIO - 0.012)) {
+    if (ratio < (TARGET_RATIO - 0.015)) {
       const expectedW = Math.round(rawH / TARGET_RATIO);
       if (expectedW < rawW) {
         const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
         const newX1 = Math.max(0, Math.round(centerX - expectedW / 2));
         const newX2 = Math.min(width, Math.round(centerX + expectedW / 2));
-        console.log(`[Card Cutout] Breiten-Trim: Passe Breite von ${rawW} auf ${newX2 - newX1} an (Soll-Verhältnis ${TARGET_RATIO.toFixed(3)}), um Hüllenränder zu entfernen.`);
+        console.log(`[Card Cutout CV] Breiten-Trim: Passe Breite von ${rawW} auf ${newX2 - newX1} an.`);
         cardCoords.x1 = newX1;
         cardCoords.x2 = newX2;
       }
-    } else if (ratio > (TARGET_RATIO + 0.012)) {
-      // If ratio > TARGET_RATIO + 0.012: The scan height contains excess transparent sleeve flap at the bottom!
-      // Trim height inward from the bottom to eliminate the sleeve flap:
+    } else if (ratio > (TARGET_RATIO + 0.015)) {
       if (expectedH < rawH) {
-        console.log(`[Card Cutout] Sleeve-Trim am Boden: Höhe von ${rawH} auf ${expectedH} korrigiert (Soll-Verhältnis ${TARGET_RATIO.toFixed(3)}). Hülle abgeschnitten.`);
+        console.log(`[Card Cutout CV] Sleeve-Trim am Boden: Höhe von ${rawH} auf ${expectedH} angepasst.`);
         cardCoords.y2 = cardCoords.y1 + expectedH;
+      }
+    }
+  } else {
+    // Gemini AI Vision path:
+    // Plausibility check: Do NOT force rigid aspect ratio if ratio is already plausible (1.33 - 1.46)
+    const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
+    const minPlausibleRatio = isSmallJapaneseGame ? 1.38 : 1.33;
+    const maxPlausibleRatio = isSmallJapaneseGame ? 1.52 : 1.46;
+    const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.3968;
+
+    if (ratio >= minPlausibleRatio && ratio <= maxPlausibleRatio) {
+      console.log(`[Card Cutout] Gemini-Seitenverhältnis (${ratio.toFixed(3)}) liegt im idealen Bereich (${minPlausibleRatio.toFixed(2)} - ${maxPlausibleRatio.toFixed(2)}). Original-KI-Koordinaten werden 1:1 beibehalten.`);
+    } else if (ratio > maxPlausibleRatio) {
+      // Significantly too tall (ratio > 1.46) -> likely captured transparent penny sleeve extension below card
+      const expectedH = Math.round(rawW * TARGET_RATIO);
+      if (expectedH < rawH) {
+        console.log(`[Card Cutout] Plausibilitätskorrektur: Hülle am Boden ragte heraus (Verhältnis ${ratio.toFixed(3)} > ${maxPlausibleRatio}). Passe y2 von ${cardCoords.y2} auf ${cardCoords.y1 + expectedH} an.`);
+        cardCoords.y2 = cardCoords.y1 + expectedH;
+      }
+    } else if (ratio < minPlausibleRatio) {
+      // Significantly too wide (ratio < 1.33) -> width includes side borders/scenery
+      const expectedW = Math.round(rawH / TARGET_RATIO);
+      if (expectedW < rawW) {
+        const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+        const newX1 = Math.max(0, Math.round(centerX - expectedW / 2));
+        const newX2 = Math.min(width, Math.round(centerX + expectedW / 2));
+        console.log(`[Card Cutout] Plausibilitätskorrektur: Breite war zu weit gefasst (Verhältnis ${ratio.toFixed(3)} < ${minPlausibleRatio}). Passe x1/x2 an.`);
+        cardCoords.x1 = newX1;
+        cardCoords.x2 = newX2;
       }
     }
   }
