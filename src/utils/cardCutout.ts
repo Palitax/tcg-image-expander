@@ -342,29 +342,44 @@ export async function extractCardCutout(
 
       const base64Image = aiWorkBuffer.toString("base64");
 
-      const prompt = `You are an expert computer vision model specializing in Trading Card Game (TCG) scanning and segmentation (Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana).
-The uploaded image is a scan or photograph containing a trading card.
+      const prompt = `You are an ultra-precise TCG Computer Vision Analyzer specialized in Pokémon cards (Japanese & English) and other trading cards.
+Your task is to detect the EXACT pixel coordinates of high-contrast printed graphic markers inside the card to allow programmatic border reconstruction.
 
-CRUCIAL REQUIREMENT FOR SLEEVED CARDS:
-Trading cards in protective sleeves have an empty transparent plastic lip extending 2-5mm at the bottom edge. You MUST detect the edge of the printed, physical opaque cardboard card itself, NOT the outer transparent sleeve edge. The bottom coordinate (ymax) must be placed directly underneath the bottom silver/yellow border, right below the copyright line, excluding the clear plastic lip.
+### CRITICAL RULES & ANTI-HALLUCINATION:
+1. STRICTLY IGNORE TRANSPARENT SLEEVES AND TOPLOADERS:
+   - The card is encased in a clear plastic sleeve.
+   - NEVER return coordinates of the outer plastic lips, empty sleeve overhangs, glare, or table background.
+   - We do NOT need the physical card outer border coordinates. We only need the inner printed ink anchors.
 
-BOUNDING BOX RULES ("box_2d"):
-1. "box_2d": [ymin, xmin, ymax, xmax] integers normalized 0 to 1000.
-   - TOP (ymin): Outermost printed cardboard border strictly ABOVE the card name, Stage banner ('たね' / 'Basic'), and HP. DO NOT cut off the top card border or start inside the card header!
-   - BOTTOM (ymax): Placed directly underneath the bottom silver/yellow border, right below the tiny printed copyright line (e.g. '©2025 Pokémon/Nintendo/Creatures/GAME FREAK'). EXCLUDE the 2-5mm empty transparent plastic sleeve lip extending below the card!
-   - LEFT (xmin) & RIGHT (xmax): Physical printed cardboard edges. Exclude transparent sleeve seams, scanner beds, or shadows.
-2. EXCLUDE AND STRIP AWAY:
-   - Any clear transparent penny sleeve plastic overhangs, seams, or flaps extending outside the card! In particular, penny sleeves often extend 2mm-6mm below the bottom edge of the card. EXCLUDE this transparent plastic flap completely!
-   - Any top loader frames or magnetic case edges
-   - Scanner bed white/grey glass borders, outer background scenery, or shadows
-   - Any glare lines on the plastic sleeve outside the printed card borders
-3. "illustration_box": Inner artwork illustration area inside the card frame (excluding card text, HP, power, and borders).
-4. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile').
-5. "cardNumber": Card sequence number (e.g. '086/080', '151/165', '070/063', 'OP05-119').
-6. "setCode": Set registration code (e.g. 'SV8', 'M2', 'M1S', 'SV1L', 'OP05').
-7. "setName": Official English set name (e.g. 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
-8. "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude any characters, pokemon, humans, text, or card borders.
-9. "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.`;
+2. TARGET ANCHORS (PRINTED INK ONLY):
+   - "outer_horizontal_card_edges":
+     - Exact [left_x, right_x] where the physical printed cardboard card ends horizontally.
+     - Standard TCG cards sit flush horizontally in standard penny sleeves; detect the printed card edge, ignoring sleeve seams.
+   - "header_top_edge_y":
+     - The EXACT top edge of the uppermost printed text/icon in the header.
+     - Specifically: the very top pixel of the stage symbol ("たね", "1進化", "Basic") or the HP/Name letters.
+     - Do NOT include the gray/yellow card border above it.
+   - "copyright_bottom_edge_y":
+     - The EXACT bottom baseline edge of the single-line copyright text at the very bottom ("©202X Pokémon/Nintendo...").
+     - The coordinate must touch the lowest pixel of the letters (e.g. baseline of 'g', 'p', 'y').
+     - Do NOT include the gray/yellow card border or the clear plastic sleeve below it.
+   - "footer_left_marker":
+     - Bounding box [ymin, xmin, ymax, xmax] of the bottom-left set identifier strip (Set-Code, Rarity, Card-Number, e.g. "085/083 AR").
+   - "illustration_box":
+     - Bounding box [ymin, xmin, ymax, xmax] of the inner illustration area inside the card frame (excluding card text, HP, power, and borders).
+   - "box_2d":
+     - General fallback bounding box [ymin, xmin, ymax, xmax] of the physical card itself.
+
+3. METADATA:
+   - "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile').
+   - "cardNumber": Card sequence number (e.g. '086/080', '151/165', '070/063', 'OP05-119').
+   - "setCode": Set registration code (e.g. 'SV8', 'M2', 'M1S', 'SV1L', 'OP05').
+   - "setName": Official English set name (e.g. 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
+   - "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude characters/pokemon/text.
+   - "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.
+
+4. COORDINATE FORMAT:
+   - Return all coordinates normalized to the [0, 1000] integer scale.`;
 
       const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
       let layoutText = "";
@@ -387,10 +402,28 @@ BOUNDING BOX RULES ("box_2d"):
               responseSchema: {
                 type: "OBJECT",
                 properties: {
+                  outer_horizontal_card_edges: {
+                    type: "ARRAY",
+                    items: { type: "INTEGER" },
+                    description: "Exact [left_x, right_x] normalized 0-1000 where the printed cardboard ends horizontally, ignoring sleeve seams."
+                  },
+                  header_top_edge_y: {
+                    type: "INTEGER",
+                    description: "Normalized 0-1000 Y-coordinate of the uppermost printed text/icon in the header (top pixel of stage symbol 'たね'/'Basic' or Name/HP). Exclude card border above."
+                  },
+                  copyright_bottom_edge_y: {
+                    type: "INTEGER",
+                    description: "Normalized 0-1000 Y-coordinate of the bottom baseline of the single-line copyright text at the bottom ('©202X Pokémon...'). Exclude card border or clear plastic below."
+                  },
+                  footer_left_marker: {
+                    type: "ARRAY",
+                    items: { type: "INTEGER" },
+                    description: "Bounding box [ymin, xmin, ymax, xmax] of bottom-left set identifier strip (Set-Code, Rarity, Card-Number)."
+                  },
                   box_2d: {
                     type: "ARRAY",
                     items: { type: "INTEGER" },
-                    description: "Bounding box of the physical printed cardboard trading card as [ymin, xmin, ymax, xmax] integers normalized 0 to 1000. CRUCIAL: Trading cards in protective sleeves have an empty transparent plastic lip extending 2-5mm at the bottom edge. You MUST detect the edge of the printed, physical opaque cardboard card itself, NOT the outer transparent sleeve edge. The bottom coordinate (ymax) must be placed directly underneath the bottom silver/yellow border, right below the copyright line, excluding the clear plastic lip."
+                    description: "Fallback bounding box [ymin, xmin, ymax, xmax] normalized 0 to 1000 of the physical card."
                   },
                   illustration_box: {
                     type: "ARRAY",
@@ -404,7 +437,7 @@ BOUNDING BOX RULES ("box_2d"):
                   sceneryDescription: { type: "STRING" },
                   hasSampleWatermark: { type: "BOOLEAN" }
                 },
-                required: ["box_2d", "cardName", "cardNumber"]
+                required: ["cardName", "cardNumber"]
               }
             }
           };
@@ -441,18 +474,75 @@ BOUNDING BOX RULES ("box_2d"):
         sceneryDescription = parsed.sceneryDescription || "";
         hasSampleWatermark = !!parsed.hasSampleWatermark;
 
-        if (parsed.box_2d && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
-          const [ymin, xmin, ymax, xmax] = parsed.box_2d.map(Number);
-          const aiX1 = Math.round((xmin / 1000) * width);
-          const aiY1 = Math.round((ymin / 1000) * height);
-          const aiX2 = Math.round((xmax / 1000) * width);
-          const aiY2 = Math.round((ymax / 1000) * height);
+        // 2a. Determine horizontal bounds (x1, x2)
+        let aiX1: number | null = null;
+        let aiX2: number | null = null;
 
-          if (aiX2 > aiX1 + 50 && aiY2 > aiY1 + 50) {
-            cardCoords = { x1: aiX1, y1: aiY1, x2: aiX2, y2: aiY2 };
-            const detectedW = aiX2 - aiX1;
-            const detectedH = aiY2 - aiY1;
-            console.log(`[Card Cutout] Gemini Vision successfully detected card: [${aiX1}, ${aiY1}, ${aiX2}, ${aiY2}] (${detectedW}x${detectedH}, ratio ${(detectedH / detectedW).toFixed(3)})`);
+        if (parsed.outer_horizontal_card_edges && Array.isArray(parsed.outer_horizontal_card_edges) && parsed.outer_horizontal_card_edges.length === 2) {
+          const [leftVal, rightVal] = parsed.outer_horizontal_card_edges.map(Number);
+          if (rightVal > leftVal + 50) {
+            aiX1 = Math.round((leftVal / 1000) * width);
+            aiX2 = Math.round((rightVal / 1000) * width);
+          }
+        }
+
+        if (aiX1 === null || aiX2 === null) {
+          if (parsed.box_2d && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
+            const [, xmin, , xmax] = parsed.box_2d.map(Number);
+            if (xmax > xmin + 50) {
+              aiX1 = Math.round((xmin / 1000) * width);
+              aiX2 = Math.round((xmax / 1000) * width);
+            }
+          }
+        }
+
+        // 2b. Programmatic Border Reconstruction from Printed Ink Anchors
+        if (aiX1 !== null && aiX2 !== null) {
+          const rawW = aiX2 - aiX1;
+          const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
+          const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.396825;
+          const canonicalH = Math.round(rawW * TARGET_RATIO);
+
+          const headerTopY = typeof parsed.header_top_edge_y === "number" && parsed.header_top_edge_y > 0
+            ? Math.round((parsed.header_top_edge_y / 1000) * height)
+            : null;
+          const copyrightBottomY = typeof parsed.copyright_bottom_edge_y === "number" && parsed.copyright_bottom_edge_y > 0
+            ? Math.round((parsed.copyright_bottom_edge_y / 1000) * height)
+            : null;
+
+          if (headerTopY !== null && copyrightBottomY !== null && copyrightBottomY > headerTopY) {
+            // Anchor reconstruction: Top border margin is canonical ~3.8% of height, bottom border margin is ~3.3%
+            const topMargin = Math.round(canonicalH * 0.038);
+            let cy1 = Math.max(0, headerTopY - topMargin);
+            let cy2 = cy1 + canonicalH;
+
+            // Safety verify against copyright baseline: bottom edge must be at least 2.5% below copyright text
+            const minBottomClearance = Math.round(canonicalH * 0.025);
+            if (cy2 < copyrightBottomY + minBottomClearance) {
+              cy2 = copyrightBottomY + Math.round(canonicalH * 0.033);
+              cy1 = Math.max(0, cy2 - canonicalH);
+            }
+
+            cardCoords = { x1: aiX1, y1: cy1, x2: aiX2, y2: cy2 };
+            console.log(`[Card Cutout] Programmatische Rand-Rekonstruktion aus Tinten-Ankern: Header-Y=${headerTopY}, Copyright-Y=${copyrightBottomY} -> Box: [${aiX1}, ${cy1}, ${aiX2}, ${cy2}] (${rawW}x${canonicalH})`);
+          } else if (headerTopY !== null) {
+            const topMargin = Math.round(canonicalH * 0.038);
+            const cy1 = Math.max(0, headerTopY - topMargin);
+            const cy2 = cy1 + canonicalH;
+            cardCoords = { x1: aiX1, y1: cy1, x2: aiX2, y2: cy2 };
+            console.log(`[Card Cutout] Rekonstruktion über Header-Tintenanker: [${aiX1}, ${cy1}, ${aiX2}, ${cy2}]`);
+          } else if (copyrightBottomY !== null) {
+            const bottomMargin = Math.round(canonicalH * 0.033);
+            const cy2 = Math.min(height, copyrightBottomY + bottomMargin);
+            const cy1 = Math.max(0, cy2 - canonicalH);
+            cardCoords = { x1: aiX1, y1: cy1, x2: aiX2, y2: cy2 };
+            console.log(`[Card Cutout] Rekonstruktion über Copyright-Tintenanker: [${aiX1}, ${cy1}, ${aiX2}, ${cy2}]`);
+          } else if (parsed.box_2d && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
+            const [ymin, , ymax] = parsed.box_2d.map(Number);
+            const cy1 = Math.round((ymin / 1000) * height);
+            const cy2 = Math.round((ymax / 1000) * height);
+            cardCoords = { x1: aiX1, y1: cy1, x2: aiX2, y2: cy2 };
+            console.log(`[Card Cutout] Fallback auf Gemini box_2d: [${aiX1}, ${cy1}, ${aiX2}, ${cy2}]`);
           }
         }
 
