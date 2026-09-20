@@ -345,25 +345,26 @@ export async function extractCardCutout(
       const prompt = `You are an expert computer vision model specializing in Trading Card Game (TCG) scanning and segmentation (Pokémon, One Piece, Magic: The Gathering, Yu-Gi-Oh, Lorcana).
 The uploaded image is a scan or photograph containing a trading card.
 
-CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
-1. The card is often placed inside a transparent penny sleeve, top loader, card saver, or on a scanner glass bed with light margins, reflections, or plastic flaps.
-2. YOU MUST LOCATE THE EXACT BOUNDING BOX of the ENTIRE PHYSICAL PRINTED CARDBOARD CARD ITSELF.
-3. EXCLUDE AND STRIP AWAY:
+CRUCIAL REQUIREMENT FOR SLEEVED CARDS:
+Trading cards in protective sleeves have an empty transparent plastic lip extending 2-5mm at the bottom edge. You MUST detect the edge of the printed, physical opaque cardboard card itself, NOT the outer transparent sleeve edge. The bottom coordinate (ymax) must be placed directly underneath the bottom silver/yellow border, right below the copyright line, excluding the clear plastic lip.
+
+BOUNDING BOX RULES ("box_2d"):
+1. "box_2d": [ymin, xmin, ymax, xmax] integers normalized 0 to 1000.
+   - TOP (ymin): Outermost printed cardboard border strictly ABOVE the card name, Stage banner ('たね' / 'Basic'), and HP. DO NOT cut off the top card border or start inside the card header!
+   - BOTTOM (ymax): Placed directly underneath the bottom silver/yellow border, right below the tiny printed copyright line (e.g. '©2025 Pokémon/Nintendo/Creatures/GAME FREAK'). EXCLUDE the 2-5mm empty transparent plastic sleeve lip extending below the card!
+   - LEFT (xmin) & RIGHT (xmax): Physical printed cardboard edges. Exclude transparent sleeve seams, scanner beds, or shadows.
+2. EXCLUDE AND STRIP AWAY:
    - Any clear transparent penny sleeve plastic overhangs, seams, or flaps extending outside the card! In particular, penny sleeves often extend 2mm-6mm below the bottom edge of the card. EXCLUDE this transparent plastic flap completely!
    - Any top loader frames or magnetic case edges
    - Scanner bed white/grey glass borders, outer background scenery, or shadows
    - Any glare lines on the plastic sleeve outside the printed card borders
-4. BOUNDING BOX ("box_2d"):
-   - TOP: Must start at the OUTERMOST PRINTED CARDBOARD BORDER of the card, strictly ABOVE the card name, Stage banner ('たね' / 'Basic'), and HP. DO NOT cut off the top card border or start inside the card header!
-   - BOTTOM: Must be the physical printed cardboard edge immediately below the tiny printed copyright text (e.g. '©2025 Pokémon/Nintendo/Creatures/GAME FREAK'). Exclude any transparent plastic sleeve flap extending below!
-   - LEFT & RIGHT: Physical printed cardboard edges.
-5. "illustration_box": Locate the inner artwork illustration area inside the card frame (excluding card text, HP, power, and borders).
-6. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile').
-7. "cardNumber": Card sequence number (e.g. '086/080', '151/165', '070/063', 'OP05-119').
-8. "setCode": Set registration code (e.g. 'SV8', 'M2', 'M1S', 'SV1L', 'OP05').
-9. "setName": Official English set name (e.g. 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
-10. "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude any characters, pokemon, humans, text, or card borders.
-11. "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.`;
+3. "illustration_box": Inner artwork illustration area inside the card frame (excluding card text, HP, power, and borders).
+4. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile').
+5. "cardNumber": Card sequence number (e.g. '086/080', '151/165', '070/063', 'OP05-119').
+6. "setCode": Set registration code (e.g. 'SV8', 'M2', 'M1S', 'SV1L', 'OP05').
+7. "setName": Official English set name (e.g. 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
+8. "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude any characters, pokemon, humans, text, or card borders.
+9. "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.`;
 
       const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
       let layoutText = "";
@@ -389,7 +390,7 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
                   box_2d: {
                     type: "ARRAY",
                     items: { type: "INTEGER" },
-                    description: "Bounding box of the physical trading card as [ymin, xmin, ymax, xmax] integers normalized 0 to 1000."
+                    description: "Bounding box of the physical printed cardboard trading card as [ymin, xmin, ymax, xmax] integers normalized 0 to 1000. CRUCIAL: Trading cards in protective sleeves have an empty transparent plastic lip extending 2-5mm at the bottom edge. You MUST detect the edge of the printed, physical opaque cardboard card itself, NOT the outer transparent sleeve edge. The bottom coordinate (ymax) must be placed directly underneath the bottom silver/yellow border, right below the copyright line, excluding the clear plastic lip."
                   },
                   illustration_box: {
                     type: "ARRAY",
@@ -539,23 +540,41 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     }
   } else {
     // Gemini AI Vision path:
-    // Plausibility check: Do NOT force rigid aspect ratio if ratio is already plausible (1.33 - 1.46)
     const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
-    const minPlausibleRatio = isSmallJapaneseGame ? 1.38 : 1.33;
-    const maxPlausibleRatio = isSmallJapaneseGame ? 1.52 : 1.46;
     const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.3968;
+    const minPlausibleRatio = isSmallJapaneseGame ? 1.38 : 1.33;
+    // Standard TCG card aspect ratio is strictly 1.3968 (88mm / 63mm).
+    // An aspect ratio > 1.415 indicates that the height includes the empty transparent plastic lip
+    // extending 2-5mm at the bottom edge.
+    const maxPlausibleRatio = isSmallJapaneseGame ? 1.48 : 1.415;
+    const expectedH = Math.round(rawW * TARGET_RATIO);
+
+    // 5a. Top Card Border Protection (ensure header and top border aren't shaved):
+    const minTopMargin = Math.round(expectedH * 0.038);
+    if (illustrationCoords && illustrationCoords.y1 > cardCoords.y1) {
+      const topDistance = illustrationCoords.y1 - cardCoords.y1;
+      if (topDistance < minTopMargin) {
+        const topShortage = minTopMargin - topDistance;
+        console.log(`[Card Cutout] Oberer Kartenrand war um ${topShortage}px zu nah am Motiv (${topDistance}px < min ${minTopMargin}px). Rand nach oben erweitert.`);
+        cardCoords.y1 = Math.max(0, cardCoords.y1 - topShortage);
+        rawH = cardCoords.y2 - cardCoords.y1;
+        ratio = rawH / Math.max(1, rawW);
+      }
+    }
 
     if (ratio >= minPlausibleRatio && ratio <= maxPlausibleRatio) {
-      console.log(`[Card Cutout] Gemini-Seitenverhältnis (${ratio.toFixed(3)}) liegt im idealen Bereich (${minPlausibleRatio.toFixed(2)} - ${maxPlausibleRatio.toFixed(2)}). Original-KI-Koordinaten werden 1:1 beibehalten.`);
+      console.log(`[Card Cutout] Gemini-Seitenverhältnis (${ratio.toFixed(3)}) liegt im idealen Bereich (${minPlausibleRatio.toFixed(2)} - ${maxPlausibleRatio.toFixed(2)}). Echte Kartonkanten erkannt.`);
     } else if (ratio > maxPlausibleRatio) {
-      // Significantly too tall (ratio > 1.46) -> likely captured transparent penny sleeve extension below card
-      const expectedH = Math.round(rawW * TARGET_RATIO);
+      // Crucial: Trading cards in protective sleeves have an empty transparent plastic lip extending 2-5mm at the bottom edge.
+      // If ratio > maxPlausibleRatio, ymax captured this transparent sleeve edge rather than the printed cardboard edge.
+      // We trim y2 directly underneath the bottom silver/yellow border, right below the copyright line:
       if (expectedH < rawH) {
-        console.log(`[Card Cutout] Plausibilitätskorrektur: Hülle am Boden ragte heraus (Verhältnis ${ratio.toFixed(3)} > ${maxPlausibleRatio}). Passe y2 von ${cardCoords.y2} auf ${cardCoords.y1 + expectedH} an.`);
+        const excessSleevePx = rawH - expectedH;
+        console.log(`[Card Cutout] Transparenter Hüllenüberstand (${excessSleevePx}px, Verhältnis ${ratio.toFixed(3)} > ${maxPlausibleRatio}) am Boden erkannt und entfernt. y2 von ${cardCoords.y2} auf ${cardCoords.y1 + expectedH} korrigiert (direkt unter Silber-/Gelbrand).`);
         cardCoords.y2 = cardCoords.y1 + expectedH;
       }
     } else if (ratio < minPlausibleRatio) {
-      // Significantly too wide (ratio < 1.33) -> width includes side borders/scenery
+      // Significantly too wide -> width includes side borders/scenery
       const expectedW = Math.round(rawH / TARGET_RATIO);
       if (expectedW < rawW) {
         const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
