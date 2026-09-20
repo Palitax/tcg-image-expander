@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     // High-precision Card Cutout & AI Analysis
     const cardCutoutResult = await extractCardCutout(originalCardBuffer, {
       apiKey,
-      cornerRadiusPercent: 0.035
+      cornerRadiusPercent: 0.038
     });
 
     const roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;

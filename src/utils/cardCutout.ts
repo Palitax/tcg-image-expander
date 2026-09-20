@@ -55,7 +55,7 @@ export async function detectCardBordersCV(
     // 1. Scan Left: search inward from x=6. Find FIRST prominent peak (outer card edge)
     // Faint sleeve glare is < 12. Real cardboard outer edge is > 20.
     let leftX = 0;
-    for (let x = 8; x < Math.floor(width * 0.25); x++) {
+    for (let x = 8; x < Math.floor(width * 0.45); x++) {
       let grad = 0;
       for (let y = yMidStart; y < yMidEnd; y++) {
         grad += Math.abs(data[y * width + (x + 1)] - data[y * width + (x - 1)]);
@@ -82,7 +82,7 @@ export async function detectCardBordersCV(
 
     // 2. Scan Right: search inward from width - 8. Find FIRST prominent peak
     let rightX = width;
-    for (let x = width - 8; x > Math.floor(width * 0.75); x--) {
+    for (let x = width - 8; x > Math.floor(width * 0.55); x--) {
       let grad = 0;
       for (let y = yMidStart; y < yMidEnd; y++) {
         grad += Math.abs(data[y * width + (x + 1)] - data[y * width + (x - 1)]);
@@ -113,7 +113,7 @@ export async function detectCardBordersCV(
     const xSpan = Math.max(1, xMidEnd - xMidStart);
 
     let bottomY = height;
-    for (let y = height - 8; y > Math.floor(height * 0.75); y--) {
+    for (let y = height - 8; y > Math.floor(height * 0.50); y--) {
       let grad = 0;
       for (let x = xMidStart; x < xMidEnd; x++) {
         grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
@@ -140,12 +140,12 @@ export async function detectCardBordersCV(
 
     // 4. Scan Top: search inward starting at y=18 (skip top plastic flap). Find FIRST prominent peak
     let topY = 0;
-    for (let y = 18; y < Math.floor(height * 0.25); y++) {
+    for (let y = 18; y < Math.floor(height * 0.45); y++) {
       let grad = 0;
       for (let x = xMidStart; x < xMidEnd; x++) {
         grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
       }
-      grad /= ySpan;
+      grad /= xSpan;
       if (grad > 18) {
         let peakY = y;
         let maxG = grad;
@@ -154,7 +154,7 @@ export async function detectCardBordersCV(
           for (let x = xMidStart; x < xMidEnd; x++) {
             g += Math.abs(data[(y + dy + 1) * width + x] - data[(y + dy - 1) * width + x]);
           }
-          g /= ySpan;
+          g /= xSpan;
           if (g > maxG) {
             maxG = g;
             peakY = y + dy;
@@ -189,6 +189,76 @@ export async function detectCardBordersCV(
 }
 
 /**
+ * Local Micro-Edge Snapping:
+ * Inspects a narrow window (±8px) strictly around the candidate edge coordinates
+ * to snap to the exact pixel-level contrast transition between the cardboard outer edge
+ * and the outer sleeve/scanner background.
+ * Because the window is strictly ±8px, it can NEVER jump into the inner artwork or out to the scanner bed.
+ */
+function snapToLocalCardEdge(
+  data: Buffer,
+  width: number,
+  height: number,
+  box: { x1: number; y1: number; x2: number; y2: number }
+): { x1: number; y1: number; x2: number; y2: number } {
+  function findLocalEdge(
+    axis: "x" | "y",
+    initialPos: number,
+    spanStart: number,
+    spanEnd: number,
+    searchRadius = 8
+  ): number {
+    let bestPos = initialPos;
+    let maxGrad = -1;
+    const minP = Math.max(2, initialPos - searchRadius);
+    const maxP = Math.min((axis === "x" ? width : height) - 2, initialPos + searchRadius);
+
+    for (let p = minP; p <= maxP; p++) {
+      let grad = 0;
+      let count = 0;
+      for (let s = spanStart; s <= spanEnd; s += 2) {
+        if (axis === "x") {
+          grad += Math.abs(data[s * width + (p + 1)] - data[s * width + (p - 1)]);
+        } else {
+          grad += Math.abs(data[(p + 1) * width + s] - data[(p - 1) * width + s]);
+        }
+        count++;
+      }
+      grad /= Math.max(1, count);
+      if (grad > maxGrad) {
+        maxGrad = grad;
+        bestPos = p;
+      }
+    }
+
+    // Only snap if there is a clear contrast transition (grad > 15), otherwise keep initial
+    if (maxGrad > 15) {
+      return bestPos;
+    }
+    return initialPos;
+  }
+
+  const cardW = box.x2 - box.x1;
+  const cardH = box.y2 - box.y1;
+  const yMidStart = Math.round(box.y1 + cardH * 0.25);
+  const yMidEnd = Math.round(box.y1 + cardH * 0.75);
+  const xMidStart = Math.round(box.x1 + cardW * 0.25);
+  const xMidEnd = Math.round(box.x1 + cardW * 0.75);
+
+  const newX1 = findLocalEdge("x", box.x1, yMidStart, yMidEnd, 8);
+  const newX2 = findLocalEdge("x", box.x2, yMidStart, yMidEnd, 8);
+  const newY1 = findLocalEdge("y", box.y1, xMidStart, xMidEnd, 8);
+  const newY2 = findLocalEdge("y", box.y2, xMidStart, xMidEnd, 8);
+
+  return {
+    x1: Math.min(newX1, newX2 - 50),
+    y1: Math.min(newY1, newY2 - 50),
+    x2: Math.max(newX2, newX1 + 50),
+    y2: Math.max(newY2, newY1 + 50)
+  };
+}
+
+/**
  * Universal Card Cutout Engine:
  * Analyzes an image of any trading card (in clear penny sleeves, toploaders, or on scanner beds),
  * locates the true outer cardboard boundaries, and extracts a die-cut rounded-corner cutout
@@ -201,7 +271,7 @@ export async function extractCardCutout(
   const {
     apiKey,
     skipCardCrop = false,
-    cornerRadiusPercent = 0.035,
+    cornerRadiusPercent = 0.038, // Standard TCG die-cut radius (~3.2mm on 63mm width = 3.8%)
     maxCardDimension
   } = options;
 
@@ -260,14 +330,7 @@ export async function extractCardCutout(
     };
   }
 
-  // 2. Compute Computer Vision Outer Borders as baseline Ground Truth
-  const cvCoords = await detectCardBordersCV(normalizedBuffer, width, height);
-  const cvW = cvCoords.x2 - cvCoords.x1;
-  const cvH = cvCoords.y2 - cvCoords.y1;
-  const cvRatio = cvH / Math.max(1, cvW);
-  console.log(`[Card Cutout] CV detected outer borders: [${cvCoords.x1}, ${cvCoords.y1}, ${cvCoords.x2}, ${cvCoords.y2}] (${cvW}x${cvH}, ratio ${cvRatio.toFixed(3)})`);
-
-  let cardCoords: { x1: number; y1: number; x2: number; y2: number } = cvCoords;
+  let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
   let illustrationCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
   let cardName = "";
   let cardNumber = "";
@@ -277,7 +340,7 @@ export async function extractCardCutout(
   let hasSampleWatermark = false;
   let usedFallback = false;
 
-  // 3. Gemini AI Vision Analysis (for OCR, Metadata, and Illustration detection)
+  // 2. Gemini AI Vision Analysis (PRIMARY GROUND TRUTH AUTHORITY)
   if (apiKey && apiKey.trim()) {
     try {
       // Lightweight 1024px working copy for fast Gemini analysis (<1.5s)
@@ -305,10 +368,10 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
    - Any glare lines on the plastic sleeve outside the printed card borders
 4. The bounding box ("box_2d") MUST wrap the ENTIRE physical cardboard card from outer border to outer border (including top name/HP bar and bottom copyright / set code line)!
 5. "illustration_box": Locate the inner artwork illustration area inside the card frame (excluding card text, HP, power, and borders).
-6. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper').
+6. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle').
 7. "cardNumber": Card sequence number (e.g. '086/080', '151/165', 'OP05-119').
-8. "setCode": Set registration code (e.g. 'SV8', 'M2', 'SV2a', 'OP05').
-9. "setName": Official English set name (e.g. 'Supercharged Breaker', 'Battle Partners').
+8. "setCode": Set registration code (e.g. 'SV8', 'M2', 'SV1L', 'OP05').
+9. "setName": Official English set name (e.g. 'Supercharged Breaker', 'Violet ex').
 10. "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude any characters, pokemon, humans, text, or card borders.
 11. "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.`;
 
@@ -389,32 +452,16 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
 
         if (parsed.box_2d && Array.isArray(parsed.box_2d) && parsed.box_2d.length === 4) {
           const [ymin, xmin, ymax, xmax] = parsed.box_2d.map(Number);
-          const aiCoords = {
-            x1: Math.round((xmin / 1000) * width),
-            y1: Math.round((ymin / 1000) * height),
-            x2: Math.round((xmax / 1000) * width),
-            y2: Math.round((ymax / 1000) * height)
-          };
+          const aiX1 = Math.round((xmin / 1000) * width);
+          const aiY1 = Math.round((ymin / 1000) * height);
+          const aiX2 = Math.round((xmax / 1000) * width);
+          const aiY2 = Math.round((ymax / 1000) * height);
 
-          const aiW = aiCoords.x2 - aiCoords.x1;
-          const aiH = aiCoords.y2 - aiCoords.y1;
-          const aiRatio = aiH / Math.max(1, aiW);
-
-          console.log(`[Card Cutout] AI box_2d: [${aiCoords.x1}, ${aiCoords.y1}, ${aiCoords.x2}, ${aiCoords.y2}] (${aiW}x${aiH}, ratio ${aiRatio.toFixed(3)})`);
-
-          // VALIDATION: Standard TCG cards have an aspect ratio of 1.38 to 1.46 (Western 1.397, Japanese 1.458).
-          // If the AI box is too narrow (e.g. cutting off HP or right border, ratio > 1.49) or too short (ratio < 1.35)
-          // or smaller than the CV outer cardboard bounds, the AI box must be rejected!
-          const isAiRatioValid = aiRatio >= 1.35 && aiRatio <= 1.48;
-          const isAiWidthValid = aiW >= cvW * 0.95;
-          const isAiHeightValid = aiH >= cvH * 0.95;
-
-          if (isAiRatioValid && isAiWidthValid && isAiHeightValid) {
-            console.log("[Card Cutout] AI box_2d verified and accepted.");
-            cardCoords = aiCoords;
-          } else {
-            console.log(`[Card Cutout] AI box_2d rejected (ratio ${aiRatio.toFixed(2)}, aiW=${aiW} vs cvW=${cvW}). Using CV outer bounds.`);
-            cardCoords = cvCoords;
+          if (aiX2 > aiX1 + 50 && aiY2 > aiY1 + 50) {
+            cardCoords = { x1: aiX1, y1: aiY1, x2: aiX2, y2: aiY2 };
+            const detectedW = aiX2 - aiX1;
+            const detectedH = aiY2 - aiY1;
+            console.log(`[Card Cutout] Gemini Vision successfully detected card: [${aiX1}, ${aiY1}, ${aiX2}, ${aiY2}] (${detectedW}x${detectedH}, ratio ${(detectedH / detectedW).toFixed(3)})`);
           }
         }
 
@@ -433,9 +480,33 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     }
   }
 
-  // 4. Validate and sanitize coordinates
+  // 3. Computer Vision Fallback (ONLY if AI is unavailable or failed)
+  if (!cardCoords) {
+    console.warn("[Card Cutout] AI did not detect card bounds or API unavailable. Falling back to CV edge detector.");
+    usedFallback = true;
+    cardCoords = await detectCardBordersCV(normalizedBuffer, width, height);
+  }
+
+  // 4. Local Micro-Edge Snapping (±8px search window around Gemini's bounds)
+  try {
+    const { data: greyData } = await sharp(normalizedBuffer)
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const snapped = snapToLocalCardEdge(greyData, width, height, cardCoords);
+    console.log(`[Card Cutout] Micro-edge snapped coordinates: [${snapped.x1}, ${snapped.y1}, ${snapped.x2}, ${snapped.y2}]`);
+    cardCoords = snapped;
+  } catch (snapErr: any) {
+    console.warn("[Card Cutout] Micro-edge snapping skipped:", snapErr?.message || snapErr);
+  }
+
+  // 5. Mathematical TCG Aspect Ratio Guard
+  // Physical TCG standards: 63mm x 88mm = ratio 1.3968 (Western / Japanese Standard)
+  // 59mm x 86mm = ratio 1.4576 (Japanese Small / Yu-Gi-Oh)
   let rawW = cardCoords.x2 - cardCoords.x1;
   let rawH = cardCoords.y2 - cardCoords.y1;
+  let ratio = rawH / Math.max(1, rawW);
 
   // Check if it is genuinely a 100% borderless raw card scan (all margins <= 1%)
   const isGenuineEdgeToEdge =
@@ -448,37 +519,27 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     console.log("[Card Cutout] Genuine edge-to-edge card scan detected.");
     cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
   } else {
-    // Physical aspect ratio validation: TCG cards are ~1.397 to 1.458 (height/width)
-    let adjX1 = cardCoords.x1;
-    let adjY1 = cardCoords.y1;
-    let adjX2 = cardCoords.x2;
-    let adjY2 = cardCoords.y2;
-
-    // Check if card is too short in height (cut off copyright/number)
-    if (rawH < rawW * 1.38) {
-      const expectedH = Math.round(rawW * 1.415);
-      adjY2 = Math.min(height, adjY1 + expectedH);
-      if (adjY2 - adjY1 < expectedH) {
-        adjY1 = Math.max(0, adjY2 - expectedH);
+    // If card is too short in height (ratio < 1.36), protect copyright & set text
+    if (ratio < 1.36) {
+      const expectedH = Math.round(rawW * 1.397);
+      let newY2 = Math.min(height, cardCoords.y1 + expectedH);
+      let newY1 = cardCoords.y1;
+      if (newY2 - newY1 < expectedH) {
+        newY1 = Math.max(0, newY2 - expectedH);
       }
-      console.log(`[Card Cutout] Adjusted height from ${rawH} to ${adjY2 - adjY1} to prevent copyright clipping.`);
+      console.log(`[Card Cutout] Aspect ratio guard: adjusted height from ${rawH} to ${newY2 - newY1} (ratio 1.397) to protect copyright.`);
+      cardCoords.y1 = newY1;
+      cardCoords.y2 = newY2;
+    } else if (ratio > 1.47) {
+      // If card is too narrow in width (ratio > 1.47), expand symmetrically from center to protect HP & borders
+      const expectedW = Math.round(rawH / 1.397);
+      const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+      const newX1 = Math.max(0, Math.round(centerX - expectedW / 2));
+      const newX2 = Math.min(width, Math.round(centerX + expectedW / 2));
+      console.log(`[Card Cutout] Aspect ratio guard: adjusted width from ${rawW} to ${newX2 - newX1} (ratio 1.397) to protect HP & borders.`);
+      cardCoords.x1 = newX1;
+      cardCoords.x2 = newX2;
     }
-
-    // Check if card is too narrow in width (cut off HP/right border)
-    if (rawW < (adjY2 - adjY1) / 1.46) {
-      const expectedW = Math.round((adjY2 - adjY1) / 1.415);
-      const centerX = (adjX1 + adjX2) / 2;
-      adjX1 = Math.max(0, Math.round(centerX - expectedW / 2));
-      adjX2 = Math.min(width, Math.round(centerX + expectedW / 2));
-      console.log(`[Card Cutout] Adjusted width from ${rawW} to ${adjX2 - adjX1} to prevent right border/HP clipping.`);
-    }
-
-    cardCoords = {
-      x1: Math.max(0, adjX1),
-      y1: Math.max(0, adjY1),
-      x2: Math.min(width, adjX2),
-      y2: Math.min(height, adjY2)
-    };
   }
 
   // Strict boundary clamping
@@ -490,7 +551,7 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
   const extractW = cx2 - cx1;
   const extractH = cy2 - cy1;
 
-  console.log(`[Card Cutout] Final card extraction: [${cx1}, ${cy1}, ${cx2}, ${cy2}] (${extractW}x${extractH}, ratio ${(extractH / extractW).toFixed(3)})`);
+  console.log(`[Card Cutout] Final pristine card boundaries: [${cx1}, ${cy1}, ${cx2}, ${cy2}] (${extractW}x${extractH}, ratio ${(extractH / extractW).toFixed(3)})`);
 
   // 5. Watermark Removal if detected
   let workingBuffer = normalizedBuffer;

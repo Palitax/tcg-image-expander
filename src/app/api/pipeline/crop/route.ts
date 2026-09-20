@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const cutoutResult = await extractCardCutout(originalImageBuffer, {
       apiKey,
       skipCardCrop,
-      cornerRadiusPercent: 0.035,
+      cornerRadiusPercent: 0.038,
       maxCardDimension: 1200
     });
 
