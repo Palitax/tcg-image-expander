@@ -228,12 +228,18 @@ export async function POST(request: Request) {
     }
 
     const edgePaddingPx = parseInt((formData.get("edgePadding") as string) || "0", 10) || 0;
+    const verticalOffsetPx = parseInt((formData.get("verticalOffset") as string) || "0", 10) || 0;
+    const bottomTrimPx = parseInt((formData.get("bottomTrim") as string) || "0", 10) || 0;
+    const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
     // STEP 1 & 2: High-precision Card Cutout & Vision Analysis
     const cardCutoutResult = await extractCardCutout(originalCardBuffer, {
       apiKey,
       cornerRadiusPercent: 0.038,
-      edgePaddingPx
+      edgePaddingPx,
+      verticalOffsetPx,
+      bottomTrimPx,
+      topPaddingPx
     });
 
     const roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
@@ -247,10 +253,24 @@ export async function POST(request: Request) {
       setName: cardCutoutResult.setName
     });
 
-    // STEP 4: Background Outpainting (or custom background if uploaded)
+    // STEP 4: Background Outpainting (or custom/existing background if uploaded)
     let backgroundBuffer: Buffer | null = null;
+    const existingBgParam = formData.get("existingBgImage") as string | null;
 
-    if (customBgFile && typeof (customBgFile as any).arrayBuffer === "function") {
+    if (existingBgParam && existingBgParam.includes("base64,")) {
+      try {
+        const bgBase64 = existingBgParam.split(",")[1];
+        backgroundBuffer = await sharp(Buffer.from(bgBase64, "base64"))
+          .resize(1024, 1024, { fit: "cover" })
+          .jpeg({ quality: 90 })
+          .toBuffer();
+        console.log("[Stream Preview API] Vorhandenes Hintergrundbild erfolgreich wiederverwendet.");
+      } catch (bgReuseErr) {
+        console.warn("[Stream Preview API] Fehler beim Wiederverwenden des vorhandenen Hintergrunds:", bgReuseErr);
+      }
+    }
+
+    if (!backgroundBuffer && customBgFile && typeof (customBgFile as any).arrayBuffer === "function") {
       try {
         const customBgArrayBuf = await customBgFile.arrayBuffer();
         backgroundBuffer = await sharp(Buffer.from(customBgArrayBuf))

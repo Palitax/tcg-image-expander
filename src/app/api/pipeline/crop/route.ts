@@ -33,13 +33,19 @@ export async function POST(request: Request) {
       .toBuffer();
 
     const edgePaddingPx = parseInt((formData.get("edgePadding") as string) || "0", 10) || 0;
+    const verticalOffsetPx = parseInt((formData.get("verticalOffset") as string) || "0", 10) || 0;
+    const bottomTrimPx = parseInt((formData.get("bottomTrim") as string) || "0", 10) || 0;
+    const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
     const cutoutResult = await extractCardCutout(originalImageBuffer, {
       apiKey,
       skipCardCrop,
       cornerRadiusPercent: 0.038,
       maxCardDimension: 1200,
-      edgePaddingPx
+      edgePaddingPx,
+      verticalOffsetPx,
+      bottomTrimPx,
+      topPaddingPx
     });
 
     console.log(`[Crop API] Extracted card cutout:`, {

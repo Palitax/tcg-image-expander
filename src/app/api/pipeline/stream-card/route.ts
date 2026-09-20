@@ -122,12 +122,18 @@ export async function POST(request: Request) {
     }
 
     const edgePaddingPx = parseInt((formData.get("edgePadding") as string) || "0", 10) || 0;
+    const verticalOffsetPx = parseInt((formData.get("verticalOffset") as string) || "0", 10) || 0;
+    const bottomTrimPx = parseInt((formData.get("bottomTrim") as string) || "0", 10) || 0;
+    const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
     // High-precision Card Cutout & AI Analysis
     const cardCutoutResult = await extractCardCutout(originalCardBuffer, {
       apiKey,
       cornerRadiusPercent: 0.038,
-      edgePaddingPx
+      edgePaddingPx,
+      verticalOffsetPx,
+      bottomTrimPx,
+      topPaddingPx
     });
 
     const roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;

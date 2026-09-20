@@ -31,6 +31,12 @@ interface ExtractCardCutoutOptions {
   maxCardDimension?: number;
   /** Optional micro-nudge for border padding in pixels (e.g. +2 or -2) */
   edgePaddingPx?: number;
+  /** Vertical shift in pixels (+ = shift down, - = shift up / reveal more top) */
+  verticalOffsetPx?: number;
+  /** Bottom sleeve trim in pixels (cuts off transparent penny sleeve overhang at the bottom) */
+  bottomTrimPx?: number;
+  /** Top border margin expansion in pixels (ensures top border is preserved) */
+  topPaddingPx?: number;
 }
 
 /**
@@ -49,8 +55,8 @@ function findOuterCardEdgePeak(
   startPos: number,
   spanStart: number,
   spanEnd: number,
-  maxScan = 80,
-  minPeakGrad = 15
+  maxScan = 35,
+  minPeakGrad = 14
 ): number {
   let peakPos = startPos;
   let peakGrad = 0;
@@ -77,14 +83,76 @@ function findOuterCardEdgePeak(
       if (grad > peakGrad) {
         peakGrad = grad;
         peakPos = p;
+      } else if (grad < peakGrad * 0.75) {
+        // Peak reached its crest and dropped; lock onto outer boundary
+        break;
       }
-    } else if (inPeak && grad < peakGrad * 0.5) {
-      // Reached the top of the outer edge peak and started descending into the card border
+    } else if (inPeak && grad < peakGrad * 0.6) {
+      // Descended from the outer edge crest
       break;
     }
   }
 
   return peakPos;
+}
+
+/**
+ * Detects transparent penny sleeve overhang at the bottom of the card.
+ * In a penny sleeve, the transparent plastic extends 15-45px past the physical printed cardboard edge.
+ * Scanning upward from the candidate bottom:
+ * - Peak 1 (outer): The bottom seam of the clear plastic sleeve
+ * - Quiet Zone: 12-40px of flat, low-gradient transparent plastic (grad < 10)
+ * - Peak 2 (inner): The physical cardboard edge of the card (grad >= 16) with printed border & copyright
+ * If this double-peak pattern is detected, returns the position of Peak 2 (true cardboard edge).
+ */
+function detectCardboardBottomEdge(
+  data: Buffer,
+  width: number,
+  height: number,
+  candidateY2: number,
+  spanStart: number,
+  spanEnd: number
+): number {
+  const searchStart = Math.min(height - 4, candidateY2 + 10);
+  const searchEnd = Math.max(4, candidateY2 - 70);
+
+  const grads: { y: number; grad: number }[] = [];
+  for (let y = searchEnd; y <= searchStart; y++) {
+    let grad = 0;
+    let count = 0;
+    for (let x = spanStart; x <= spanEnd; x += 2) {
+      grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
+      count++;
+    }
+    grad /= Math.max(1, count);
+    grads.push({ y, grad });
+  }
+
+  // Find distinct gradient peaks (>= 14)
+  const peaks: { y: number; grad: number }[] = [];
+  for (let i = 1; i < grads.length - 1; i++) {
+    if (grads[i].grad >= 14 && grads[i].grad >= grads[i - 1].grad && grads[i].grad >= grads[i + 1].grad) {
+      if (peaks.length > 0 && Math.abs(peaks[peaks.length - 1].y - grads[i].y) <= 3) {
+        if (grads[i].grad > peaks[peaks.length - 1].grad) {
+          peaks[peaks.length - 1] = grads[i];
+        }
+      } else {
+        peaks.push(grads[i]);
+      }
+    }
+  }
+
+  if (peaks.length >= 2) {
+    const lowest = peaks[peaks.length - 1]; // outer edge / sleeve seam
+    const nextLowest = peaks[peaks.length - 2]; // inner edge / cardboard
+    const gap = lowest.y - nextLowest.y;
+    if (gap >= 12 && gap <= 55) {
+      console.log(`[Card Cutout] Sleeve-Stripping: Hüllenüberstand von ${gap}px am Boden erkannt (Hülle y=${lowest.y}, echter Karton y=${nextLowest.y}). Hülle wird abgeschnitten.`);
+      return nextLowest.y;
+    }
+  }
+
+  return peaks.length > 0 ? peaks[peaks.length - 1].y : candidateY2;
 }
 
 /**
@@ -112,7 +180,7 @@ export async function detectCardBordersCV(
     const leftX = findOuterCardEdgePeak(data, width, height, "x", +1, 6, yMidStart, yMidEnd, Math.floor(width * 0.35), 15);
     const rightX = findOuterCardEdgePeak(data, width, height, "x", -1, width - 6, yMidStart, yMidEnd, Math.floor(width * 0.35), 15);
     const topY = findOuterCardEdgePeak(data, width, height, "y", +1, 14, xMidStart, xMidEnd, Math.floor(height * 0.35), 12);
-    const bottomY = findOuterCardEdgePeak(data, width, height, "y", -1, height - 6, xMidStart, xMidEnd, Math.floor(height * 0.35), 20);
+    const bottomY = detectCardboardBottomEdge(data, width, height, height - 6, xMidStart, xMidEnd);
 
     let detectedW = rightX - leftX;
     let detectedH = bottomY - topY;
@@ -137,7 +205,7 @@ export async function detectCardBordersCV(
 /**
  * Inward Border Refinement & Sleeve Stripping:
  * If an AI detection or scanner crop includes the outer transparent penny sleeve,
- * toploader border, or scanner margin, this scans a localized window (±25px) around each candidate boundary
+ * toploader border, or scanner margin, this scans a localized window around each candidate boundary
  * to snap onto the true high-contrast outer cardboard edge of the printed card.
  */
 function refineCardCutoutBorders(
@@ -151,17 +219,19 @@ function refineCardCutoutBorders(
   const xMidStart = Math.round(box.x1 + (box.x2 - box.x1) * 0.25);
   const xMidEnd = Math.round(box.x1 + (box.x2 - box.x1) * 0.75);
 
-  const searchStartLeft = Math.max(4, box.x1 - 25);
-  const newX1 = findOuterCardEdgePeak(data, width, height, "x", +1, searchStartLeft, yMidStart, yMidEnd, 60, 15);
+  // Left & right outer cardboard edge refinement (tight window: 30px)
+  const searchStartLeft = Math.max(4, box.x1 - 15);
+  const newX1 = findOuterCardEdgePeak(data, width, height, "x", +1, searchStartLeft, yMidStart, yMidEnd, 30, 14);
 
-  const searchStartRight = Math.min(width - 4, box.x2 + 25);
-  const newX2 = findOuterCardEdgePeak(data, width, height, "x", -1, searchStartRight, yMidStart, yMidEnd, 60, 15);
+  const searchStartRight = Math.min(width - 4, box.x2 + 15);
+  const newX2 = findOuterCardEdgePeak(data, width, height, "x", -1, searchStartRight, yMidStart, yMidEnd, 30, 14);
 
-  const searchStartTop = Math.max(4, box.y1 - 25);
-  const newY1 = findOuterCardEdgePeak(data, width, height, "y", +1, searchStartTop, xMidStart, xMidEnd, 60, 12);
+  // Top outer cardboard edge refinement (tight window 24px so it NEVER jumps into inner artwork)
+  const searchStartTop = Math.max(4, box.y1 - 12);
+  const newY1 = findOuterCardEdgePeak(data, width, height, "y", +1, searchStartTop, xMidStart, xMidEnd, 24, 12);
 
-  const searchStartBottom = Math.min(height - 4, box.y2 + 25);
-  const newY2 = findOuterCardEdgePeak(data, width, height, "y", -1, searchStartBottom, xMidStart, xMidEnd, 60, 20);
+  // Bottom edge refinement with automated penny sleeve stripping
+  const newY2 = detectCardboardBottomEdge(data, width, height, box.y2, xMidStart, xMidEnd);
 
   return {
     x1: Math.min(newX1, newX2 - 50),
@@ -186,7 +256,10 @@ export async function extractCardCutout(
     skipCardCrop = false,
     cornerRadiusPercent = 0.038, // Standard TCG die-cut radius (~3.2mm on 63mm width = 3.8%)
     maxCardDimension,
-    edgePaddingPx = 0
+    edgePaddingPx = 0,
+    verticalOffsetPx = 0,
+    bottomTrimPx = 0,
+    topPaddingPx = 0
   } = options;
 
   // 1. Normalize orientation and read dimensions
@@ -276,16 +349,19 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
 1. The card is often placed inside a transparent penny sleeve, top loader, card saver, or on a scanner glass bed with light margins, reflections, or plastic flaps.
 2. YOU MUST LOCATE THE EXACT BOUNDING BOX of the ENTIRE PHYSICAL PRINTED CARDBOARD CARD ITSELF.
 3. EXCLUDE AND STRIP AWAY:
-   - Any clear transparent penny sleeve plastic overhangs, seams, or flaps extending outside the card
+   - Any clear transparent penny sleeve plastic overhangs, seams, or flaps extending outside the card! In particular, penny sleeves often extend 2mm-6mm below the bottom edge of the card. EXCLUDE this transparent plastic flap completely!
    - Any top loader frames or magnetic case edges
    - Scanner bed white/grey glass borders, outer background scenery, or shadows
    - Any glare lines on the plastic sleeve outside the printed card borders
-4. The bounding box ("box_2d") MUST wrap the ENTIRE physical cardboard card from outer border to outer border (including top name/HP bar and bottom copyright / set code line)!
+4. BOUNDING BOX ("box_2d"):
+   - TOP: Must start at the OUTERMOST PRINTED CARDBOARD BORDER of the card, strictly ABOVE the card name, Stage banner ('たね' / 'Basic'), and HP. DO NOT cut off the top card border or start inside the card header!
+   - BOTTOM: Must be the physical printed cardboard edge immediately below the tiny printed copyright text (e.g. '©2025 Pokémon/Nintendo/Creatures/GAME FREAK'). Exclude any transparent plastic sleeve flap extending below!
+   - LEFT & RIGHT: Physical printed cardboard edges.
 5. "illustration_box": Locate the inner artwork illustration area inside the card frame (excluding card text, HP, power, and borders).
-6. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle').
-7. "cardNumber": Card sequence number (e.g. '086/080', '151/165', 'OP05-119').
-8. "setCode": Set registration code (e.g. 'SV8', 'M2', 'SV1L', 'OP05').
-9. "setName": Official English set name (e.g. 'Supercharged Breaker', 'Violet ex').
+6. "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile').
+7. "cardNumber": Card sequence number (e.g. '086/080', '151/165', '070/063', 'OP05-119').
+8. "setCode": Set registration code (e.g. 'SV8', 'M2', 'M1S', 'SV1L', 'OP05').
+9. "setName": Official English set name (e.g. 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
 10. "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude any characters, pokemon, humans, text, or card borders.
 11. "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.`;
 
@@ -415,9 +491,9 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     console.warn("[Card Cutout] Border refinement skipped:", refineErr?.message || refineErr);
   }
 
-  // 5. Mathematical TCG Aspect Ratio Guard
-  // Physical TCG standards: 63mm x 88mm = ratio 1.3968 (Western / Japanese Standard)
-  // 59mm x 86mm = ratio 1.4576 (Japanese Small / Yu-Gi-Oh)
+  // 5. Mathematical TCG Aspect Ratio Guard & Rigid Geometry Anchor
+  // Physical standard: 63mm x 88mm = 1.3968 (Pokémon, One Piece, MTG, Lorcana)
+  // Japanese Small: 59mm x 86mm = 1.4576 (Yu-Gi-Oh)
   let rawW = cardCoords.x2 - cardCoords.x1;
   let rawH = cardCoords.y2 - cardCoords.y1;
   let ratio = rawH / Math.max(1, rawW);
@@ -430,35 +506,67 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     cardCoords.y1 <= height * 0.01;
 
   if (isGenuineEdgeToEdge) {
-    console.log("[Card Cutout] Genuine edge-to-edge card scan detected.");
+    console.log("[Card Cutout] Echter randloser Kartenscan erkannt.");
     cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
   } else {
-    // Physical standard TCG ratio: 88mm / 63mm = 1.3968
-    const TARGET_RATIO = 1.3968;
+    const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
+    const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.3968;
+    const expectedH = Math.round(rawW * TARGET_RATIO);
 
-    // If ratio < 1.385 (too wide): The scan width contains transparent sleeve margins or scanner bed.
-    // CRITICAL LAW: NEVER expand height downwards into the scanner bed!
-    // Trim width inward symmetrically from left and right:
-    if (ratio < 1.385) {
+    // 5a. Header / Top Border Breathing Room Protection:
+    // In any genuine trading card, the distance between the top cardboard edge and the illustration/header
+    // is at least ~3.2% of the card height (~22-25px on a 700px card).
+    // If Gemini's illustrationCoords is present and cardCoords.y1 is too close to it, cardCoords.y1 was clipped!
+    if (illustrationCoords && illustrationCoords.y1 > cardCoords.y1) {
+      const topDistance = illustrationCoords.y1 - cardCoords.y1;
+      const minTopMargin = Math.round(expectedH * 0.035);
+      if (topDistance < minTopMargin) {
+        const topShortage = minTopMargin - topDistance;
+        console.log(`[Card Cutout] Oberer Rand war um ${topShortage}px zu eng am Motiv (Abstand ${topDistance}px < min ${minTopMargin}px). Rand nach oben erweitert!`);
+        cardCoords.y1 = Math.max(0, cardCoords.y1 - topShortage);
+        cardCoords.y2 = cardCoords.y1 + expectedH;
+        rawH = cardCoords.y2 - cardCoords.y1;
+        ratio = rawH / Math.max(1, rawW);
+      }
+    }
+
+    // 5b. Width & Height Harmonization:
+    // If ratio < TARGET_RATIO - 0.012 (card too wide): Trim width inward symmetrically from left and right
+    if (ratio < (TARGET_RATIO - 0.012)) {
       const expectedW = Math.round(rawH / TARGET_RATIO);
       if (expectedW < rawW) {
         const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
         const newX1 = Math.max(0, Math.round(centerX - expectedW / 2));
         const newX2 = Math.min(width, Math.round(centerX + expectedW / 2));
-        console.log(`[Card Cutout] Inward width trim: adjusted width from ${rawW} to ${newX2 - newX1} (ratio ${TARGET_RATIO.toFixed(3)}) to eliminate sleeve margins without touching bottom.`);
+        console.log(`[Card Cutout] Breiten-Trim: Passe Breite von ${rawW} auf ${newX2 - newX1} an (Soll-Verhältnis ${TARGET_RATIO.toFixed(3)}), um Hüllenränder zu entfernen.`);
         cardCoords.x1 = newX1;
         cardCoords.x2 = newX2;
       }
-    } else if (ratio > 1.455) {
-      // If ratio > 1.455 (too tall): The scan height contains excess scanner bed at bottom or sleeve flap at top.
-      // CRITICAL LAW: NEVER expand width outward into the background!
-      // Trim height inward from the bottom:
-      const expectedH = Math.round(rawW * TARGET_RATIO);
+    } else if (ratio > (TARGET_RATIO + 0.012)) {
+      // If ratio > TARGET_RATIO + 0.012: The scan height contains excess transparent sleeve flap at the bottom!
+      // Trim height inward from the bottom to eliminate the sleeve flap:
       if (expectedH < rawH) {
-        console.log(`[Card Cutout] Inward height trim: adjusted height from ${rawH} to ${expectedH} (ratio ${TARGET_RATIO.toFixed(3)}) to eliminate scanner bed.`);
+        console.log(`[Card Cutout] Sleeve-Trim am Boden: Höhe von ${rawH} auf ${expectedH} korrigiert (Soll-Verhältnis ${TARGET_RATIO.toFixed(3)}). Hülle abgeschnitten.`);
         cardCoords.y2 = cardCoords.y1 + expectedH;
       }
     }
+  }
+
+  // 5c. Apply User Fine-Tuning Offsets:
+  if (verticalOffsetPx && Math.abs(verticalOffsetPx) <= 80) {
+    console.log(`[Card Cutout] Manueller vertikaler Versatz: ${verticalOffsetPx}px`);
+    cardCoords.y1 = Math.max(0, Math.min(height - 50, cardCoords.y1 + verticalOffsetPx));
+    cardCoords.y2 = Math.max(cardCoords.y1 + 50, Math.min(height, cardCoords.y2 + verticalOffsetPx));
+  }
+
+  if (bottomTrimPx && bottomTrimPx > 0 && bottomTrimPx <= 80) {
+    console.log(`[Card Cutout] Manueller Hüllen-Trim (Boden): -${bottomTrimPx}px`);
+    cardCoords.y2 = Math.max(cardCoords.y1 + 50, cardCoords.y2 - bottomTrimPx);
+  }
+
+  if (topPaddingPx && topPaddingPx > 0 && topPaddingPx <= 80) {
+    console.log(`[Card Cutout] Manueller oberer Rand-Zuschlag: +${topPaddingPx}px`);
+    cardCoords.y1 = Math.max(0, cardCoords.y1 - topPaddingPx);
   }
 
   // Apply optional edge padding micro-adjustment

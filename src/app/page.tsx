@@ -1052,6 +1052,8 @@ export default function Home() {
   const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
   const [streamCardScale, setStreamCardScale] = useState<number>(0.68);
   const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
+  const [streamVerticalOffset, setStreamVerticalOffset] = useState<number>(0);
+  const [streamBottomTrim, setStreamBottomTrim] = useState<number>(0);
   const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
 
   // Case Maker states
@@ -3345,31 +3347,70 @@ export default function Home() {
   };
 
   const handleRecompositeStreamPreview = async () => {
-    if (!streamResultUrl || !streamBgImageUrl || !streamCutoutUrl) return;
+    if (!streamResultUrl || !streamBgImageUrl) return;
     setIsRecompositing(true);
     try {
-      const response = await fetchWithRetry("/api/pipeline/stream-preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          backgroundImage: streamBgImageUrl,
-          cutoutImage: streamCutoutUrl,
-          metadata: streamMetadata,
-          cardScale: streamCardScale,
-          shadowStyle: streamShadowStyle
-        })
-      });
-      const data = await parseResponseData(response, "Fehler beim Aktualisieren der Stream-Vorschau.");
-      if (data.resultImageUrl) {
-        setStreamResultUrl(data.resultImageUrl);
-        if (streamFile) {
-          setStreamBatchItems(prev =>
-            prev.map(it => it.file.name === streamFile.name ? {
-              ...it,
-              resultImageUrl: data.resultImageUrl,
-              metadata: streamMetadata
-            } : it)
-          );
+      // Wenn Originaldatei vorhanden ist und Feinjustierung (Versatz/Trim) geändert wurde, direkt mit dem vorhandenen Hintergrund neu zuschneiden
+      if (streamFile && (streamVerticalOffset !== 0 || streamBottomTrim !== 0)) {
+        const fileToProcess = await optimizeImageFile(streamFile);
+        const formData = new FormData();
+        formData.append("cardImage", fileToProcess);
+        formData.append("existingBgImage", streamBgImageUrl);
+        formData.append("cardScale", streamCardScale.toString());
+        formData.append("shadowStyle", streamShadowStyle);
+        formData.append("verticalOffset", streamVerticalOffset.toString());
+        formData.append("bottomTrim", streamBottomTrim.toString());
+
+        const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
+        if (localKey && localKey.trim()) {
+          formData.append("apiKey", localKey.trim());
+        }
+
+        const response = await fetchWithRetry("/api/pipeline/stream-preview", {
+          method: "POST",
+          body: formData
+        });
+        const data = await parseResponseData(response, "Fehler beim Aktualisieren der Stream-Vorschau.");
+        if (data.resultImageUrl) {
+          setStreamResultUrl(data.resultImageUrl);
+          if (data.cutoutImageUrl) {
+            setStreamCutoutUrl(data.cutoutImageUrl);
+          }
+          if (streamFile) {
+            setStreamBatchItems(prev =>
+              prev.map(it => it.file.name === streamFile.name ? {
+                ...it,
+                resultImageUrl: data.resultImageUrl,
+                cutoutImageUrl: data.cutoutImageUrl || it.cutoutImageUrl,
+                metadata: streamMetadata
+              } : it)
+            );
+          }
+        }
+      } else {
+        const response = await fetchWithRetry("/api/pipeline/stream-preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            backgroundImage: streamBgImageUrl,
+            cutoutImage: streamCutoutUrl,
+            metadata: streamMetadata,
+            cardScale: streamCardScale,
+            shadowStyle: streamShadowStyle
+          })
+        });
+        const data = await parseResponseData(response, "Fehler beim Aktualisieren der Stream-Vorschau.");
+        if (data.resultImageUrl) {
+          setStreamResultUrl(data.resultImageUrl);
+          if (streamFile) {
+            setStreamBatchItems(prev =>
+              prev.map(it => it.file.name === streamFile.name ? {
+                ...it,
+                resultImageUrl: data.resultImageUrl,
+                metadata: streamMetadata
+              } : it)
+            );
+          }
         }
       }
     } catch (err) {
@@ -3404,6 +3445,8 @@ export default function Home() {
       }
       formData.append("cardScale", streamCardScale.toString());
       formData.append("shadowStyle", streamShadowStyle);
+      formData.append("verticalOffset", streamVerticalOffset.toString());
+      formData.append("bottomTrim", streamBottomTrim.toString());
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
       if (localKey && localKey.trim()) {
@@ -6391,6 +6434,81 @@ export default function Home() {
                           <option value="none">Kein Schatten</option>
                         </select>
                       </div>
+
+                      {/* Edge & Sleeve Fine-Tuning */}
+                      <div className="sm:col-span-2 pt-2 border-t border-zinc-800/80">
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                            <Sliders className="w-3 h-3 text-purple-400" />
+                            Kanten- & Hüllen-Feinjustierung
+                          </label>
+                          <span className="text-[10px] text-purple-300 font-mono">
+                            {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset}px Y / {streamBottomTrim}px Trim
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+                          {/* Vertical Offset */}
+                          <div>
+                            <div className="flex items-center justify-between text-[11px] text-zinc-300 mb-1">
+                              <span>Vertikaler Versatz</span>
+                              <span className="font-mono text-purple-300">
+                                {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset} px
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="-30"
+                              max="30"
+                              step="2"
+                              value={streamVerticalOffset}
+                              onChange={(e) => setStreamVerticalOffset(parseInt(e.target.value, 10))}
+                              className="w-full accent-purple-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
+                            />
+                            <div className="flex justify-between text-[9px] text-zinc-500 mt-1">
+                              <span>-30px (mehr oben)</span>
+                              <button
+                                type="button"
+                                onClick={() => setStreamVerticalOffset(0)}
+                                className="text-purple-400 hover:underline"
+                              >
+                                0px (Auto)
+                              </button>
+                              <span>+30px (mehr unten)</span>
+                            </div>
+                          </div>
+
+                          {/* Sleeve Bottom Trim */}
+                          <div>
+                            <div className="flex items-center justify-between text-[11px] text-zinc-300 mb-1">
+                              <span>Hüllen-Schnitt (Boden)</span>
+                              <span className="font-mono text-purple-300">
+                                -{streamBottomTrim} px
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="40"
+                              step="2"
+                              value={streamBottomTrim}
+                              onChange={(e) => setStreamBottomTrim(parseInt(e.target.value, 10))}
+                              className="w-full accent-purple-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
+                            />
+                            <div className="flex justify-between text-[9px] text-zinc-500 mt-1">
+                              <span>0px (Auto)</span>
+                              <button
+                                type="button"
+                                onClick={() => setStreamBottomTrim(0)}
+                                className="text-purple-400 hover:underline"
+                              >
+                                Zurücksetzen
+                              </button>
+                              <span>-40px (Sleeve)</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </>
@@ -6833,6 +6951,65 @@ export default function Home() {
                                 </div>
                               </div>
 
+                              {/* Quick Fine-Tuning for Card Position & Sleeve Trim */}
+                              <div className="pt-2.5 pb-1 border-t border-zinc-800/80">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-[11px] font-semibold text-zinc-300 flex items-center gap-1.5">
+                                    <Sliders className="w-3 h-3 text-purple-400" />
+                                    Kartenausschnitt & Hülle nachjustieren
+                                  </span>
+                                  <span className="text-[10px] text-purple-300 font-mono">
+                                    {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset}px Y / -{streamBottomTrim}px Trim
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 bg-zinc-900/60 p-2.5 rounded-lg border border-zinc-800/80">
+                                  <div>
+                                    <div className="flex justify-between text-[10px] text-zinc-400 mb-1">
+                                      <span>Vertikaler Versatz</span>
+                                      <span className="font-mono text-purple-300">
+                                        {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset} px
+                                      </span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min="-30"
+                                      max="30"
+                                      step="2"
+                                      value={streamVerticalOffset}
+                                      onChange={(e) => setStreamVerticalOffset(parseInt(e.target.value, 10))}
+                                      className="w-full accent-purple-500 cursor-pointer h-1 bg-zinc-800 rounded-lg"
+                                    />
+                                    <div className="flex justify-between text-[8px] text-zinc-500 mt-0.5">
+                                      <span>-30px (oben)</span>
+                                      <button type="button" onClick={() => setStreamVerticalOffset(0)} className="text-purple-400 hover:underline">0px</button>
+                                      <span>+30px (unten)</span>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="flex justify-between text-[10px] text-zinc-400 mb-1">
+                                      <span>Hüllen-Schnitt (Boden)</span>
+                                      <span className="font-mono text-purple-300">
+                                        -{streamBottomTrim} px
+                                      </span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min="0"
+                                      max="40"
+                                      step="2"
+                                      value={streamBottomTrim}
+                                      onChange={(e) => setStreamBottomTrim(parseInt(e.target.value, 10))}
+                                      className="w-full accent-purple-500 cursor-pointer h-1 bg-zinc-800 rounded-lg"
+                                    />
+                                    <div className="flex justify-between text-[8px] text-zinc-500 mt-0.5">
+                                      <span>0px</span>
+                                      <button type="button" onClick={() => setStreamBottomTrim(0)} className="text-purple-400 hover:underline">Reset</button>
+                                      <span>-40px (Sleeve)</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
                               <button
                                 type="button"
                                 disabled={isRecompositing || !streamBgImageUrl}
@@ -6847,7 +7024,7 @@ export default function Home() {
                                 ) : (
                                   <>
                                     <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                                    <span>Text & Overlay neu berechnen</span>
+                                    <span>Vorschau & Zuschnitt aktualisieren</span>
                                   </>
                                 )}
                               </button>
