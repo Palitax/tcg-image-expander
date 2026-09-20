@@ -286,6 +286,42 @@ class TCGStreamEngine:
         bgra = cv2.merge([b, g, r, alpha_mask])
         return bgra
 
+    @staticmethod
+    def auto_detect_adf_tcg_crop(image_bgr: np.ndarray, is_small: bool = False) -> Tuple[int, int, int, int]:
+        """
+        Automatische Kantenerkennung für Epson DS-530 ADF-Scans.
+        Arretiert die physikalische TCG-Größe (1118 x 1560 px) und ermittelt
+        per Sobel-Gradientenanalyse (erste signifikante Kante von außen) die Einzugsverschiebung (X, Y).
+        """
+        h, w = image_bgr.shape[:2]
+        target_ratio = 1.4576 if is_small else (88.0 / 63.0)
+        nominal_w = int(round(w * 0.8606))  # 1118px bei 1299px Scanbreite
+        nominal_h = int(round(nominal_w * target_ratio))  # 1560px
+
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+
+        # 1. Y-Suche (horizontale Kante des oberen Kartenrands)
+        mid_gray_y = gray[:, int(w * 0.25):int(w * 0.75)]
+        sobel_y = np.abs(cv2.Sobel(mid_gray_y, cv2.CV_64F, 0, 1, ksize=3))
+        profile_y = np.mean(sobel_y, axis=1)
+
+        top_candidates = np.where(profile_y[25:160] > 55)[0]
+        top_y = (25 + int(top_candidates[0])) if len(top_candidates) > 0 else 42
+
+        # 2. X-Suche (vertikale Kante des linken Kartenrands)
+        mid_gray_x = gray[int(h * 0.25):int(h * 0.75), :]
+        sobel_x = np.abs(cv2.Sobel(mid_gray_x, cv2.CV_64F, 1, 0, ksize=3))
+        profile_x = np.mean(sobel_x, axis=0)
+
+        left_candidates = np.where(profile_x[25:160] > 55)[0]
+        left_x = (25 + int(left_candidates[0])) if len(left_candidates) > 0 else 68
+
+        # Begrenzungen absichern
+        left_x = max(0, min(w - nominal_w, left_x))
+        top_y = max(0, min(h - nominal_h, top_y))
+
+        return left_x, top_y, nominal_w, nominal_h
+
     # ========================================================
     # 5. Vollständiger Verarbeitungsaufruf
     # ========================================================
@@ -302,7 +338,7 @@ class TCGStreamEngine:
         """
         Führt den gesamten Prozess aus:
         1. EXIF-Orientierung
-        2. Gemini 4-Punkt Grounding & OCR (oder direkt crop_box aus Live-Visier)
+        2. Gemini 4-Punkt Grounding & OCR (oder direkt crop_box aus Live-Visier / ADF Auto-Snap)
         3. Homographie & Vektor-Stanzung
         Rückgabe: (bgra_cutout_card, metadata_result)
         """
@@ -319,6 +355,26 @@ class TCGStreamEngine:
                 bw = bw * orig_w
                 bh = bh * orig_h
 
+            corners = CardCorners(
+                top_left=[int(round(by * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))],
+                top_right=[int(round(by * 1000.0 / orig_h)), int(round((bx + bw) * 1000.0 / orig_w))],
+                bottom_right=[int(round((by + bh) * 1000.0 / orig_h)), int(round((bx + bw) * 1000.0 / orig_w))],
+                bottom_left=[int(round((by + bh) * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))]
+            )
+            try:
+                analysis = self.analyze_card_with_gemini(image_bgr)
+                analysis.corners = corners
+            except Exception:
+                analysis = CardAnalysisResult(
+                    card_name="Sammelkarte",
+                    collector_number="",
+                    set_code="",
+                    scene_prompt="",
+                    corners=corners
+                )
+        elif 1150 <= orig_w <= 1450 and 1650 <= orig_h <= 1950:
+            # Vollautomatischer TCG Auto-Snap für Epson DS-530 ADF-Scans
+            bx, by, bw, bh = self.auto_detect_adf_tcg_crop(image_bgr)
             corners = CardCorners(
                 top_left=[int(round(by * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))],
                 top_right=[int(round(by * 1000.0 / orig_h)), int(round((bx + bw) * 1000.0 / orig_w))],
