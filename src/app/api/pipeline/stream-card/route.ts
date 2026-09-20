@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import sharp, { OverlayOptions } from "sharp";
 import fs from "fs";
 import path from "path";
-import { extractCardCutout } from "@/utils/cardCutout";
+import { extractCardCutout, CardCutoutResult } from "@/utils/cardCutout";
+import { removeBackgroundAI } from "@/utils/bgRemover";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,8 +20,9 @@ export async function POST(request: Request) {
     const customBgFile = formData.get("backgroundImage") as File | null;
     const cardScaleFactor = parseFloat(formData.get("cardScale") as string || "0.75");
     const shadowStyle = (formData.get("shadowStyle") as string || "soft") as "soft" | "intense" | "glow" | "none";
+    const mattingEngine = (formData.get("mattingEngine") as string || "ai_matting") as "ai_matting" | "tcg_cutout";
 
-    console.log(`[Stream Card API] Params: cardFileName=${cardFile?.name || "none"}, cardFileSize=${cardFile?.size || 0} bytes, scale=${cardScaleFactor}, shadowStyle=${shadowStyle}`);
+    console.log(`[Stream Card API] Params: cardFileName=${cardFile?.name || "none"}, cardFileSize=${cardFile?.size || 0} bytes, scale=${cardScaleFactor}, shadowStyle=${shadowStyle}, mattingEngine=${mattingEngine}`);
 
     if (!cardFile) {
       console.error("[Stream Card API] Error: Keine Bilddatei im FormData vorhanden.");
@@ -127,18 +129,59 @@ export async function POST(request: Request) {
     const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
     // High-precision Card Cutout & AI Analysis
-    const cardCutoutResult = await extractCardCutout(originalCardBuffer, {
-      apiKey,
-      cornerRadiusPercent: 0.038,
-      edgePaddingPx,
-      verticalOffsetPx,
-      bottomTrimPx,
-      topPaddingPx
-    });
+    let roundedCardBuffer: Buffer;
+    let cardCutoutResult: CardCutoutResult;
+    let usedFallback = false;
 
-    const roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
-    const extractW = cardCutoutResult.cardCoords.x2 - cardCutoutResult.cardCoords.x1;
-    const extractH = cardCutoutResult.cardCoords.y2 - cardCutoutResult.cardCoords.y1;
+    if (mattingEngine === "ai_matting") {
+      console.log("[Stream Card API] Starte paralleles AI Alpha Matting (RMBG-1.4) und TCG-Analyse...");
+      const [mattedCard, cutoutData] = await Promise.all([
+        (async () => {
+          try {
+            const matted = await removeBackgroundAI(originalCardBuffer);
+            const trimmed = await sharp(matted).trim().png().toBuffer();
+            console.log(`[Stream Card API] AI Alpha Matting erfolgreich abgeschlossen (${trimmed.length} Bytes).`);
+            return trimmed;
+          } catch (mErr: any) {
+            console.warn("[Stream Card API] AI Alpha Matting fehlgeschlagen, Fallback auf TCG Cutout:", mErr?.message || mErr);
+            return null;
+          }
+        })(),
+        extractCardCutout(originalCardBuffer, {
+          apiKey,
+          cornerRadiusPercent: 0.038,
+          edgePaddingPx,
+          verticalOffsetPx,
+          bottomTrimPx,
+          topPaddingPx
+        })
+      ]);
+
+      cardCutoutResult = cutoutData;
+      if (mattedCard) {
+        roundedCardBuffer = mattedCard;
+        usedFallback = cardCutoutResult.usedFallback;
+      } else {
+        roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
+        usedFallback = true;
+      }
+    } else {
+      console.log("[Stream Card API] Verwende TCG Geometrie-Zuschnitt (Druckfarben-Anker)...");
+      cardCutoutResult = await extractCardCutout(originalCardBuffer, {
+        apiKey,
+        cornerRadiusPercent: 0.038,
+        edgePaddingPx,
+        verticalOffsetPx,
+        bottomTrimPx,
+        topPaddingPx
+      });
+      roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
+      usedFallback = cardCutoutResult.usedFallback;
+    }
+
+    const cardMeta = await sharp(roundedCardBuffer).metadata();
+    const extractW = cardMeta.width || (cardCutoutResult.cardCoords.x2 - cardCutoutResult.cardCoords.x1);
+    const extractH = cardMeta.height || (cardCutoutResult.cardCoords.y2 - cardCutoutResult.cardCoords.y1);
     const cardName = cardCutoutResult.cardName;
     const isCardBack = false;
 

@@ -3,7 +3,8 @@ import { GoogleGenAI } from "@google/genai";
 import sharp, { OverlayOptions } from "sharp";
 import { enrichCardMetadata, CardMetadata } from "@/utils/tcgDatabase";
 import { buildStreamPreviewVectorSvg } from "@/utils/svgVectorText";
-import { extractCardCutout } from "@/utils/cardCutout";
+import { extractCardCutout, CardCutoutResult } from "@/utils/cardCutout";
+import { removeBackgroundAI } from "@/utils/bgRemover";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -195,6 +196,7 @@ export async function POST(request: Request) {
     const customBgFile = formData.get("backgroundImage") as File | null;
     const cardScale = parseFloat((formData.get("cardScale") as string) || "0.68");
     const shadowStyle = ((formData.get("shadowStyle") as string) || "soft") as "soft" | "intense" | "glow" | "none";
+    const mattingEngine = ((formData.get("mattingEngine") as string) || "ai_matting") as "ai_matting" | "tcg_cutout";
 
     const apiKey =
       (formData.get("apiKey") as string) ||
@@ -233,17 +235,55 @@ export async function POST(request: Request) {
     const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
     // STEP 1 & 2: High-precision Card Cutout & Vision Analysis
-    const cardCutoutResult = await extractCardCutout(originalCardBuffer, {
-      apiKey,
-      cornerRadiusPercent: 0.038,
-      edgePaddingPx,
-      verticalOffsetPx,
-      bottomTrimPx,
-      topPaddingPx
-    });
+    let roundedCardBuffer: Buffer;
+    let cardCutoutResult: CardCutoutResult;
+    let usedFallback = false;
 
-    const roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
-    let usedFallback = cardCutoutResult.usedFallback;
+    if (mattingEngine === "ai_matting") {
+      console.log("[Stream Preview API] Starte paralleles AI Alpha Matting (RMBG-1.4) und TCG-Analyse...");
+      const [mattedCard, cutoutData] = await Promise.all([
+        (async () => {
+          try {
+            const matted = await removeBackgroundAI(originalCardBuffer);
+            const trimmed = await sharp(matted).trim().png().toBuffer();
+            console.log(`[Stream Preview API] AI Alpha Matting erfolgreich abgeschlossen (${trimmed.length} Bytes).`);
+            return trimmed;
+          } catch (mErr: any) {
+            console.warn("[Stream Preview API] AI Alpha Matting fehlgeschlagen, Fallback auf TCG Cutout:", mErr?.message || mErr);
+            return null;
+          }
+        })(),
+        extractCardCutout(originalCardBuffer, {
+          apiKey,
+          cornerRadiusPercent: 0.038,
+          edgePaddingPx,
+          verticalOffsetPx,
+          bottomTrimPx,
+          topPaddingPx
+        })
+      ]);
+
+      cardCutoutResult = cutoutData;
+      if (mattedCard) {
+        roundedCardBuffer = mattedCard;
+        usedFallback = cardCutoutResult.usedFallback;
+      } else {
+        roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
+        usedFallback = true;
+      }
+    } else {
+      console.log("[Stream Preview API] Verwende TCG Geometrie-Zuschnitt (Druckfarben-Anker)...");
+      cardCutoutResult = await extractCardCutout(originalCardBuffer, {
+        apiKey,
+        cornerRadiusPercent: 0.038,
+        edgePaddingPx,
+        verticalOffsetPx,
+        bottomTrimPx,
+        topPaddingPx
+      });
+      roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
+      usedFallback = cardCutoutResult.usedFallback;
+    }
 
     // STEP 3: Enrich card metadata using TCG Database
     const enrichedMetadata = enrichCardMetadata({
