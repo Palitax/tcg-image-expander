@@ -90,11 +90,16 @@ export function buildStreamPreviewVectorSvg(
   if (line2.length > 25) line2FontSize = 28;
   if (line2.length > 35) line2FontSize = 24;
 
-  // Convert all text to pure vector SVG path shapes
+  // Calculate dynamic spacing for Line 3 slogan and flanking lines
+  const line3Width = getTextWidth(regularFont, line3, 22);
+  const leftLineEnd = Math.max(75, Math.round(512 - line3Width / 2 - 40));
+  const rightLineStart = Math.min(949, Math.round(512 + line3Width / 2 + 40));
+
+  // Convert all text to pure vector SVG path shapes (matching reference typography & vertical rhythm)
   const badgePath = renderTextToSvgPath(boldFont, "STREAM PREVIEW", 42, 54, 23, "left", "#ffffff");
-  const line1Path = renderTextToSvgPath(boldFont, line1, 512, 864, line1FontSize, "center", "#ffffff");
-  const line2Path = renderTextToSvgPath(boldFont, line2, 512, 908, line2FontSize, "center", "#ffffff");
-  const line3Path = renderTextToSvgPath(regularFont, line3, 512, 954, 22, "center", "#ffffff");
+  const line1Path = renderTextToSvgPath(boldFont, line1, 512, 896, line1FontSize, "center", "#ffffff");
+  const line2Path = renderTextToSvgPath(boldFont, line2, 512, 938, line2FontSize, "center", "#ffffff");
+  const line3Path = renderTextToSvgPath(regularFont, line3, 512, 980, 22, "center", "#ffffff");
 
   const svgContent = `
 <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
@@ -122,7 +127,7 @@ export function buildStreamPreviewVectorSvg(
     </linearGradient>
 
     <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="2" result="blur" />
+      <feGaussianBlur stdDeviation="1.5" result="blur" />
       <feMerge>
         <feMergeNode in="blur" />
         <feMergeNode in="SourceGraphic" />
@@ -141,14 +146,14 @@ export function buildStreamPreviewVectorSvg(
 
   <!-- Framing Neon Lines -->
   <!-- Top & Right framing path -->
-  <path d="M 265 46 L 950 46 Q 982 46 982 78 L 982 916 Q 982 948 950 948 L 780 948" fill="none" stroke="url(#lineGlow)" stroke-width="2" filter="url(#glow)" />
+  <path d="M 240 46 L 950 46 Q 982 46 982 78 L 982 922 Q 982 971 933 971 L ${rightLineStart} 971" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />
   
   <!-- Left & Bottom framing path -->
-  <path d="M 42 78 L 42 916 Q 42 948 74 948 L 244 948" fill="none" stroke="url(#lineGlow)" stroke-width="2" filter="url(#glow)" />
+  <path d="M 42 78 L 42 922 Q 42 971 91 971 L ${leftLineEnd} 971" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />
 
-  <!-- Outer side accent brackets -->
-  <path d="M 26 120 L 26 880 Q 26 915 52 915 L 70 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.4" opacity="0.55" />
-  <path d="M 998 120 L 998 880 Q 998 915 972 915 L 954 915" fill="none" stroke="url(#lineGlow)" stroke-width="1.4" opacity="0.55" />
+  <!-- Outer Corner Accent Lines (Bottom Left & Bottom Right) -->
+  <path d="M 26 740 L 26 946 Q 26 954 32 960 L 60 985" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" opacity="0.9" />
+  <path d="M 998 740 L 998 946 Q 998 954 992 960 L 964 985" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" opacity="0.9" />
 
   <!-- Line 1: Card Name - Number - Set Code (Pure Vector Path) -->
   ${line1Path}
@@ -156,10 +161,8 @@ export function buildStreamPreviewVectorSvg(
   <!-- Line 2: Set Name (Pure Vector Path) -->
   ${line2Path}
 
-  <!-- Line 3: Bottom Slogan flanked with accent lines (Pure Vector Path) -->
-  <line x1="80" y1="948" x2="234" y2="948" stroke="url(#lineGlow)" stroke-width="1.6" />
+  <!-- Line 3: Bottom Slogan (Pure Vector Path) -->
   ${line3Path}
-  <line x1="790" y1="948" x2="944" y2="948" stroke="url(#lineGlow)" stroke-width="1.6" />
 </svg>`;
 
   return Buffer.from(svgContent);
