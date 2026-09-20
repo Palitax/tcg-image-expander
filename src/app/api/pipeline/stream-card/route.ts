@@ -167,7 +167,19 @@ export async function POST(request: Request) {
     let cardCutoutResult: CardCutoutResult;
     let usedFallback = false;
 
-    if (mattingEngine === "gemini_homography") {
+    if (cropBox) {
+      console.log(`[Stream Card API] Visier-Stanzrahmen aktiv: x=${cropBox.x}, y=${cropBox.y}, w=${cropBox.width}, h=${cropBox.height}`);
+      cardCutoutResult = await extractCardCutout(originalCardBuffer, {
+        apiKey,
+        cornerRadiusPercent: 0.038,
+        edgePaddingPx,
+        verticalOffsetPx,
+        bottomTrimPx,
+        topPaddingPx,
+        cropBox
+      });
+      roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
+    } else if (mattingEngine === "gemini_homography") {
       console.log("[Stream Card API] Starte Gemini 4-Punkt Grounding & Homographie-Entzerrung...");
       try {
         const homographyResult = await extractCardHomography(originalCardBuffer, {
@@ -217,7 +229,8 @@ export async function POST(request: Request) {
           edgePaddingPx,
           verticalOffsetPx,
           bottomTrimPx,
-          topPaddingPx
+          topPaddingPx,
+          cropBox
         });
         roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
       }

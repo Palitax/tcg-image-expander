@@ -556,12 +556,14 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
                 touchAction: "none"
               }}
             >
-              {/* Obere Badge mit Pixelmaßen */}
-              <div className="flex items-center justify-between pointer-events-none">
-                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-purple-950/85 text-purple-200 border border-purple-500/40 backdrop-blur-sm">
+              {/* Schwebende Maß-Badge außerhalb der Karte (verdeckt keine Kartentexte/Symbole) */}
+              <div className={`absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none z-10 whitespace-nowrap transition-all ${
+                dispY < 30 ? "bottom-2" : "-top-7"
+              }`}>
+                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-purple-950/90 text-purple-200 border border-purple-500/50 shadow-md backdrop-blur-sm">
                   {box.width}×{box.height} px
                 </span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-900/85 text-zinc-300 border border-zinc-700/60 backdrop-blur-sm">
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-900/90 text-zinc-300 border border-zinc-700/70 shadow-md backdrop-blur-sm">
                   X:{box.x} Y:{box.y}
                 </span>
               </div>

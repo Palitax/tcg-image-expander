@@ -37,6 +37,8 @@ interface ExtractCardCutoutOptions {
   bottomTrimPx?: number;
   /** Top border margin expansion in pixels (ensures top border is preserved) */
   topPaddingPx?: number;
+  /** Explicit manual crop box coordinates from the interactive visor */
+  cropBox?: { x: number; y: number; width: number; height: number } | null;
 }
 
 /**
@@ -259,7 +261,8 @@ export async function extractCardCutout(
     edgePaddingPx = 0,
     verticalOffsetPx = 0,
     bottomTrimPx = 0,
-    topPaddingPx = 0
+    topPaddingPx = 0,
+    cropBox
   } = options;
 
   // 1. Normalize orientation and read dimensions
@@ -318,6 +321,22 @@ export async function extractCardCutout(
   }
 
   let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
+
+  // Wenn cropBox vom Visier übergeben wurde, exakt diese Koordinaten fest arretieren
+  if (cropBox && cropBox.width > 10 && cropBox.height > 10) {
+    const clampedX = Math.max(0, Math.min(width - 50, Math.round(cropBox.x)));
+    const clampedY = Math.max(0, Math.min(height - 50, Math.round(cropBox.y)));
+    const clampedW = Math.max(50, Math.min(width - clampedX, Math.round(cropBox.width)));
+    const clampedH = Math.max(50, Math.min(height - clampedY, Math.round(cropBox.height)));
+    cardCoords = {
+      x1: clampedX,
+      y1: clampedY,
+      x2: clampedX + clampedW,
+      y2: clampedY + clampedH
+    };
+    console.log(`[Card Cutout] Manuelles Visier aktiv: Verwende exakte Koordinaten [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}] (${clampedW}x${clampedH})`);
+  }
+
   let illustrationCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
   let cardName = "";
   let cardNumber = "";
@@ -496,8 +515,8 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
           }
         }
 
-        // 2b. Programmatic Border Reconstruction from Printed Ink Anchors
-        if (aiX1 !== null && aiX2 !== null) {
+        // 2b. Programmatic Border Reconstruction from Printed Ink Anchors (only if no manual cropBox)
+        if (!cropBox && aiX1 !== null && aiX2 !== null) {
           const rawW = aiX2 - aiX1;
           const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
           const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.396825;
@@ -568,33 +587,37 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
     cardCoords = await detectCardBordersCV(normalizedBuffer, width, height);
   }
 
-  // 4. Inward Border Refinement & Sleeve Stripping (ONLY FOR CV FALLBACK!)
-  // When Gemini AI successfully detects the card bounding box, we do NOT run 1D gradient refinement.
-  // Gemini has full semantic awareness of card headers, borders, and sleeves.
-  // 1D gradient scans lack semantic awareness and jump into inner artwork/headers or mistake copyright lines for sleeve edges.
-  if (usedFallback) {
-    try {
-      const { data: greyData } = await sharp(normalizedBuffer)
-        .greyscale()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-      const refined = refineCardCutoutBorders(greyData, width, height, cardCoords);
-      console.log(`[Card Cutout CV] Verfeinerte Fallback-Kartonkoordinaten: [${refined.x1}, ${refined.y1}, ${refined.x2}, ${refined.y2}]`);
-      cardCoords = refined;
-    } catch (refineErr: any) {
-      console.warn("[Card Cutout CV] Border refinement skipped:", refineErr?.message || refineErr);
-    }
+  // 4 & 5: Überspringe automatische Heuristiken und Randbeschnitte, wenn der Nutzer das Visier manuell gesetzt hat!
+  if (cropBox) {
+    console.log(`[Card Cutout] Manuelles Visier aktiv: Behalte exakte Koordinaten [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}] 1:1 bei.`);
   } else {
-    console.log(`[Card Cutout] Verwende direkte semantische Gemini-Koordinaten: [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}]`);
-  }
+    // 4. Inward Border Refinement & Sleeve Stripping (ONLY FOR CV FALLBACK!)
+    // When Gemini AI successfully detects the card bounding box, we do NOT run 1D gradient refinement.
+    // Gemini has full semantic awareness of card headers, borders, and sleeves.
+    // 1D gradient scans lack semantic awareness and jump into inner artwork/headers or mistake copyright lines for sleeve edges.
+    if (usedFallback) {
+      try {
+        const { data: greyData } = await sharp(normalizedBuffer)
+          .greyscale()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
 
-  // 5. Mathematical TCG Aspect Ratio Guard & Plausibility Check
-  // Standard card ratio: 63mm x 88mm = 1.3968 (Pokémon, MTG, One Piece, Lorcana)
-  // Japanese small ratio: 59mm x 86mm = 1.4576 (Yu-Gi-Oh)
-  let rawW = cardCoords.x2 - cardCoords.x1;
-  let rawH = cardCoords.y2 - cardCoords.y1;
-  let ratio = rawH / Math.max(1, rawW);
+        const refined = refineCardCutoutBorders(greyData, width, height, cardCoords);
+        console.log(`[Card Cutout CV] Verfeinerte Fallback-Kartonkoordinaten: [${refined.x1}, ${refined.y1}, ${refined.x2}, ${refined.y2}]`);
+        cardCoords = refined;
+      } catch (refineErr: any) {
+        console.warn("[Card Cutout CV] Border refinement skipped:", refineErr?.message || refineErr);
+      }
+    } else {
+      console.log(`[Card Cutout] Verwende direkte semantische Gemini-Koordinaten: [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}]`);
+    }
+
+    // 5. Mathematical TCG Aspect Ratio Guard & Plausibility Check
+    // Standard card ratio: 63mm x 88mm = 1.3968 (Pokémon, MTG, One Piece, Lorcana)
+    // Japanese small ratio: 59mm x 86mm = 1.4576 (Yu-Gi-Oh)
+    let rawW = cardCoords.x2 - cardCoords.x1;
+    let rawH = cardCoords.y2 - cardCoords.y1;
+    let ratio = rawH / Math.max(1, rawW);
 
   // Check if it is genuinely a 100% borderless raw card scan (all margins <= 1%)
   const isGenuineEdgeToEdge =
@@ -675,6 +698,7 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
       }
     }
   }
+}
 
   // 5c. Apply User Fine-Tuning Offsets:
   if (verticalOffsetPx && Math.abs(verticalOffsetPx) <= 80) {
