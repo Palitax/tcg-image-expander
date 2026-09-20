@@ -295,8 +295,8 @@ class TCGStreamEngine:
         """
         h, w = image_bgr.shape[:2]
         target_ratio = 1.4576 if is_small else (88.0 / 63.0)
-        nominal_w = int(round(w * 0.8606))  # 1118px bei 1299px Scanbreite
-        nominal_h = int(round(nominal_w * target_ratio))  # 1560px
+        nominal_w = int(round(w * 0.9007))  # 1170px bei 1299px Scanbreite
+        nominal_h = int(round(nominal_w * target_ratio))  # 1634px
 
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -306,7 +306,7 @@ class TCGStreamEngine:
         profile_y = np.mean(sobel_y, axis=1)
 
         top_candidates = np.where(profile_y[25:160] > 55)[0]
-        top_y = (25 + int(top_candidates[0])) if len(top_candidates) > 0 else 42
+        top_y = (25 + int(top_candidates[0])) if len(top_candidates) > 0 else 36
 
         # 2. X-Suche (vertikale Kante des linken Kartenrands)
         mid_gray_x = gray[int(h * 0.25):int(h * 0.75), :]
@@ -314,7 +314,7 @@ class TCGStreamEngine:
         profile_x = np.mean(sobel_x, axis=0)
 
         left_candidates = np.where(profile_x[25:160] > 55)[0]
-        left_x = (25 + int(left_candidates[0])) if len(left_candidates) > 0 else 68
+        left_x = (25 + int(left_candidates[0])) if len(left_candidates) > 0 else 54
 
         # Begrenzungen absichern
         left_x = max(0, min(w - nominal_w, left_x))

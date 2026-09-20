@@ -30,6 +30,18 @@ export interface CardCropVisorProps {
   className?: string;
 }
 
+type DragMode =
+  | "move"
+  | "edge-right"
+  | "edge-left"
+  | "edge-top"
+  | "edge-bottom"
+  | "corner-br"
+  | "corner-bl"
+  | "corner-tr"
+  | "corner-tl"
+  | null;
+
 export const CardCropVisor: React.FC<CardCropVisorProps> = ({
   imageUrl,
   onChange,
@@ -53,20 +65,19 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
   const [isRatioLocked, setIsRatioLocked] = useState<boolean>(true);
 
   // Stanzrahmen in Pixelkoordinaten des Originalbildes
-  // Standardmäßig auf Epson DS-530 TCG-Maße kalibriert (1118 x 1560 px)
+  // Standardmäßig auf Epson DS-530 TCG-Scanmaße kalibriert (1170 x 1634 px)
   const [box, setBox] = useState<CropBox>({
-    x: 68,
-    y: 42,
-    width: 1118,
-    height: 1560
+    x: 54,
+    y: 36,
+    width: 1170,
+    height: 1634
   });
 
   // Schrittweite für Nudge-Buttons (1px, 5px, 10px)
   const [stepSize, setStepSize] = useState<number>(1);
 
-  // Drag-Status
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [resizeMode, setResizeMode] = useState<"corner" | "width" | "height" | null>(null);
+  // Drag-Modus
+  const [dragMode, setDragMode] = useState<DragMode>(null);
 
   const dragStartRef = useRef<{
     mouseX: number;
@@ -113,13 +124,13 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
       initialH = initialBox.height;
     } else if (nw >= 1200 && nw <= 1400 && nh >= 1700 && nh <= 1900) {
       // Epson DS-530 Scan (1299 x 1800 px) -> Exakte TCG-Kartenmaße
-      initialW = 1118;
-      initialH = Math.round(initialW * targetRatio); // 1560px
-      initialX = 68;
-      initialY = 42;
+      initialW = 1170;
+      initialH = Math.round(initialW * targetRatio); // 1634px
+      initialX = 54;
+      initialY = 36;
     } else {
-      // Universelle Karte: 86% der Breite
-      initialW = Math.round(nw * 0.86);
+      // Universelle Karte: 90% der Breite
+      initialW = Math.round(nw * 0.90);
       initialH = Math.round(initialW * targetRatio);
       initialX = Math.round((nw - initialW) / 2);
       initialY = Math.round((nh - initialH) / 2);
@@ -134,7 +145,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     onChange(newBox);
   };
 
-  // ResizeObserver auf dem Wrapper, um bei Fenstergrößenänderung immer scharf und unverzerrt zu skalieren
+  // ResizeObserver auf dem Wrapper
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
@@ -155,8 +166,8 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
       const next = updater(prev);
       if (!naturalSize) return next;
 
-      const clampedW = Math.max(80, Math.min(naturalSize.width, Math.round(next.width)));
-      const clampedH = Math.max(80, Math.min(naturalSize.height, Math.round(next.height)));
+      const clampedW = Math.max(50, Math.min(naturalSize.width, Math.round(next.width)));
+      const clampedH = Math.max(50, Math.min(naturalSize.height, Math.round(next.height)));
       const clampedX = Math.max(0, Math.min(naturalSize.width - clampedW, Math.round(next.x)));
       const clampedY = Math.max(0, Math.min(naturalSize.height - clampedH, Math.round(next.y)));
 
@@ -175,29 +186,39 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     }));
   }, [updateBox]);
 
-  // Breiten- und Höhenanpassung
+  // Unabhängige Breitenanpassung (Horizontal)
   const adjustWidth = useCallback((deltaW: number) => {
     updateBox((prev) => {
       const newW = prev.width + deltaW;
-      const newH = isRatioLocked ? Math.round(newW * targetRatio) : prev.height;
       const shiftX = Math.round(-deltaW / 2);
-      const shiftY = isRatioLocked ? Math.round(-(newH - prev.height) / 2) : 0;
       return {
         ...prev,
         x: prev.x + shiftX,
-        y: prev.y + shiftY,
-        width: newW,
-        height: newH
+        width: newW
       };
     });
-  }, [updateBox, isRatioLocked, targetRatio]);
+  }, [updateBox]);
 
+  // Unabhängige Höhenanpassung (Vertikal)
   const adjustHeight = useCallback((deltaH: number) => {
     updateBox((prev) => {
       const newH = prev.height + deltaH;
-      const newW = isRatioLocked ? Math.round(newH / targetRatio) : prev.width;
       const shiftY = Math.round(-deltaH / 2);
-      const shiftX = isRatioLocked ? Math.round(-(newW - prev.width) / 2) : 0;
+      return {
+        ...prev,
+        y: prev.y + shiftY,
+        height: newH
+      };
+    });
+  }, [updateBox]);
+
+  // Proportionale Skalierung
+  const scaleProportional = useCallback((deltaW: number) => {
+    updateBox((prev) => {
+      const newW = prev.width + deltaW;
+      const newH = Math.round(newW * targetRatio);
+      const shiftX = Math.round(-deltaW / 2);
+      const shiftY = Math.round(-(newH - prev.height) / 2);
       return {
         ...prev,
         x: prev.x + shiftX,
@@ -206,16 +227,16 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
         height: newH
       };
     });
-  }, [updateBox, isRatioLocked, targetRatio]);
+  }, [updateBox, targetRatio]);
 
   // Schnell-Presets
   const applyPresetEpson = () => {
     if (!naturalSize) return;
-    const w = 1118;
-    const h = Math.round(w * targetRatio);
+    const w = 1170;
+    const h = Math.round(w * targetRatio); // 1634px
     updateBox(() => ({
-      x: 68,
-      y: 42,
+      x: 54,
+      y: 36,
       width: w,
       height: h
     }));
@@ -238,7 +259,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     setIsRatioLocked(true);
   };
 
-  // Tastatursteuerung für pixelgenaue Ausrichtung
+  // Tastatursteuerung
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -263,23 +284,25 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
         nudge(0, mult);
       } else if (e.key === "+" || e.key === "=") {
         e.preventDefault();
-        adjustWidth(mult * 2);
+        if (isRatioLocked) scaleProportional(mult * 2);
+        else adjustWidth(mult * 2);
       } else if (e.key === "-" || e.key === "_") {
         e.preventDefault();
-        adjustWidth(-mult * 2);
+        if (isRatioLocked) scaleProportional(-mult * 2);
+        else adjustWidth(-mult * 2);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nudge, adjustWidth, stepSize]);
+  }, [nudge, adjustWidth, scaleProportional, isRatioLocked, stepSize]);
 
-  // Drag-Verschiebung
-  const handlePointerDownDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+  // Pointer Handlers für Drag & Resize
+  const startDrag = (mode: DragMode, e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    setIsDragging(true);
+    setDragMode(mode);
     dragStartRef.current = {
       mouseX: e.clientX,
       mouseY: e.clientY,
@@ -290,91 +313,73 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     };
   };
 
-  const handlePointerMoveDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging || uniformScale <= 0) return;
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragMode || uniformScale <= 0 || !naturalSize) return;
     const deltaMouseX = e.clientX - dragStartRef.current.mouseX;
     const deltaMouseY = e.clientY - dragStartRef.current.mouseY;
 
-    // Exakt 1:1 mit uniformScale umrechnen
-    const deltaImgX = deltaMouseX / uniformScale;
-    const deltaImgY = deltaMouseY / uniformScale;
+    const deltaX = deltaMouseX / uniformScale;
+    const deltaY = deltaMouseY / uniformScale;
+    const { boxX, boxY, boxW, boxH } = dragStartRef.current;
 
-    updateBox(() => ({
-      ...box,
-      x: dragStartRef.current.boxX + deltaImgX,
-      y: dragStartRef.current.boxY + deltaImgY
-    }));
+    updateBox(() => {
+      let nextX = boxX;
+      let nextY = boxY;
+      let nextW = boxW;
+      let nextH = boxH;
+
+      if (dragMode === "move") {
+        // Freies Verschieben in jede Richtung
+        nextX = boxX + deltaX;
+        nextY = boxY + deltaY;
+      } else if (dragMode === "edge-right") {
+        // Ausschließlich HORIZONTAL nach rechts
+        nextW = Math.max(50, boxW + deltaX);
+      } else if (dragMode === "edge-left") {
+        // Ausschließlich HORIZONTAL nach links
+        const potentialX = boxX + deltaX;
+        nextX = Math.min(boxX + boxW - 50, potentialX);
+        nextW = boxW - (nextX - boxX);
+      } else if (dragMode === "edge-bottom") {
+        // Ausschließlich VERTIKAL nach unten
+        nextH = Math.max(50, boxH + deltaY);
+      } else if (dragMode === "edge-top") {
+        // Ausschließlich VERTIKAL nach oben
+        const potentialY = boxY + deltaY;
+        nextY = Math.min(boxY + boxH - 50, potentialY);
+        nextH = boxH - (nextY - boxY);
+      } else if (dragMode === "corner-br") {
+        nextW = Math.max(50, boxW + deltaX);
+        nextH = isRatioLocked ? Math.round(nextW * targetRatio) : Math.max(50, boxH + deltaY);
+      } else if (dragMode === "corner-tr") {
+        nextW = Math.max(50, boxW + deltaX);
+        const desiredH = isRatioLocked ? Math.round(nextW * targetRatio) : Math.max(50, boxH - deltaY);
+        nextY = boxY + boxH - desiredH;
+        nextH = desiredH;
+      } else if (dragMode === "corner-bl") {
+        const potentialX = boxX + deltaX;
+        nextX = Math.min(boxX + boxW - 50, potentialX);
+        nextW = boxW - (nextX - boxX);
+        nextH = isRatioLocked ? Math.round(nextW * targetRatio) : Math.max(50, boxH + deltaY);
+      } else if (dragMode === "corner-tl") {
+        const potentialX = boxX + deltaX;
+        nextX = Math.min(boxX + boxW - 50, potentialX);
+        nextW = boxW - (nextX - boxX);
+        const desiredH = isRatioLocked ? Math.round(nextW * targetRatio) : Math.max(50, boxH - deltaY);
+        nextY = boxY + boxH - desiredH;
+        nextH = desiredH;
+      }
+
+      return { x: nextX, y: nextY, width: nextW, height: nextH };
+    });
   };
 
-  const handlePointerUpDrag = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isDragging) {
+  const stopDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragMode) {
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {}
-      setIsDragging(false);
-    }
-  };
-
-  // Resize-Handlers
-  const startResize = (mode: "corner" | "width" | "height", e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    e.preventDefault();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    setResizeMode(mode);
-    dragStartRef.current = {
-      mouseX: e.clientX,
-      mouseY: e.clientY,
-      boxX: box.x,
-      boxY: box.y,
-      boxW: box.width,
-      boxH: box.height
-    };
-  };
-
-  const handlePointerMoveResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!resizeMode || uniformScale <= 0) return;
-    const deltaMouseX = e.clientX - dragStartRef.current.mouseX;
-    const deltaMouseY = e.clientY - dragStartRef.current.mouseY;
-
-    const deltaImgX = deltaMouseX / uniformScale;
-    const deltaImgY = deltaMouseY / uniformScale;
-
-    if (resizeMode === "corner") {
-      const newW = Math.max(80, dragStartRef.current.boxW + deltaImgX);
-      const newH = isRatioLocked
-        ? Math.round(newW * targetRatio)
-        : Math.max(80, dragStartRef.current.boxH + deltaImgY);
-
-      updateBox(() => ({
-        ...box,
-        width: newW,
-        height: newH
-      }));
-    } else if (resizeMode === "width") {
-      const newW = Math.max(80, dragStartRef.current.boxW + deltaImgX);
-      const newH = isRatioLocked ? Math.round(newW * targetRatio) : box.height;
-      updateBox(() => ({
-        ...box,
-        width: newW,
-        height: newH
-      }));
-    } else if (resizeMode === "height") {
-      const newH = Math.max(80, dragStartRef.current.boxH + deltaImgY);
-      const newW = isRatioLocked ? Math.round(newH / targetRatio) : box.width;
-      updateBox(() => ({
-        ...box,
-        width: newW,
-        height: newH
-      }));
-    }
-  };
-
-  const stopResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (resizeMode) {
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
-      setResizeMode(null);
+      setDragMode(null);
     }
   };
 
@@ -404,7 +409,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
               <button
                 type="button"
                 onClick={() => setIsRatioLocked(!isRatioLocked)}
-                className={`flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
+                className={`flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full border transition-colors cursor-pointer ${
                   isRatioLocked
                     ? "bg-purple-500/20 text-purple-300 border-purple-500/40 hover:bg-purple-500/30"
                     : "bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30"
@@ -417,8 +422,8 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
             </div>
             <p className="text-[11px] text-zinc-400">
               {isRatioLocked
-                ? "TCG-Verhältnis aktiv: Breite und Höhe skalieren exakt proportional."
-                : "Freies Format: Breite und Höhe können unabhängig justiert werden."}
+                ? "Kanten ziehen passt Breite/Höhe einzeln an • Ecken ziehen skaliert proportional."
+                : "Freies Format: Alle Kanten und Ecken können völlig frei verschoben werden."}
             </p>
           </div>
         </div>
@@ -531,15 +536,15 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
               />
             </svg>
 
-            {/* Der interaktive Stanzrahmen (Draggable & Resizable) */}
+            {/* Der interaktive Stanzrahmen */}
             <div
-              onPointerDown={handlePointerDownDrag}
-              onPointerMove={handlePointerMoveDrag}
-              onPointerUp={handlePointerUpDrag}
-              onPointerCancel={handlePointerUpDrag}
+              onPointerDown={(e) => startDrag("move", e)}
+              onPointerMove={handlePointerMove}
+              onPointerUp={stopDrag}
+              onPointerCancel={stopDrag}
               className={`absolute border-2 transition-shadow cursor-move flex flex-col justify-between p-2 select-none ${
-                isDragging
-                  ? "border-purple-300 shadow-[0_0_25px_rgba(168,85,247,0.9)] bg-purple-500/10"
+                dragMode === "move"
+                  ? "border-purple-300 shadow-[0_0_25px_rgba(168,85,247,0.9)] bg-purple-500/15"
                   : "border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.6)] hover:border-purple-300 hover:shadow-[0_0_20px_rgba(168,85,247,0.8)] bg-purple-500/5"
               }`}
               style={{
@@ -566,44 +571,104 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
                 <Move className="w-6 h-6 text-purple-300 drop-shadow" />
               </div>
 
-              {/* Resize-Handle: Rechte Kante (Breite) */}
-              {!isRatioLocked && (
-                <div
-                  onPointerDown={(e) => startResize("width", e)}
-                  onPointerMove={handlePointerMoveResize}
-                  onPointerUp={stopResize}
-                  onPointerCancel={stopResize}
-                  className="absolute top-1/2 -right-2.5 -translate-y-1/2 w-5 h-8 rounded-full bg-purple-600/80 border border-white/60 cursor-ew-resize flex items-center justify-center hover:scale-110 transition-transform"
-                  title="Breite anpassen"
-                >
-                  <div className="w-0.5 h-4 bg-white/80 rounded" />
-                </div>
-              )}
+              {/* ---------------- 4 KANTEN-GRIFFE (SEPARAT HORIZONTAL & VERTIKAL) ---------------- */}
 
-              {/* Resize-Handle: Untere Kante (Höhe) */}
-              {!isRatioLocked && (
-                <div
-                  onPointerDown={(e) => startResize("height", e)}
-                  onPointerMove={handlePointerMoveResize}
-                  onPointerUp={stopResize}
-                  onPointerCancel={stopResize}
-                  className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 w-8 h-5 rounded-full bg-purple-600/80 border border-white/60 cursor-ns-resize flex items-center justify-center hover:scale-110 transition-transform"
-                  title="Höhe anpassen"
-                >
-                  <div className="h-0.5 w-4 bg-white/80 rounded" />
-                </div>
-              )}
-
-              {/* Resize-Handle: Ecke unten rechts */}
+              {/* Rechte Kante (Nur Breite / Horizontal) */}
               <div
-                onPointerDown={(e) => startResize("corner", e)}
-                onPointerMove={handlePointerMoveResize}
-                onPointerUp={stopResize}
-                onPointerCancel={stopResize}
-                className="absolute -bottom-2.5 -right-2.5 w-6 h-6 rounded-full bg-purple-500 border-2 border-white shadow-lg cursor-nwse-resize flex items-center justify-center hover:scale-125 transition-transform"
-                title={isRatioLocked ? "Größe anpassen (63:88 mm gesperrt)" : "Größe frei anpassen"}
+                onPointerDown={(e) => startDrag("edge-right", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute top-1/2 -right-3 -translate-y-1/2 w-4 h-10 rounded-full bg-purple-500 border border-white/80 cursor-ew-resize flex items-center justify-center hover:scale-115 shadow-md transition-transform"
+                title="Rechte Kante ziehen (nur horizontal)"
+              >
+                <div className="w-0.5 h-4 bg-white rounded" />
+              </div>
+
+              {/* Linke Kante (Nur links / Horizontal) */}
+              <div
+                onPointerDown={(e) => startDrag("edge-left", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute top-1/2 -left-3 -translate-y-1/2 w-4 h-10 rounded-full bg-purple-500 border border-white/80 cursor-ew-resize flex items-center justify-center hover:scale-115 shadow-md transition-transform"
+                title="Linke Kante ziehen (nur horizontal)"
+              >
+                <div className="w-0.5 h-4 bg-white rounded" />
+              </div>
+
+              {/* Untere Kante (Nur Höhe / Vertikal) */}
+              <div
+                onPointerDown={(e) => startDrag("edge-bottom", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute -bottom-3 left-1/2 -translate-x-1/2 w-10 h-4 rounded-full bg-purple-500 border border-white/80 cursor-ns-resize flex items-center justify-center hover:scale-115 shadow-md transition-transform"
+                title="Untere Kante ziehen (nur vertikal)"
+              >
+                <div className="h-0.5 w-4 bg-white rounded" />
+              </div>
+
+              {/* Obere Kante (Nur oben / Vertikal) */}
+              <div
+                onPointerDown={(e) => startDrag("edge-top", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute -top-3 left-1/2 -translate-x-1/2 w-10 h-4 rounded-full bg-purple-500 border border-white/80 cursor-ns-resize flex items-center justify-center hover:scale-115 shadow-md transition-transform"
+                title="Obere Kante ziehen (nur vertikal)"
+              >
+                <div className="h-0.5 w-4 bg-white rounded" />
+              </div>
+
+              {/* ---------------- 4 ECKEN-GRIFFE ---------------- */}
+
+              {/* Ecke unten rechts */}
+              <div
+                onPointerDown={(e) => startDrag("corner-br", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute -bottom-2.5 -right-2.5 w-6 h-6 rounded-full bg-purple-600 border-2 border-white shadow-lg cursor-nwse-resize flex items-center justify-center hover:scale-125 transition-transform"
+                title={isRatioLocked ? "Ecke unten-rechts (proportional)" : "Ecke unten-rechts (frei)"}
               >
                 <Maximize2 className="w-3 h-3 text-white rotate-90" />
+              </div>
+
+              {/* Ecke unten links */}
+              <div
+                onPointerDown={(e) => startDrag("corner-bl", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute -bottom-2.5 -left-2.5 w-6 h-6 rounded-full bg-purple-600 border-2 border-white shadow-lg cursor-nesw-resize flex items-center justify-center hover:scale-125 transition-transform"
+                title={isRatioLocked ? "Ecke unten-links (proportional)" : "Ecke unten-links (frei)"}
+              >
+                <Maximize2 className="w-3 h-3 text-white rotate-180" />
+              </div>
+
+              {/* Ecke oben rechts */}
+              <div
+                onPointerDown={(e) => startDrag("corner-tr", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute -top-2.5 -right-2.5 w-6 h-6 rounded-full bg-purple-600 border-2 border-white shadow-lg cursor-nesw-resize flex items-center justify-center hover:scale-125 transition-transform"
+                title={isRatioLocked ? "Ecke oben-rechts (proportional)" : "Ecke oben-rechts (frei)"}
+              >
+                <Maximize2 className="w-3 h-3 text-white" />
+              </div>
+
+              {/* Ecke oben links */}
+              <div
+                onPointerDown={(e) => startDrag("corner-tl", e)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+                className="absolute -top-2.5 -left-2.5 w-6 h-6 rounded-full bg-purple-600 border-2 border-white shadow-lg cursor-nwse-resize flex items-center justify-center hover:scale-125 transition-transform"
+                title={isRatioLocked ? "Ecke oben-links (proportional)" : "Ecke oben-links (frei)"}
+              >
+                <Maximize2 className="w-3 h-3 text-white -rotate-90" />
               </div>
             </div>
           </div>
@@ -625,7 +690,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-zinc-900/50 border border-zinc-800 rounded-xl p-3.5">
         {/* D-Pad Pixel-Verschiebung */}
         <div className="flex flex-col items-center justify-center gap-1.5">
-          <span className="text-[11px] font-medium text-zinc-400">Position verschieben</span>
+          <span className="text-[11px] font-medium text-zinc-400">Position verschieben (X / Y)</span>
           <div className="grid grid-cols-3 gap-1 w-28">
             <div />
             <button
@@ -671,57 +736,57 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
           </div>
         </div>
 
-        {/* Größen-Skalierung & Schrittweite */}
+        {/* Größen-Skalierung (Getrennt Horizontal & Vertikal) */}
         <div className="flex flex-col justify-between gap-2">
           <div>
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[11px] font-medium text-zinc-400">Stanzgröße</span>
-              <span className="text-[10px] text-purple-300 font-mono">
+              <span className="text-[11px] font-medium text-zinc-400">Größe anpassen</span>
+              <span className="text-[10px] text-purple-300 font-mono font-semibold">
                 {box.width} × {box.height} px
               </span>
             </div>
-            <div className="flex items-center gap-2 mb-1.5">
+
+            {/* Horizontale Breite */}
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span className="text-[10px] text-zinc-400 font-medium w-14">Breite (X):</span>
               <button
                 type="button"
                 onClick={() => adjustWidth(-stepSize * 2)}
                 className="flex-1 py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                title="Stanzrahmen verkleinern"
+                title="Breite verringern (nur horizontal)"
               >
-                <Minimize2 className="w-3.5 h-3.5 text-zinc-400" />
-                - Kleiner
+                - {stepSize * 2}px
               </button>
               <button
                 type="button"
                 onClick={() => adjustWidth(stepSize * 2)}
                 className="flex-1 py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                title="Stanzrahmen vergrößern"
+                title="Breite vergrößern (nur horizontal)"
               >
-                <Maximize2 className="w-3.5 h-3.5 text-zinc-400" />
-                + Größer
+                + {stepSize * 2}px
               </button>
             </div>
 
-            {/* Zusätzliche unabhängige Höhenjustierung bei Bedarf */}
-            {!isRatioLocked && (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => adjustHeight(-stepSize * 2)}
-                  className="flex-1 py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                  title="Höhe verringern"
-                >
-                  - Höhe
-                </button>
-                <button
-                  type="button"
-                  onClick={() => adjustHeight(stepSize * 2)}
-                  className="flex-1 py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                  title="Höhe vergrößern"
-                >
-                  + Höhe
-                </button>
-              </div>
-            )}
+            {/* Vertikale Höhe */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-zinc-400 font-medium w-14">Höhe (Y):</span>
+              <button
+                type="button"
+                onClick={() => adjustHeight(-stepSize * 2)}
+                className="flex-1 py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                title="Höhe verringern (nur vertikal)"
+              >
+                - {stepSize * 2}px
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustHeight(stepSize * 2)}
+                className="flex-1 py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                title="Höhe vergrößern (nur vertikal)"
+              >
+                + {stepSize * 2}px
+              </button>
+            </div>
           </div>
 
           <div>
@@ -756,7 +821,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
                 className="w-full py-1.5 px-2.5 rounded-lg bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 text-xs font-medium border border-purple-700/50 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                Auto Epson DS-530
+                Auto Epson DS-530 (1170×1634 px)
               </button>
               <button
                 type="button"
@@ -770,7 +835,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
           </div>
 
           <div className="text-[10px] font-mono text-zinc-400 bg-zinc-950/80 p-1.5 px-2 rounded-lg border border-zinc-800/80 text-center truncate">
-            Stanze: {box.x}, {box.y}, {box.width}×{box.height} px
+            Stanze: X:{box.x}, Y:{box.y} • {box.width}×{box.height} px
           </div>
         </div>
       </div>
