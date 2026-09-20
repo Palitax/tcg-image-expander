@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { extractCardCutout, CardCutoutResult } from "@/utils/cardCutout";
 import { removeBackgroundAI } from "@/utils/bgRemover";
+import { extractCardHomography } from "@/utils/cardHomography";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
     const customBgFile = formData.get("backgroundImage") as File | null;
     const cardScaleFactor = parseFloat(formData.get("cardScale") as string || "0.75");
     const shadowStyle = (formData.get("shadowStyle") as string || "soft") as "soft" | "intense" | "glow" | "none";
-    const mattingEngine = (formData.get("mattingEngine") as string || "ai_matting") as "ai_matting" | "tcg_cutout";
+    const mattingEngine = (formData.get("mattingEngine") as string || "gemini_homography") as "gemini_homography" | "ai_matting" | "tcg_cutout";
 
     console.log(`[Stream Card API] Params: cardFileName=${cardFile?.name || "none"}, cardFileSize=${cardFile?.size || 0} bytes, scale=${cardScaleFactor}, shadowStyle=${shadowStyle}, mattingEngine=${mattingEngine}`);
 
@@ -133,7 +134,60 @@ export async function POST(request: Request) {
     let cardCutoutResult: CardCutoutResult;
     let usedFallback = false;
 
-    if (mattingEngine === "ai_matting") {
+    if (mattingEngine === "gemini_homography") {
+      console.log("[Stream Card API] Starte Gemini 4-Punkt Grounding & Homographie-Entzerrung...");
+      try {
+        const homographyResult = await extractCardHomography(originalCardBuffer, {
+          apiKey,
+          targetWidth: 750,
+          edgePaddingPx,
+          verticalOffsetPx,
+          bottomTrimPx,
+          topPaddingPx
+        });
+        roundedCardBuffer = homographyResult.cutoutBuffer;
+
+        cardCutoutResult = {
+          cutoutCardBuffer: homographyResult.cutoutBuffer,
+          cutoutCardBase64: homographyResult.cutoutBase64,
+          illustrationBuffer: homographyResult.cutoutBuffer,
+          illustrationBase64: homographyResult.cutoutBase64,
+          cardCoords: {
+            x1: 0,
+            y1: 0,
+            x2: homographyResult.width,
+            y2: homographyResult.height
+          },
+          illustrationCoords: {
+            x1: 0,
+            y1: 0,
+            x2: homographyResult.width,
+            y2: homographyResult.height
+          },
+          cardName: homographyResult.analysis.card_name || cardFile.name.replace(/\.[^/.]+$/, ""),
+          cardNumber: homographyResult.analysis.collector_number || "",
+          setCode: homographyResult.analysis.set_code || "",
+          setName: "",
+          sceneryDescription: homographyResult.analysis.scene_prompt || "",
+          hasSampleWatermark: false,
+          usedFallback: false,
+          originalWidth: width,
+          originalHeight: height
+        };
+      } catch (hErr: any) {
+        console.warn("[Stream Card API] Homographie fehlgeschlagen, Fallback auf TCG Cutout:", hErr?.message || hErr);
+        usedFallback = true;
+        cardCutoutResult = await extractCardCutout(originalCardBuffer, {
+          apiKey,
+          cornerRadiusPercent: 0.038,
+          edgePaddingPx,
+          verticalOffsetPx,
+          bottomTrimPx,
+          topPaddingPx
+        });
+        roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
+      }
+    } else if (mattingEngine === "ai_matting") {
       console.log("[Stream Card API] Starte paralleles AI Alpha Matting (RMBG-1.4) und TCG-Analyse...");
       const [mattedCard, cutoutData] = await Promise.all([
         (async () => {

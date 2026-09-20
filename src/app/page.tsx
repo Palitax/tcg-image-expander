@@ -1055,8 +1055,8 @@ export default function Home() {
   const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
   const [streamVerticalOffset, setStreamVerticalOffset] = useState<number>(0);
   const [streamBottomTrim, setStreamBottomTrim] = useState<number>(0);
-  const [streamMattingEngine, setStreamMattingEngine] = useState<"ai_matting" | "tcg_cutout">("ai_matting");
-  const [lastExtractedEngine, setLastExtractedEngine] = useState<"ai_matting" | "tcg_cutout">("ai_matting");
+  const [streamMattingEngine, setStreamMattingEngine] = useState<"gemini_homography" | "ai_matting" | "tcg_cutout">("gemini_homography");
+  const [lastExtractedEngine, setLastExtractedEngine] = useState<"gemini_homography" | "ai_matting" | "tcg_cutout">("gemini_homography");
   const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
 
   // Case Maker states
@@ -3462,7 +3462,9 @@ export default function Home() {
       if (streamMode === "extended") {
         updateStreamStepStatus("DETECT", "running");
         setStreamActiveStepMessage(
-          streamMattingEngine === "ai_matting"
+          streamMattingEngine === "gemini_homography"
+            ? "KI 4-Punkt Grounding & Homographie-Entzerrung laufen..."
+            : streamMattingEngine === "ai_matting"
             ? "KI Alpha Matting (RMBG-1.4) & Layout-Analyse laufen parallel..."
             : "KI analysiert Layout, Kartennummer und Set-Kürzel..."
         );
@@ -3507,7 +3509,9 @@ export default function Home() {
       } else {
         updateStreamStepStatus("DETECT", "running");
         setStreamActiveStepMessage(
-          streamMattingEngine === "ai_matting"
+          streamMattingEngine === "gemini_homography"
+            ? "KI entzerrt und stanzt Karte per Homographie..."
+            : streamMattingEngine === "ai_matting"
             ? "KI Alpha Matting (RMBG-1.4) schneidet Karte frei..."
             : "KI analysiert den Scan und erkennt die Karte..."
         );
@@ -6459,10 +6463,37 @@ export default function Home() {
                             Freistellungs-Engine
                           </span>
                           <span className="text-[10px] text-zinc-500 font-normal">
-                            {streamMattingEngine === "ai_matting" ? "RMBG-1.4 Alpha Matting" : "Geometrie-Anker"}
+                            {streamMattingEngine === "gemini_homography"
+                              ? "KI Homographie (Empfohlen)"
+                              : streamMattingEngine === "ai_matting"
+                              ? "RMBG-1.4 Alpha Matting"
+                              : "Geometrie-Anker"}
                           </span>
                         </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setStreamMattingEngine("gemini_homography")}
+                            className={`p-2.5 rounded-xl text-left border transition-all ${
+                              streamMattingEngine === "gemini_homography"
+                                ? "bg-purple-950/40 border-purple-500/50 text-white shadow-lg shadow-purple-950/20"
+                                : "bg-zinc-950/50 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-xs text-purple-300 flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                                KI Homographie
+                              </span>
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">
+                                Empfohlen
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
+                              4-Punkt Grounding & planare Entzerrung. Beseitigt Hüllenüberstände restlos und bewahrt alle Ränder.
+                            </p>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => setStreamMattingEngine("ai_matting")}
@@ -6477,7 +6508,7 @@ export default function Home() {
                                 <Sparkles className="w-3.5 h-3.5 text-purple-400" />
                                 KI Alpha Matting
                               </span>
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
                                 RMBG-1.4
                               </span>
                             </div>
@@ -6498,14 +6529,14 @@ export default function Home() {
                             <div className="flex items-center justify-between">
                               <span className="font-semibold text-xs text-purple-300 flex items-center gap-1.5">
                                 <Crop className="w-3.5 h-3.5 text-purple-400" />
-                                TCG Geometrie-Zuschnitt
+                                Geometrie-Zuschnitt
                               </span>
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
                                 Anker
                               </span>
                             </div>
                             <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
-                              Erkennt gedruckte Tinten-Anker (Header & Copyright) und rekonstruiert den Kartenrahmen mathematisch.
+                              Erkennt gedruckte Tinten-Anker (Header & Copyright) und rekonstruiert den Rahmen mathematisch.
                             </p>
                           </button>
                         </div>
@@ -7047,15 +7078,16 @@ export default function Home() {
                                       Freistellungs-Engine
                                     </span>
                                     <span className="text-[9px] text-purple-300 font-mono">
-                                      {streamMattingEngine === "ai_matting" ? "RMBG-1.4" : "Geometrie"}
+                                      {streamMattingEngine === "gemini_homography" ? "Homographie" : streamMattingEngine === "ai_matting" ? "RMBG-1.4" : "Geometrie"}
                                     </span>
                                   </label>
                                   <select
                                     value={streamMattingEngine}
-                                    onChange={(e) => setStreamMattingEngine(e.target.value as "ai_matting" | "tcg_cutout")}
+                                    onChange={(e) => setStreamMattingEngine(e.target.value as "gemini_homography" | "ai_matting" | "tcg_cutout")}
                                     className="w-full px-2 py-1 bg-zinc-950 border border-zinc-800 rounded text-[11px] text-white focus:border-purple-500 focus:outline-none"
                                   >
-                                    <option value="ai_matting">✨ KI Alpha Matting (RMBG-1.4 / Despill)</option>
+                                    <option value="gemini_homography">✨ KI Homographie (Empfohlen / Gemini Grounding)</option>
+                                    <option value="ai_matting">🪄 KI Alpha Matting (RMBG-1.4 / Despill)</option>
                                     <option value="tcg_cutout">📐 TCG Geometrie-Zuschnitt (Druckfarben-Anker)</option>
                                   </select>
                                 </div>
