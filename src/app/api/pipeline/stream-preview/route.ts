@@ -328,7 +328,7 @@ export async function POST(request: Request) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(8000)
+            signal: AbortSignal.timeout(25000)
           });
 
           if (res.ok) {
@@ -447,7 +447,7 @@ export async function POST(request: Request) {
                       }
                     },
                     {
-                      text: `Expand this card illustration outwards into a seamless, high-quality background scenery wallpaper. Match the exact same art style, colors, and lighting. Do NOT include any characters, Pokemon, figures, or text.`
+                      text: `Expand this card illustration outwards into a seamless, high-quality full background scenery wallpaper. Match the exact same art style, colors, and lighting. Fill the entire canvas completely from top to bottom with the scenery. Do NOT include any characters, Pokemon, figures, or text. Do NOT leave any blank white, transparent, or checkerboard areas.`
                     }
                   ]
                 }

@@ -189,31 +189,32 @@ export async function detectCardBordersCV(
 }
 
 /**
- * Local Micro-Edge Snapping:
- * Inspects a narrow window (±8px) strictly around the candidate edge coordinates
- * to snap to the exact pixel-level contrast transition between the cardboard outer edge
- * and the outer sleeve/scanner background.
- * Because the window is strictly ±8px, it can NEVER jump into the inner artwork or out to the scanner bed.
+ * Inward Border Refinement & Sleeve Stripping:
+ * If an AI detection or scanner crop includes the outer transparent penny sleeve,
+ * toploader border, or scanner margin, this scans inward (up to 45px) from each candidate boundary
+ * to locate the true high-contrast outer cardboard edge of the printed card.
+ * If the candidate boundary is already on the card edge, it locks onto it.
  */
-function snapToLocalCardEdge(
+function refineCardCutoutBorders(
   data: Buffer,
   width: number,
   height: number,
   box: { x1: number; y1: number; x2: number; y2: number }
 ): { x1: number; y1: number; x2: number; y2: number } {
-  function findLocalEdge(
+  function scanInward(
     axis: "x" | "y",
-    initialPos: number,
+    dir: 1 | -1,
+    startPos: number,
     spanStart: number,
     spanEnd: number,
-    searchRadius = 8
+    maxInward = 45,
+    threshold = 14
   ): number {
-    let bestPos = initialPos;
-    let maxGrad = -1;
-    const minP = Math.max(2, initialPos - searchRadius);
-    const maxP = Math.min((axis === "x" ? width : height) - 2, initialPos + searchRadius);
+    let bestPos = startPos;
+    for (let step = 0; step <= maxInward; step++) {
+      const p = startPos + step * dir;
+      if (p < 2 || p >= (axis === "x" ? width : height) - 2) break;
 
-    for (let p = minP; p <= maxP; p++) {
       let grad = 0;
       let count = 0;
       for (let s = spanStart; s <= spanEnd; s += 2) {
@@ -225,30 +226,42 @@ function snapToLocalCardEdge(
         count++;
       }
       grad /= Math.max(1, count);
-      if (grad > maxGrad) {
-        maxGrad = grad;
+
+      if (grad >= threshold) {
         bestPos = p;
+        let maxG = grad;
+        for (let dp = 1; dp <= 3; dp++) {
+          const np = p + dp * dir;
+          if (np < 2 || np >= (axis === "x" ? width : height) - 2) break;
+          let g = 0;
+          for (let s = spanStart; s <= spanEnd; s += 2) {
+            if (axis === "x") {
+              g += Math.abs(data[s * width + (np + 1)] - data[s * width + (np - 1)]);
+            } else {
+              g += Math.abs(data[(np + 1) * width + s] - data[(np - 1) * width + s]);
+            }
+          }
+          g /= Math.max(1, count);
+          if (g > maxG) {
+            maxG = g;
+            bestPos = np;
+          }
+        }
+        break;
       }
     }
-
-    // Only snap if there is a clear contrast transition (grad > 15), otherwise keep initial
-    if (maxGrad > 15) {
-      return bestPos;
-    }
-    return initialPos;
+    return bestPos;
   }
 
-  const cardW = box.x2 - box.x1;
-  const cardH = box.y2 - box.y1;
-  const yMidStart = Math.round(box.y1 + cardH * 0.25);
-  const yMidEnd = Math.round(box.y1 + cardH * 0.75);
-  const xMidStart = Math.round(box.x1 + cardW * 0.25);
-  const xMidEnd = Math.round(box.x1 + cardW * 0.75);
+  const yMidStart = Math.round(box.y1 + (box.y2 - box.y1) * 0.25);
+  const yMidEnd = Math.round(box.y1 + (box.y2 - box.y1) * 0.75);
+  const xMidStart = Math.round(box.x1 + (box.x2 - box.x1) * 0.25);
+  const xMidEnd = Math.round(box.x1 + (box.x2 - box.x1) * 0.75);
 
-  const newX1 = findLocalEdge("x", box.x1, yMidStart, yMidEnd, 8);
-  const newX2 = findLocalEdge("x", box.x2, yMidStart, yMidEnd, 8);
-  const newY1 = findLocalEdge("y", box.y1, xMidStart, xMidEnd, 8);
-  const newY2 = findLocalEdge("y", box.y2, xMidStart, xMidEnd, 8);
+  const newX1 = scanInward("x", +1, box.x1, yMidStart, yMidEnd, 45, 14);
+  const newX2 = scanInward("x", -1, box.x2, yMidStart, yMidEnd, 45, 14);
+  const newY1 = scanInward("y", +1, box.y1, xMidStart, xMidEnd, 45, 14);
+  const newY2 = scanInward("y", -1, box.y2, xMidStart, xMidEnd, 45, 14);
 
   return {
     x1: Math.min(newX1, newX2 - 50),
@@ -487,18 +500,18 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     cardCoords = await detectCardBordersCV(normalizedBuffer, width, height);
   }
 
-  // 4. Local Micro-Edge Snapping (±8px search window around Gemini's bounds)
+  // 4. Inward Border Refinement & Sleeve Stripping
   try {
     const { data: greyData } = await sharp(normalizedBuffer)
       .greyscale()
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    const snapped = snapToLocalCardEdge(greyData, width, height, cardCoords);
-    console.log(`[Card Cutout] Micro-edge snapped coordinates: [${snapped.x1}, ${snapped.y1}, ${snapped.x2}, ${snapped.y2}]`);
-    cardCoords = snapped;
-  } catch (snapErr: any) {
-    console.warn("[Card Cutout] Micro-edge snapping skipped:", snapErr?.message || snapErr);
+    const refined = refineCardCutoutBorders(greyData, width, height, cardCoords);
+    console.log(`[Card Cutout] Sleeve-stripped cardboard coordinates: [${refined.x1}, ${refined.y1}, ${refined.x2}, ${refined.y2}]`);
+    cardCoords = refined;
+  } catch (refineErr: any) {
+    console.warn("[Card Cutout] Border refinement skipped:", refineErr?.message || refineErr);
   }
 
   // 5. Mathematical TCG Aspect Ratio Guard
