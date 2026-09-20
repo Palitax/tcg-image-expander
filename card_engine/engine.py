@@ -296,29 +296,59 @@ class TCGStreamEngine:
         edge_padding_px: int = 0,
         vertical_offset_px: int = 0,
         bottom_trim_px: int = 0,
-        top_padding_px: int = 0
+        top_padding_px: int = 0,
+        crop_box: Optional[Tuple[float, float, float, float]] = None
     ) -> Tuple[np.ndarray, CardAnalysisResult]:
         """
         Führt den gesamten Prozess aus:
         1. EXIF-Orientierung
-        2. Gemini 4-Punkt Grounding & OCR
+        2. Gemini 4-Punkt Grounding & OCR (oder direkt crop_box aus Live-Visier)
         3. Homographie & Vektor-Stanzung
         Rückgabe: (bgra_cutout_card, metadata_result)
         """
         image_bgr = self.normalize_input_image(image_input)
+        orig_h, orig_w = image_bgr.shape[:2]
 
-        try:
-            analysis = self.analyze_card_with_gemini(image_bgr)
-        except Exception as e:
-            # Fallback auf CV falls API fehlschlägt
-            corners = self.detect_corners_cv_fallback(image_bgr)
-            analysis = CardAnalysisResult(
-                card_name="Unbekannte Karte",
-                collector_number="",
-                set_code="",
-                scene_prompt="",
-                corners=corners
+        if crop_box is not None:
+            # Explizite Stanzrahmen-Koordinaten (x, y, width, height) aus dem Web-Interface
+            bx, by, bw, bh = crop_box
+            # Falls normalisiert in [0..1], auf Pixel skalieren
+            if bw <= 1.0 and bh <= 1.0:
+                bx = bx * orig_w
+                by = by * orig_h
+                bw = bw * orig_w
+                bh = bh * orig_h
+
+            corners = CardCorners(
+                top_left=[int(round(by * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))],
+                top_right=[int(round(by * 1000.0 / orig_h)), int(round((bx + bw) * 1000.0 / orig_w))],
+                bottom_right=[int(round((by + bh) * 1000.0 / orig_h)), int(round((bx + bw) * 1000.0 / orig_w))],
+                bottom_left=[int(round((by + bh) * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))]
             )
+            try:
+                analysis = self.analyze_card_with_gemini(image_bgr)
+                analysis.corners = corners
+            except Exception:
+                analysis = CardAnalysisResult(
+                    card_name="Sammelkarte",
+                    collector_number="",
+                    set_code="",
+                    scene_prompt="",
+                    corners=corners
+                )
+        else:
+            try:
+                analysis = self.analyze_card_with_gemini(image_bgr)
+            except Exception as e:
+                # Fallback auf CV falls API fehlschlägt
+                corners = self.detect_corners_cv_fallback(image_bgr)
+                analysis = CardAnalysisResult(
+                    card_name="Unbekannte Karte",
+                    collector_number="",
+                    set_code="",
+                    scene_prompt="",
+                    corners=corners
+                )
 
         is_small = getattr(analysis, "is_small_japanese_game", False)
         bgra_card = self.extract_and_flatten_card(

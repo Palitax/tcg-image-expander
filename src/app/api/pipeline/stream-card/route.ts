@@ -129,6 +129,39 @@ export async function POST(request: Request) {
     const bottomTrimPx = parseInt((formData.get("bottomTrim") as string) || "0", 10) || 0;
     const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
+    let cropBox: { x: number; y: number; width: number; height: number } | null = null;
+    const cropBoxParam = formData.get("cropBox") as string | null;
+    const cropX = formData.get("cropX");
+    const cropY = formData.get("cropY");
+    const cropW = formData.get("cropW");
+    const cropH = formData.get("cropH");
+
+    if (cropBoxParam) {
+      try {
+        if (cropBoxParam.startsWith("{")) {
+          cropBox = JSON.parse(cropBoxParam);
+        } else {
+          const parts = cropBoxParam.split(",").map(Number);
+          if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+            cropBox = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+          }
+        }
+      } catch (e) {
+        console.warn("[Stream Card API] Ungültiges cropBox-Format:", cropBoxParam);
+      }
+    } else if (cropX !== null && cropY !== null && cropW !== null && cropH !== null) {
+      cropBox = {
+        x: parseFloat(cropX as string),
+        y: parseFloat(cropY as string),
+        width: parseFloat(cropW as string),
+        height: parseFloat(cropH as string)
+      };
+    }
+
+    if (cropBox) {
+      console.log(`[Stream Card API] Visier-Stanzrahmen aktiv: x=${cropBox.x}, y=${cropBox.y}, w=${cropBox.width}, h=${cropBox.height}`);
+    }
+
     // High-precision Card Cutout & AI Analysis
     let roundedCardBuffer: Buffer;
     let cardCutoutResult: CardCutoutResult;
@@ -143,7 +176,8 @@ export async function POST(request: Request) {
           edgePaddingPx,
           verticalOffsetPx,
           bottomTrimPx,
-          topPaddingPx
+          topPaddingPx,
+          cropBox
         });
         roundedCardBuffer = homographyResult.cutoutBuffer;
 

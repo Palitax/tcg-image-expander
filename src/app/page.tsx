@@ -46,6 +46,7 @@ import {
   type SavedArtwork
 } from "@/utils/db";
 import { supabase } from "@/utils/supabaseClient";
+import { CardCropVisor, type CropBox } from "@/components/CardCropVisor";
 
 const isLocalMode = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -1025,6 +1026,7 @@ export default function Home() {
   const [streamMode, setStreamMode] = useState<"extended" | "classic">("extended");
   const [streamFile, setStreamFile] = useState<File | null>(null);
   const [streamPreviewUrl, setStreamPreviewUrl] = useState<string | null>(null);
+  const [streamCropBox, setStreamCropBox] = useState<CropBox | null>(null);
   const [streamResultUrl, setStreamResultUrl] = useState<string | null>(null);
   const [streamCutoutUrl, setStreamCutoutUrl] = useState<string | null>(null);
   const [streamBgImageUrl, setStreamBgImageUrl] = useState<string | null>(null);
@@ -3353,8 +3355,8 @@ export default function Home() {
     if (!streamResultUrl || !streamBgImageUrl) return;
     setIsRecompositing(true);
     try {
-      // Wenn Originaldatei vorhanden ist und Feinjustierung (Versatz/Trim) oder Engine geändert wurde, direkt mit dem vorhandenen Hintergrund neu zuschneiden
-      if (streamFile && (streamVerticalOffset !== 0 || streamBottomTrim !== 0 || streamMattingEngine !== lastExtractedEngine)) {
+      // Wenn Originaldatei vorhanden ist und Feinjustierung (Versatz/Trim/Visier) oder Engine geändert wurde, direkt mit dem vorhandenen Hintergrund neu zuschneiden
+      if (streamFile && (streamVerticalOffset !== 0 || streamBottomTrim !== 0 || streamMattingEngine !== lastExtractedEngine || streamCropBox !== null)) {
         const fileToProcess = await optimizeImageFile(streamFile);
         const formData = new FormData();
         formData.append("cardImage", fileToProcess);
@@ -3364,6 +3366,14 @@ export default function Home() {
         formData.append("verticalOffset", streamVerticalOffset.toString());
         formData.append("bottomTrim", streamBottomTrim.toString());
         formData.append("mattingEngine", streamMattingEngine);
+
+        if (streamCropBox) {
+          formData.append("cropBox", JSON.stringify(streamCropBox));
+          formData.append("cropX", streamCropBox.x.toString());
+          formData.append("cropY", streamCropBox.y.toString());
+          formData.append("cropW", streamCropBox.width.toString());
+          formData.append("cropH", streamCropBox.height.toString());
+        }
 
         const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
         if (localKey && localKey.trim()) {
@@ -3453,6 +3463,14 @@ export default function Home() {
       formData.append("verticalOffset", streamVerticalOffset.toString());
       formData.append("bottomTrim", streamBottomTrim.toString());
       formData.append("mattingEngine", streamMattingEngine);
+
+      if (streamCropBox) {
+        formData.append("cropBox", JSON.stringify(streamCropBox));
+        formData.append("cropX", streamCropBox.x.toString());
+        formData.append("cropY", streamCropBox.y.toString());
+        formData.append("cropW", streamCropBox.width.toString());
+        formData.append("cropH", streamCropBox.height.toString());
+      }
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
       if (localKey && localKey.trim()) {
@@ -6807,7 +6825,7 @@ export default function Home() {
             {streamFile && (
               <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left Column: Uploaded Card Preview + Detection Checklist */}
-                <section className="lg:col-span-5 flex flex-col gap-6">
+                <section className="lg:col-span-6 flex flex-col gap-6">
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
                     <div className="flex items-center justify-between gap-4 mb-4">
                       <h2 className="text-lg font-semibold text-white flex items-center gap-2 truncate">
@@ -6831,30 +6849,29 @@ export default function Home() {
                       </button>
                     </div>
 
-                    <div className="flex flex-col sm:flex-row gap-6 items-center">
-                      <div className="w-44 h-60 rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative shadow-xl">
-                        {streamPreviewUrl && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={streamPreviewUrl}
-                            alt="Uploaded Card Scan"
-                            className="w-full h-full object-contain"
+                    <div className="flex flex-col gap-5">
+                      {streamPreviewUrl && (
+                        <div className="relative w-full">
+                          <CardCropVisor
+                            imageUrl={streamPreviewUrl}
+                            onChange={(box) => setStreamCropBox(box)}
+                            initialBox={streamCropBox}
                           />
-                        )}
-                        {isStreamProcessing && (
-                          <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-3 text-center">
-                            <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mb-2" />
-                            <p className="text-[11px] font-semibold text-purple-300">Wird verarbeitet...</p>
-                            <span className="text-[10px] text-zinc-400 mt-1">{streamElapsedTime}s</span>
-                          </div>
-                        )}
-                      </div>
+                          {isStreamProcessing && (
+                            <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-4 rounded-xl z-20 text-center">
+                              <RefreshCw className="w-10 h-10 text-purple-400 animate-spin mb-3" />
+                              <p className="text-sm font-semibold text-purple-200">Stanzung & Bildverarbeitung laufen...</p>
+                              <span className="text-xs text-zinc-400 mt-1">{streamElapsedTime}s</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
-                      <div className="flex-1 min-w-0 flex flex-col gap-3 w-full">
+                      <div className="flex flex-col gap-3 w-full">
                         <div className="flex flex-col gap-2 bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/80">
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-zinc-400 font-medium">Dateiname:</span>
-                            <span className="text-zinc-200 font-mono font-semibold truncate max-w-[180px]">{streamFile.name}</span>
+                            <span className="text-zinc-200 font-mono font-semibold truncate max-w-[220px]">{streamFile.name}</span>
                           </div>
                           <div className="flex items-center justify-between text-xs">
                             <span className="text-zinc-400 font-medium">Dateigröße:</span>
@@ -6868,14 +6885,16 @@ export default function Home() {
                           </div>
                         </div>
 
-                        {!isStreamProcessing && !streamResultUrl && (
+                        {!isStreamProcessing && (
                           <button
                             type="button"
                             onClick={() => handleProcessStreamImage()}
                             className="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(147,51,234,0.3)] transition-all cursor-pointer"
                           >
                             <Sparkles className="w-4 h-4" />
-                            {streamMode === "extended" ? "Stream-Preview erstellen" : "Stream-Bild erstellen"}
+                            {streamResultUrl
+                              ? (streamMode === "extended" ? "Mit Visier neu generieren" : "Mit Visier neu ausschneiden")
+                              : (streamMode === "extended" ? "Stream-Preview erstellen" : "Stream-Bild erstellen")}
                           </button>
                         )}
                       </div>
@@ -6955,7 +6974,7 @@ export default function Home() {
                 </section>
 
                 {/* Right Column: Final Stream Result Showcase & Metadata Quick-Editor */}
-                <section className="lg:col-span-7 flex flex-col gap-6">
+                <section className="lg:col-span-6 flex flex-col gap-6">
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl flex flex-col">
                     <h2 className="text-lg font-semibold text-white mb-4 flex items-center justify-between">
                       <span className="flex items-center gap-2">

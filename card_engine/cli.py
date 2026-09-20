@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--vertical-offset", type=int, default=0, help="Vertikaler Versatz in Pixeln")
     parser.add_argument("--bottom-trim", type=int, default=0, help="Abschnitt am unteren Rand in Pixeln")
     parser.add_argument("--top-padding", type=int, default=0, help="Oberes Padding in Pixeln")
+    parser.add_argument("--crop-box", help="Optionaler Stanzrahmen x,y,w,h in Pixeln oder [0..1] normalisiert")
 
     args = parser.parse_args()
 
@@ -27,6 +28,15 @@ def main():
     if not input_path.is_file():
         print(f"Fehler: Datei nicht gefunden: {input_path}", file=sys.stderr)
         sys.exit(1)
+
+    crop_box = None
+    if args.crop_box:
+        try:
+            parts = [float(p.strip()) for p in args.crop_box.split(",")]
+            if len(parts) == 4:
+                crop_box = (parts[0], parts[1], parts[2], parts[3])
+        except Exception as e:
+            print(f"Warnung: Ungültiges crop-box Format: {args.crop_box} ({e})", file=sys.stderr)
 
     try:
         engine = TCGStreamEngine(gemini_api_key=args.api_key)
@@ -36,7 +46,8 @@ def main():
             edge_padding_px=args.edge_padding,
             vertical_offset_px=args.vertical_offset,
             bottom_trim_px=args.bottom_trim,
-            top_padding_px=args.top_padding
+            top_padding_px=args.top_padding,
+            crop_box=crop_box
         )
 
         # Speichere transparentes PNG

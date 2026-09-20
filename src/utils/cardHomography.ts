@@ -27,6 +27,13 @@ export interface CardHomographyResult {
   height: number;
 }
 
+export interface CardCropBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ExtractCardHomographyOptions {
   apiKey?: string | null;
   targetWidth?: number;
@@ -34,6 +41,7 @@ export interface ExtractCardHomographyOptions {
   verticalOffsetPx?: number;
   bottomTrimPx?: number;
   topPaddingPx?: number;
+  cropBox?: CardCropBox | null;
 }
 
 function getPythonExecutable(): string {
@@ -97,6 +105,10 @@ export async function extractCardHomography(
     }
     if (options.topPaddingPx) {
       args.push("--top-padding", options.topPaddingPx.toString());
+    }
+    if (options.cropBox) {
+      const { x, y, width, height } = options.cropBox;
+      args.push("--crop-box", `${x},${y},${width},${height}`);
     }
 
     // 3. Python-Prozess ausführen
