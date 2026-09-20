@@ -32,11 +32,14 @@ export async function POST(request: Request) {
       .rotate()
       .toBuffer();
 
+    const edgePaddingPx = parseInt((formData.get("edgePadding") as string) || "0", 10) || 0;
+
     const cutoutResult = await extractCardCutout(originalImageBuffer, {
       apiKey,
       skipCardCrop,
       cornerRadiusPercent: 0.038,
-      maxCardDimension: 1200
+      maxCardDimension: 1200,
+      edgePaddingPx
     });
 
     console.log(`[Crop API] Extracted card cutout:`, {

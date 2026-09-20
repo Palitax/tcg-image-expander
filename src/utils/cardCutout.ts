@@ -25,10 +25,66 @@ export interface CardCutoutResult {
 interface ExtractCardCutoutOptions {
   apiKey?: string | null;
   skipCardCrop?: boolean;
-  /** Die-cut corner radius as percentage of card width (default ~3.5% = 0.035) */
+  /** Die-cut corner radius as percentage of card width (default ~3.8% = 0.038) */
   cornerRadiusPercent?: number;
   /** Maximum dimension for the returned cutout card (optional, preserves original resolution if omitted) */
   maxCardDimension?: number;
+  /** Optional micro-nudge for border padding in pixels (e.g. +2 or -2) */
+  edgePaddingPx?: number;
+}
+
+/**
+ * Peak-seeking gradient edge detector.
+ * Climbs the FIRST dominant contrast peak moving inward from the scan edge (the transition
+ * from uniform scanner bed / clear sleeve to the printed card border).
+ * Once the peak is climbed and begins to drop, it locks onto the outer cardboard edge,
+ * preventing any overshoot into inner card artwork.
+ */
+function findOuterCardEdgePeak(
+  data: Buffer,
+  width: number,
+  height: number,
+  axis: "x" | "y",
+  dir: 1 | -1,
+  startPos: number,
+  spanStart: number,
+  spanEnd: number,
+  maxScan = 80,
+  minPeakGrad = 15
+): number {
+  let peakPos = startPos;
+  let peakGrad = 0;
+  let inPeak = false;
+
+  for (let step = 0; step <= maxScan; step++) {
+    const p = startPos + step * dir;
+    if (p < 2 || p >= (axis === "x" ? width : height) - 2) break;
+
+    let grad = 0;
+    let count = 0;
+    for (let s = spanStart; s <= spanEnd; s += 2) {
+      if (axis === "x") {
+        grad += Math.abs(data[s * width + (p + 1)] - data[s * width + (p - 1)]);
+      } else {
+        grad += Math.abs(data[(p + 1) * width + s] - data[(p - 1) * width + s]);
+      }
+      count++;
+    }
+    grad /= Math.max(1, count);
+
+    if (grad >= minPeakGrad) {
+      inPeak = true;
+      if (grad > peakGrad) {
+        peakGrad = grad;
+        peakPos = p;
+      }
+    } else if (inPeak && grad < peakGrad * 0.5) {
+      // Reached the top of the outer edge peak and started descending into the card border
+      break;
+    }
+  }
+
+  return peakPos;
 }
 
 /**
@@ -48,132 +104,22 @@ export async function detectCardBordersCV(
       .raw()
       .toBuffer({ resolveWithObject: true });
 
-    const yMidStart = Math.round(height * 0.20);
-    const yMidEnd = Math.round(height * 0.80);
-    const ySpan = Math.max(1, yMidEnd - yMidStart);
+    const yMidStart = Math.round(height * 0.25);
+    const yMidEnd = Math.round(height * 0.75);
+    const xMidStart = Math.round(width * 0.25);
+    const xMidEnd = Math.round(width * 0.75);
 
-    // 1. Scan Left: search inward from x=6. Find FIRST prominent peak (outer card edge)
-    // Faint sleeve glare is < 12. Real cardboard outer edge is > 20.
-    let leftX = 0;
-    for (let x = 8; x < Math.floor(width * 0.45); x++) {
-      let grad = 0;
-      for (let y = yMidStart; y < yMidEnd; y++) {
-        grad += Math.abs(data[y * width + (x + 1)] - data[y * width + (x - 1)]);
-      }
-      grad /= ySpan;
-      if (grad > 20) {
-        let peakX = x;
-        let maxG = grad;
-        for (let dx = 1; dx <= 4; dx++) {
-          let g = 0;
-          for (let y = yMidStart; y < yMidEnd; y++) {
-            g += Math.abs(data[y * width + (x + dx + 1)] - data[y * width + (x + dx - 1)]);
-          }
-          g /= ySpan;
-          if (g > maxG) {
-            maxG = g;
-            peakX = x + dx;
-          }
-        }
-        leftX = peakX;
-        break;
-      }
-    }
-
-    // 2. Scan Right: search inward from width - 8. Find FIRST prominent peak
-    let rightX = width;
-    for (let x = width - 8; x > Math.floor(width * 0.55); x--) {
-      let grad = 0;
-      for (let y = yMidStart; y < yMidEnd; y++) {
-        grad += Math.abs(data[y * width + (x + 1)] - data[y * width + (x - 1)]);
-      }
-      grad /= ySpan;
-      if (grad > 20) {
-        let peakX = x;
-        let maxG = grad;
-        for (let dx = 1; dx <= 4; dx++) {
-          let g = 0;
-          for (let y = yMidStart; y < yMidEnd; y++) {
-            g += Math.abs(data[y * width + (x - dx + 1)] - data[y * width + (x - dx - 1)]);
-          }
-          g /= ySpan;
-          if (g > maxG) {
-            maxG = g;
-            peakX = x - dx;
-          }
-        }
-        rightX = peakX;
-        break;
-      }
-    }
-
-    // 3. Scan Bottom: search inward from height - 8. Find FIRST prominent peak
-    const xMidStart = Math.round(width * 0.20);
-    const xMidEnd = Math.round(width * 0.80);
-    const xSpan = Math.max(1, xMidEnd - xMidStart);
-
-    let bottomY = height;
-    for (let y = height - 8; y > Math.floor(height * 0.50); y--) {
-      let grad = 0;
-      for (let x = xMidStart; x < xMidEnd; x++) {
-        grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
-      }
-      grad /= ySpan;
-      if (grad > 20) {
-        let peakY = y;
-        let maxG = grad;
-        for (let dy = 1; dy <= 4; dy++) {
-          let g = 0;
-          for (let x = xMidStart; x < xMidEnd; x++) {
-            g += Math.abs(data[(y - dy + 1) * width + x] - data[(y - dy - 1) * width + x]);
-          }
-          g /= ySpan;
-          if (g > maxG) {
-            maxG = g;
-            peakY = y - dy;
-          }
-        }
-        bottomY = peakY;
-        break;
-      }
-    }
-
-    // 4. Scan Top: search inward starting at y=18 (skip top plastic flap). Find FIRST prominent peak
-    let topY = 0;
-    for (let y = 18; y < Math.floor(height * 0.45); y++) {
-      let grad = 0;
-      for (let x = xMidStart; x < xMidEnd; x++) {
-        grad += Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
-      }
-      grad /= xSpan;
-      if (grad > 18) {
-        let peakY = y;
-        let maxG = grad;
-        for (let dy = 1; dy <= 4; dy++) {
-          let g = 0;
-          for (let x = xMidStart; x < xMidEnd; x++) {
-            g += Math.abs(data[(y + dy + 1) * width + x] - data[(y + dy - 1) * width + x]);
-          }
-          g /= xSpan;
-          if (g > maxG) {
-            maxG = g;
-            peakY = y + dy;
-          }
-        }
-        topY = peakY;
-        break;
-      }
-    }
+    const leftX = findOuterCardEdgePeak(data, width, height, "x", +1, 6, yMidStart, yMidEnd, Math.floor(width * 0.35), 15);
+    const rightX = findOuterCardEdgePeak(data, width, height, "x", -1, width - 6, yMidStart, yMidEnd, Math.floor(width * 0.35), 15);
+    const topY = findOuterCardEdgePeak(data, width, height, "y", +1, 14, xMidStart, xMidEnd, Math.floor(height * 0.35), 12);
+    const bottomY = findOuterCardEdgePeak(data, width, height, "y", -1, height - 6, xMidStart, xMidEnd, Math.floor(height * 0.35), 20);
 
     let detectedW = rightX - leftX;
     let detectedH = bottomY - topY;
 
     // Safety fallback if no clear edge was detected
     if (detectedW < width * 0.4 || detectedH < height * 0.4) {
-      leftX = 0;
-      topY = 0;
-      rightX = width;
-      bottomY = height;
+      return { x1: 0, y1: 0, x2: width, y2: height };
     }
 
     return {
@@ -191,9 +137,8 @@ export async function detectCardBordersCV(
 /**
  * Inward Border Refinement & Sleeve Stripping:
  * If an AI detection or scanner crop includes the outer transparent penny sleeve,
- * toploader border, or scanner margin, this scans inward (up to 45px) from each candidate boundary
- * to locate the true high-contrast outer cardboard edge of the printed card.
- * If the candidate boundary is already on the card edge, it locks onto it.
+ * toploader border, or scanner margin, this scans a localized window (±25px) around each candidate boundary
+ * to snap onto the true high-contrast outer cardboard edge of the printed card.
  */
 function refineCardCutoutBorders(
   data: Buffer,
@@ -201,67 +146,22 @@ function refineCardCutoutBorders(
   height: number,
   box: { x1: number; y1: number; x2: number; y2: number }
 ): { x1: number; y1: number; x2: number; y2: number } {
-  function scanInward(
-    axis: "x" | "y",
-    dir: 1 | -1,
-    startPos: number,
-    spanStart: number,
-    spanEnd: number,
-    maxInward = 45,
-    threshold = 14
-  ): number {
-    let bestPos = startPos;
-    for (let step = 0; step <= maxInward; step++) {
-      const p = startPos + step * dir;
-      if (p < 2 || p >= (axis === "x" ? width : height) - 2) break;
-
-      let grad = 0;
-      let count = 0;
-      for (let s = spanStart; s <= spanEnd; s += 2) {
-        if (axis === "x") {
-          grad += Math.abs(data[s * width + (p + 1)] - data[s * width + (p - 1)]);
-        } else {
-          grad += Math.abs(data[(p + 1) * width + s] - data[(p - 1) * width + s]);
-        }
-        count++;
-      }
-      grad /= Math.max(1, count);
-
-      if (grad >= threshold) {
-        bestPos = p;
-        let maxG = grad;
-        for (let dp = 1; dp <= 3; dp++) {
-          const np = p + dp * dir;
-          if (np < 2 || np >= (axis === "x" ? width : height) - 2) break;
-          let g = 0;
-          for (let s = spanStart; s <= spanEnd; s += 2) {
-            if (axis === "x") {
-              g += Math.abs(data[s * width + (np + 1)] - data[s * width + (np - 1)]);
-            } else {
-              g += Math.abs(data[(np + 1) * width + s] - data[(np - 1) * width + s]);
-            }
-          }
-          g /= Math.max(1, count);
-          if (g > maxG) {
-            maxG = g;
-            bestPos = np;
-          }
-        }
-        break;
-      }
-    }
-    return bestPos;
-  }
-
   const yMidStart = Math.round(box.y1 + (box.y2 - box.y1) * 0.25);
   const yMidEnd = Math.round(box.y1 + (box.y2 - box.y1) * 0.75);
   const xMidStart = Math.round(box.x1 + (box.x2 - box.x1) * 0.25);
   const xMidEnd = Math.round(box.x1 + (box.x2 - box.x1) * 0.75);
 
-  const newX1 = scanInward("x", +1, box.x1, yMidStart, yMidEnd, 45, 14);
-  const newX2 = scanInward("x", -1, box.x2, yMidStart, yMidEnd, 45, 14);
-  const newY1 = scanInward("y", +1, box.y1, xMidStart, xMidEnd, 45, 14);
-  const newY2 = scanInward("y", -1, box.y2, xMidStart, xMidEnd, 45, 14);
+  const searchStartLeft = Math.max(4, box.x1 - 25);
+  const newX1 = findOuterCardEdgePeak(data, width, height, "x", +1, searchStartLeft, yMidStart, yMidEnd, 60, 15);
+
+  const searchStartRight = Math.min(width - 4, box.x2 + 25);
+  const newX2 = findOuterCardEdgePeak(data, width, height, "x", -1, searchStartRight, yMidStart, yMidEnd, 60, 15);
+
+  const searchStartTop = Math.max(4, box.y1 - 25);
+  const newY1 = findOuterCardEdgePeak(data, width, height, "y", +1, searchStartTop, xMidStart, xMidEnd, 60, 12);
+
+  const searchStartBottom = Math.min(height - 4, box.y2 + 25);
+  const newY2 = findOuterCardEdgePeak(data, width, height, "y", -1, searchStartBottom, xMidStart, xMidEnd, 60, 20);
 
   return {
     x1: Math.min(newX1, newX2 - 50),
@@ -285,7 +185,8 @@ export async function extractCardCutout(
     apiKey,
     skipCardCrop = false,
     cornerRadiusPercent = 0.038, // Standard TCG die-cut radius (~3.2mm on 63mm width = 3.8%)
-    maxCardDimension
+    maxCardDimension,
+    edgePaddingPx = 0
   } = options;
 
   // 1. Normalize orientation and read dimensions
@@ -532,27 +433,40 @@ CRITICAL INSTRUCTIONS FOR LOCATING THE CARD:
     console.log("[Card Cutout] Genuine edge-to-edge card scan detected.");
     cardCoords = { x1: 0, y1: 0, x2: width, y2: height };
   } else {
-    // If card is too short in height (ratio < 1.36), protect copyright & set text
-    if (ratio < 1.36) {
-      const expectedH = Math.round(rawW * 1.397);
-      let newY2 = Math.min(height, cardCoords.y1 + expectedH);
-      let newY1 = cardCoords.y1;
-      if (newY2 - newY1 < expectedH) {
-        newY1 = Math.max(0, newY2 - expectedH);
+    // Physical standard TCG ratio: 88mm / 63mm = 1.3968
+    const TARGET_RATIO = 1.3968;
+
+    // If ratio < 1.385 (too wide): The scan width contains transparent sleeve margins or scanner bed.
+    // CRITICAL LAW: NEVER expand height downwards into the scanner bed!
+    // Trim width inward symmetrically from left and right:
+    if (ratio < 1.385) {
+      const expectedW = Math.round(rawH / TARGET_RATIO);
+      if (expectedW < rawW) {
+        const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
+        const newX1 = Math.max(0, Math.round(centerX - expectedW / 2));
+        const newX2 = Math.min(width, Math.round(centerX + expectedW / 2));
+        console.log(`[Card Cutout] Inward width trim: adjusted width from ${rawW} to ${newX2 - newX1} (ratio ${TARGET_RATIO.toFixed(3)}) to eliminate sleeve margins without touching bottom.`);
+        cardCoords.x1 = newX1;
+        cardCoords.x2 = newX2;
       }
-      console.log(`[Card Cutout] Aspect ratio guard: adjusted height from ${rawH} to ${newY2 - newY1} (ratio 1.397) to protect copyright.`);
-      cardCoords.y1 = newY1;
-      cardCoords.y2 = newY2;
-    } else if (ratio > 1.47) {
-      // If card is too narrow in width (ratio > 1.47), expand symmetrically from center to protect HP & borders
-      const expectedW = Math.round(rawH / 1.397);
-      const centerX = (cardCoords.x1 + cardCoords.x2) / 2;
-      const newX1 = Math.max(0, Math.round(centerX - expectedW / 2));
-      const newX2 = Math.min(width, Math.round(centerX + expectedW / 2));
-      console.log(`[Card Cutout] Aspect ratio guard: adjusted width from ${rawW} to ${newX2 - newX1} (ratio 1.397) to protect HP & borders.`);
-      cardCoords.x1 = newX1;
-      cardCoords.x2 = newX2;
+    } else if (ratio > 1.455) {
+      // If ratio > 1.455 (too tall): The scan height contains excess scanner bed at bottom or sleeve flap at top.
+      // CRITICAL LAW: NEVER expand width outward into the background!
+      // Trim height inward from the bottom:
+      const expectedH = Math.round(rawW * TARGET_RATIO);
+      if (expectedH < rawH) {
+        console.log(`[Card Cutout] Inward height trim: adjusted height from ${rawH} to ${expectedH} (ratio ${TARGET_RATIO.toFixed(3)}) to eliminate scanner bed.`);
+        cardCoords.y2 = cardCoords.y1 + expectedH;
+      }
     }
+  }
+
+  // Apply optional edge padding micro-adjustment
+  if (edgePaddingPx && Math.abs(edgePaddingPx) <= 25) {
+    cardCoords.x1 = Math.max(0, cardCoords.x1 + edgePaddingPx);
+    cardCoords.y1 = Math.max(0, cardCoords.y1 + edgePaddingPx);
+    cardCoords.x2 = Math.min(width, cardCoords.x2 - edgePaddingPx);
+    cardCoords.y2 = Math.min(height, cardCoords.y2 - edgePaddingPx);
   }
 
   // Strict boundary clamping

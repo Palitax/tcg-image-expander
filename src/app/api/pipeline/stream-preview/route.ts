@@ -227,10 +227,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Bildabmessungen konnten nicht ermittelt werden." }, { status: 400 });
     }
 
+    const edgePaddingPx = parseInt((formData.get("edgePadding") as string) || "0", 10) || 0;
+
     // STEP 1 & 2: High-precision Card Cutout & Vision Analysis
     const cardCutoutResult = await extractCardCutout(originalCardBuffer, {
       apiKey,
-      cornerRadiusPercent: 0.035
+      cornerRadiusPercent: 0.038,
+      edgePaddingPx
     });
 
     const roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
