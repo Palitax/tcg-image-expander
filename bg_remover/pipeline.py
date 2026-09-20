@@ -66,7 +66,14 @@ class BackgroundRemover:
             {self.model_manager.input_name: tensor},
         )
 
-        raw_probs = Postprocessor.stable_sigmoid(outputs[0])
+        raw_out = outputs[0]
+        # If output is not already in [0.0, 1.0], apply stable sigmoid.
+        # Note: The RMBG-1.4 ONNX graph terminates with a Sigmoid operator.
+        if raw_out.min() < 0.0 or raw_out.max() > 1.0:
+            raw_probs = Postprocessor.stable_sigmoid(raw_out)
+        else:
+            raw_probs = np.clip(raw_out, 0.0, 1.0)
+
         alpha_matte = Postprocessor.unletterbox(raw_probs, meta)
         return alpha_matte
 

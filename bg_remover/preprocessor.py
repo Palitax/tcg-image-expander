@@ -130,8 +130,8 @@ class Preprocessor:
     @staticmethod
     def normalize(padded_bgr: np.ndarray) -> np.ndarray:
         """
-        Applies BGR->RGB conversion, [0.0, 1.0] scaling, ImageNet Z-score normalization,
-        and packs into NCHW contiguous float32 tensor memory.
+        Applies BGR->RGB conversion, [0.0, 1.0] scaling, and RMBG-1.4 official normalization
+        ((image - 0.5) / 1.0), packing into NCHW contiguous float32 tensor memory.
 
         Args:
             padded_bgr: Canvas image of shape (target_h, target_w, 3), dtype=np.uint8.
@@ -145,8 +145,8 @@ class Preprocessor:
         # Scale intensity to [0.0, 1.0]
         float_rgb = rgb.astype(np.float32) / 255.0
 
-        # Apply ImageNet normalization: (X - mu) / sigma
-        normalized = (float_rgb - IMAGENET_MEAN) / IMAGENET_STD
+        # RMBG-1.4 official normalization: (X - 0.5) / 1.0
+        normalized = float_rgb - 0.5
 
         # HWC -> CHW
         chw = np.transpose(normalized, (2, 0, 1))

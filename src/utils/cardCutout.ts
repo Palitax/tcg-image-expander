@@ -633,10 +633,9 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
     const isSmallJapaneseGame = setCode?.toLowerCase().includes("ygo") || setName?.toLowerCase().includes("yu-gi-oh");
     const TARGET_RATIO = isSmallJapaneseGame ? 1.4576 : 1.3968;
     const minPlausibleRatio = isSmallJapaneseGame ? 1.38 : 1.33;
-    // Standard TCG card aspect ratio is strictly 1.3968 (88mm / 63mm).
-    // An aspect ratio > 1.415 indicates that the height includes the empty transparent plastic lip
-    // extending 2-5mm at the bottom edge.
-    const maxPlausibleRatio = isSmallJapaneseGame ? 1.48 : 1.415;
+    // Standard TCG card aspect ratio is strictly 1.3968 (88mm / 63mm), but Japanese cards and scan variations reach ~1.43.
+    // An aspect ratio > 1.44 indicates empty transparent plastic lip overhang.
+    const maxPlausibleRatio = isSmallJapaneseGame ? 1.48 : 1.44;
     const expectedH = Math.round(rawW * TARGET_RATIO);
 
     // 5a. Top Card Border Protection (ensure header and top border aren't shaved):
