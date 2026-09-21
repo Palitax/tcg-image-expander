@@ -140,6 +140,8 @@ export const JAPANESE_POKEMON_MAP: Record<string, string> = {
   "イーブイ": "Eevee",
   "ミュウ": "Mew",
   "ミュウツー": "Mewtwo",
+  "ゲコガシラ": "Frogadier",
+  "ケロマツ": "Froakie",
   "ゲッコウガ": "Greninja",
   "ルギア": "Lugia",
   "レックウザ": "Rayquaza",
@@ -207,6 +209,27 @@ export function enrichCardMetadata(params: {
   let cardNumber = (params.cardNumber || "").trim();
   let setCode = (params.setCode || "").trim();
   let setName = (params.setName || "").trim();
+
+  // Detect and clean raw scan filenames like "0020_pokemon_m4_087-083_frogadier_front"
+  if (cardName.includes("_") || cardName.includes("-")) {
+    const scanMatch = cardName.match(/(?:pokemon_)?(?:m\d+_)?(\d{2,4}[-_]\d{2,4})_([a-zA-Z0-9]+)(?:_front|_back)?/i);
+    if (scanMatch) {
+      if (!cardNumber || cardNumber === "001") {
+        cardNumber = scanMatch[1].replace("-", "/");
+      }
+      const rawName = scanMatch[2];
+      cardName = rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase();
+    } else {
+      cardName = cardName
+        .replace(/^(?:\d+[-_])+(?:pokemon[-_])?/i, "")
+        .replace(/[-_](?:front|back|scan)$/i, "")
+        .replace(/_/g, " ")
+        .trim();
+      if (cardName) {
+        cardName = cardName.charAt(0).toUpperCase() + cardName.slice(1);
+      }
+    }
+  }
 
   // If cardName matches Japanese map, translate it
   if (JAPANESE_POKEMON_MAP[cardName]) {

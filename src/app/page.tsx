@@ -1053,7 +1053,8 @@ export default function Home() {
   const [isStreamBatchProcessing, setIsStreamBatchProcessing] = useState<boolean>(false);
   const [streamCustomBgFile, setStreamCustomBgFile] = useState<File | null>(null);
   const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
-  const [streamCardScale, setStreamCardScale] = useState<number>(0.68);
+  const [streamCardScale, setStreamCardScale] = useState<number>(0.54);
+  const [streamShowOverlay, setStreamShowOverlay] = useState<boolean>(false);
   const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
   const [streamVerticalOffset, setStreamVerticalOffset] = useState<number>(0);
   const [streamBottomTrim, setStreamBottomTrim] = useState<number>(0);
@@ -3363,6 +3364,7 @@ export default function Home() {
         formData.append("existingBgImage", streamBgImageUrl);
         formData.append("cardScale", streamCardScale.toString());
         formData.append("shadowStyle", streamShadowStyle);
+        formData.append("showOverlay", streamShowOverlay ? "true" : "false");
         formData.append("verticalOffset", streamVerticalOffset.toString());
         formData.append("bottomTrim", streamBottomTrim.toString());
         formData.append("mattingEngine", streamMattingEngine);
@@ -3411,7 +3413,8 @@ export default function Home() {
             cutoutImage: streamCutoutUrl,
             metadata: streamMetadata,
             cardScale: streamCardScale,
-            shadowStyle: streamShadowStyle
+            shadowStyle: streamShadowStyle,
+            showOverlay: streamShowOverlay
           })
         });
         const data = await parseResponseData(response, "Fehler beim Aktualisieren der Stream-Vorschau.");
@@ -3460,6 +3463,7 @@ export default function Home() {
       }
       formData.append("cardScale", streamCardScale.toString());
       formData.append("shadowStyle", streamShadowStyle);
+      formData.append("showOverlay", streamShowOverlay ? "true" : "false");
       formData.append("verticalOffset", streamVerticalOffset.toString());
       formData.append("bottomTrim", streamBottomTrim.toString());
       formData.append("mattingEngine", streamMattingEngine);
@@ -6435,9 +6439,9 @@ export default function Home() {
                         </label>
                         <div className="grid grid-cols-3 gap-1 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
                           {[
-                            { label: "62%", sub: "Kompakt", val: 0.62 },
-                            { label: "68%", sub: "Standard", val: 0.68 },
-                            { label: "75%", sub: "Groß", val: 0.75 }
+                            { label: "50%", sub: "Kompakt", val: 0.50 },
+                            { label: "54%", sub: "Standard (wie Bild 2)", val: 0.54 },
+                            { label: "62%", sub: "Groß", val: 0.62 }
                           ].map(opt => (
                             <button
                               key={opt.label}
@@ -6466,11 +6470,47 @@ export default function Home() {
                           onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
                           className="w-full px-3 py-2 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
                         >
-                          <option value="soft">Weicher Schatten (Standard)</option>
+                          <option value="soft">Weicher Schatten (Standard wie Bild 2)</option>
                           <option value="intense">Intensiver 3D-Schatten</option>
                           <option value="glow">Magenta Glow-Effekt</option>
                           <option value="none">Kein Schatten</option>
                         </select>
+                      </div>
+
+                      {/* Stream Overlay Toggle */}
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                          Stream-Overlay & Branding
+                        </label>
+                        <div className="grid grid-cols-2 gap-2 bg-zinc-950/60 p-1.5 rounded-xl border border-zinc-800">
+                          <button
+                            type="button"
+                            onClick={() => setStreamShowOverlay(false)}
+                            className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                              !streamShowOverlay
+                                ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                            }`}
+                          >
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                            <span>Ohne Overlay (Clean wie Bild 2)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStreamShowOverlay(true)}
+                            className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                              streamShowOverlay
+                                ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                            }`}
+                          >
+                            <span className="w-2 h-2 rounded-full bg-purple-400" />
+                            <span>Mit Stream-Branding & Text</span>
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          Im Clean-Modus bleibt das erweiterte 1:1 Artwork ohne störende Texte voll sichtbar.
+                        </p>
                       </div>
 
                       {/* Freistellungs-Engine */}
@@ -6718,9 +6758,9 @@ export default function Home() {
                         </label>
                         <div className="grid grid-cols-3 gap-1.5 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
                           {[
-                            { label: "65%", sub: "Kompakt", val: 0.65 },
-                            { label: "75%", sub: "Standard", val: 0.75 },
-                            { label: "85%", sub: "Groß", val: 0.85 }
+                            { label: "50%", sub: "Kompakt", val: 0.50 },
+                            { label: "54%", sub: "Standard (wie Bild 2)", val: 0.54 },
+                            { label: "62%", sub: "Groß", val: 0.62 }
                           ].map(opt => (
                             <button
                               key={opt.label}
@@ -6749,11 +6789,44 @@ export default function Home() {
                           onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
                           className="w-full px-3 py-2.5 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
                         >
-                          <option value="soft">Weicher Schatten (Standard)</option>
+                          <option value="soft">Weicher Schatten (Standard wie Bild 2)</option>
                           <option value="intense">Intensiver 3D-Schatten</option>
-                          <option value="glow">Blauer Glow-Effekt (Whatnot)</option>
+                          <option value="glow">Magenta Glow-Effekt</option>
                           <option value="none">Kein Schatten</option>
                         </select>
+                      </div>
+
+                      {/* Stream Overlay Toggle */}
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+                          Stream-Overlay & Branding (Stapel)
+                        </label>
+                        <div className="grid grid-cols-2 gap-2 bg-zinc-950/60 p-1.5 rounded-xl border border-zinc-800">
+                          <button
+                            type="button"
+                            onClick={() => setStreamShowOverlay(false)}
+                            className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                              !streamShowOverlay
+                                ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                            }`}
+                          >
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                            <span>Ohne Overlay (Clean wie Bild 2)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStreamShowOverlay(true)}
+                            className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                              streamShowOverlay
+                                ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
+                                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
+                            }`}
+                          >
+                            <span className="w-2 h-2 rounded-full bg-purple-400" />
+                            <span>Mit Stream-Branding & Text</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -7029,9 +7102,19 @@ export default function Home() {
                                   <Pencil className="w-3.5 h-3.5 text-purple-400" />
                                   Kartendetails & Beschriftung anpassen
                                 </span>
-                                <span className="text-[10px] text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
-                                  Slogan: MANACARDS – Unpack the magic
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setStreamShowOverlay(!streamShowOverlay)}
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1.5 transition-all ${
+                                    streamShowOverlay
+                                      ? "bg-purple-600/30 text-purple-200 border border-purple-500/40"
+                                      : "bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200"
+                                  }`}
+                                  title="Schaltet das Stream-Overlay mit Badge und Kartentext an oder aus"
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${streamShowOverlay ? "bg-purple-400" : "bg-emerald-400"}`} />
+                                  <span>{streamShowOverlay ? "Overlay eingeblendet" : "Clean (Ohne Overlay)"}</span>
+                                </button>
                               </div>
 
                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-3">

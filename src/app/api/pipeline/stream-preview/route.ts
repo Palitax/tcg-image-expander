@@ -18,15 +18,17 @@ async function compositeStreamPreviewLayers(params: {
   metadata: CardMetadata;
   cardScale?: number;
   shadowStyle?: "soft" | "intense" | "glow" | "none";
-  cardCenterYRatio?: number; // default ~0.46
+  cardCenterYRatio?: number;
+  showOverlay?: boolean;
 }): Promise<Buffer> {
   const {
     backgroundBuffer,
     cutoutCardBuffer,
     metadata,
-    cardScale = 0.68,
+    cardScale = 0.54,
     shadowStyle = "soft",
-    cardCenterYRatio = 0.46
+    showOverlay = false,
+    cardCenterYRatio = showOverlay ? 0.46 : 0.50
   } = params;
 
   const bgMetadata = await sharp(backgroundBuffer).metadata();
@@ -38,11 +40,11 @@ async function compositeStreamPreviewLayers(params: {
   const rawCardH = cardMetadata.height || 700;
 
   // Scale card appropriately on 1024x1024 canvas
-  const clampedScale = Math.max(0.5, Math.min(0.82, cardScale));
+  const clampedScale = Math.max(0.40, Math.min(0.85, cardScale));
   let targetCardH = Math.round(bgHeight * clampedScale);
   let targetCardW = Math.round((rawCardW / rawCardH) * targetCardH);
 
-  const maxW = Math.round(bgWidth * 0.72);
+  const maxW = Math.round(bgWidth * 0.76);
   if (targetCardW > maxW) {
     targetCardW = maxW;
     targetCardH = Math.round((rawCardH / rawCardW) * targetCardW);
@@ -57,25 +59,25 @@ async function compositeStreamPreviewLayers(params: {
 
   // 1. Shadow Layer
   if (shadowStyle !== "none") {
-    const shadowPadding = Math.max(16, Math.min(48, Math.round(targetCardW * 0.09)));
+    const shadowPadding = Math.max(20, Math.min(48, Math.round(targetCardW * 0.10)));
     const shadowW = targetCardW + shadowPadding * 2;
     const shadowH = targetCardH + shadowPadding * 2;
     const shadowRadius = Math.round(targetCardW * 0.038);
 
-    let shadowAlpha = 0.75;
+    let shadowAlpha = 0.50; // Natural soft drop shadow matching reference Image 2
     let shadowR = 0;
     let shadowG = 0;
     let shadowB = 0;
-    let blurSigma = Math.max(12, Math.min(28, Math.round(shadowPadding * 0.68)));
+    let blurSigma = Math.max(14, Math.min(26, Math.round(shadowPadding * 0.68)));
 
     if (shadowStyle === "intense") {
-      shadowAlpha = 0.90;
-      blurSigma = Math.max(14, Math.min(30, Math.round(shadowPadding * 0.78)));
+      shadowAlpha = 0.85;
+      blurSigma = Math.max(16, Math.min(30, Math.round(shadowPadding * 0.78)));
     } else if (shadowStyle === "glow") {
       shadowR = 210;
       shadowG = 90;
       shadowB = 240;
-      shadowAlpha = 0.80;
+      shadowAlpha = 0.75;
     }
 
     const shadowMask = Buffer.from(
@@ -113,7 +115,7 @@ async function compositeStreamPreviewLayers(params: {
       .toBuffer();
 
     const finalCenterY = Math.round(bgHeight * cardCenterYRatio);
-    const finalTop = Math.max(40, Math.round(finalCenterY - shadowH / 2));
+    const finalTop = Math.max(30, Math.round(finalCenterY - shadowH / 2));
     const finalLeft = Math.round((bgWidth - shadowW) / 2);
 
     compositeLayers.push({
@@ -123,7 +125,7 @@ async function compositeStreamPreviewLayers(params: {
     });
   } else {
     const finalCenterY = Math.round(bgHeight * cardCenterYRatio);
-    const finalTop = Math.max(40, Math.round(finalCenterY - targetCardH / 2));
+    const finalTop = Math.max(30, Math.round(finalCenterY - targetCardH / 2));
     const finalLeft = Math.round((bgWidth - targetCardW) / 2);
 
     compositeLayers.push({
@@ -133,13 +135,15 @@ async function compositeStreamPreviewLayers(params: {
     });
   }
 
-  // 2. Stream Preview Pure Vector SVG Overlay (Zero fontconfig dependency, no tofu boxes)
-  const overlaySvgBuffer = buildStreamPreviewVectorSvg(metadata, bgWidth, bgHeight);
-  compositeLayers.push({
-    input: overlaySvgBuffer,
-    top: 0,
-    left: 0
-  });
+  // 2. Stream Preview Pure Vector SVG Overlay (Only rendered if showOverlay is enabled)
+  if (showOverlay) {
+    const overlaySvgBuffer = buildStreamPreviewVectorSvg(metadata, bgWidth, bgHeight);
+    compositeLayers.push({
+      input: overlaySvgBuffer,
+      top: 0,
+      left: 0
+    });
+  }
 
   return await sharp(backgroundBuffer)
     .composite(compositeLayers)
@@ -158,8 +162,9 @@ export async function POST(request: Request) {
         backgroundImage,
         cutoutImage,
         metadata: rawMetadata,
-        cardScale = 0.68,
-        shadowStyle = "soft"
+        cardScale = 0.54,
+        shadowStyle = "soft",
+        showOverlay = false
       } = jsonBody;
 
       if (!backgroundImage || !cutoutImage) {
@@ -181,8 +186,9 @@ export async function POST(request: Request) {
         backgroundBuffer: bgBuffer,
         cutoutCardBuffer: cutoutBuffer,
         metadata: enrichedMetadata,
-        cardScale: Number(cardScale) || 0.68,
-        shadowStyle
+        cardScale: Number(cardScale) || 0.54,
+        shadowStyle,
+        showOverlay: Boolean(showOverlay)
       });
 
       return NextResponse.json({
@@ -195,8 +201,9 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const cardFile = formData.get("cardImage") as File | null;
     const customBgFile = formData.get("backgroundImage") as File | null;
-    const cardScale = parseFloat((formData.get("cardScale") as string) || "0.68");
+    const cardScale = parseFloat((formData.get("cardScale") as string) || "0.54");
     const shadowStyle = ((formData.get("shadowStyle") as string) || "soft") as "soft" | "intense" | "glow" | "none";
+    const showOverlay = formData.get("showOverlay") === "true";
     const mattingEngine = ((formData.get("mattingEngine") as string) || "gemini_homography") as "gemini_homography" | "ai_matting" | "tcg_cutout";
 
     const apiKey =
@@ -514,131 +521,147 @@ export async function POST(request: Request) {
           .trim();
 
         const cardTitle = cardCutoutResult.cardName || "Trading card";
-        const promptContext = cleanDesc ? ` Artwork context: ${cleanDesc}.` : "";
-        const artworkExpansionPrompt = `You are a master digital artist. This image is the authentic artwork of the collectible trading card "${cardTitle}".
-Task: Seamlessly expand and outpaint this artwork in all directions to fill a square 1024x1024 (1:1) format.
-Requirements:
-1. Preserve the characters, subjects, foreground, palette, lighting, textures, and exact drawing/painting art style from the original image.
-2. Extend the background environment, scenery, atmosphere, and landscape naturally and continuously from the borders of the artwork to the edges of the canvas.
-3. Blend the extensions seamlessly with the original content with zero visible seams or abrupt borders.
-4. Do NOT add any card borders, card frames, text, numbers, HP, energy symbols, or watermarks.
-5. Fill the entire canvas completely from edge to edge with the beautiful extended scene.${promptContext}`;
+        const sceneryOutpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${cleanDesc}. Expand the background environment to fill a square 1:1 format (1024x1024), preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic. Do NOT replicate, duplicate, or generate any characters, Pokémon, figures, humans, text, play cost symbols, power attributes, or card borders. Focus strictly on extending the surrounding environment and background scenery seamlessly to all edges.`;
 
-        console.log(`[Stream Preview API] Starting multimodal artwork expansion for "${cardTitle}"...`);
+        console.log(`[Stream Preview API] Starting 1:1 background scenery generation for "${cardTitle}"...`);
 
-        // 1. Primary & Secondary: Multimodal Image Outpainting using the Card's Artwork
-        const multimodalModels = [
-          "gemini-2.5-flash-image",
-          "gemini-3.1-flash-image-preview",
-          "gemini-3.1-flash-lite-image"
-        ];
-
-        for (const imgModel of multimodalModels) {
-          if (backgroundBuffer) break;
-          try {
-            console.log(`[Stream Preview API] Attempting multimodal artwork expansion with ${imgModel}...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              contents: [
-                {
-                  parts: [
-                    {
-                      inlineData: {
-                        mimeType: "image/jpeg",
-                        data: rawIllustrationBase64
-                      }
-                    },
-                    {
-                      text: artworkExpansionPrompt
-                    }
-                  ]
-                }
-              ],
-              generationConfig: {
-                responseModalities: ["TEXT", "IMAGE"]
-              }
-            };
-
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(25000)
-            });
-
-            if (res.ok) {
-              const json = await res.json();
-              const parts = json?.candidates?.[0]?.content?.parts || [];
-              for (const part of parts) {
-                const imgData = part.inlineData?.data || (part as any).inline_data?.data;
-                if (imgData) {
-                  console.log(`[Stream Preview API] ${imgModel} successfully generated extended artwork backdrop!`);
-                  const rawBuf = Buffer.from(imgData, "base64");
-                  backgroundBuffer = await sharp(rawBuf)
-                    .resize(1024, 1024, { fit: "cover", position: "centre" })
-                    .jpeg({ quality: 92 })
-                    .toBuffer();
-                  break;
-                }
-              }
-            } else {
-              const errText = await res.text();
-              console.warn(`[Stream Preview API] ${imgModel} REST HTTP ${res.status}:`, errText.slice(0, 160));
+        // 1. Primary: Imagen 3 REST :predict with native 1:1 aspect ratio
+        try {
+          console.log("[Stream Preview API] Attempting REST Imagen 3 predict for 1:1 square scenery...");
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
+          const payload = {
+            instances: [{ prompt: sceneryOutpaintPrompt }],
+            parameters: {
+              sampleCount: 1,
+              aspectRatio: "1:1",
+              safetySetting: "block_only_high",
+              outputOptions: { mimeType: "image/jpeg" }
             }
-          } catch (modelErr: any) {
-            console.warn(`[Stream Preview API] ${imgModel} failed:`, modelErr?.message || modelErr);
+          };
+
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(12000)
+          });
+
+          if (res.ok) {
+            const json = await res.json();
+            const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+            if (bytes) {
+              console.log("[Stream Preview API] REST Imagen 3 successfully generated 1:1 scenery backdrop!");
+              const rawBuf = Buffer.from(bytes, "base64");
+              backgroundBuffer = await sharp(rawBuf)
+                .resize(1024, 1024, { fit: "cover", position: "centre" })
+                .jpeg({ quality: 92 })
+                .toBuffer();
+            }
+          } else {
+            const errText = await res.text();
+            console.warn(`[Stream Preview API] REST Imagen 3 HTTP ${res.status}:`, errText.slice(0, 160));
+          }
+        } catch (restErr: any) {
+          console.warn("[Stream Preview API] REST Imagen 3 failed:", restErr?.message || restErr);
+        }
+
+        // 2. Secondary: Imagen 3 SDK generateImages for 1:1
+        if (!backgroundBuffer) {
+          try {
+            console.log("[Stream Preview API] Attempting Imagen 3 SDK generateImages for 1:1...");
+            const imagenRes = await ai.models.generateImages({
+              model: "imagen-3.0-generate-002",
+              prompt: sceneryOutpaintPrompt,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: "1:1" as any,
+                outputMimeType: "image/jpeg"
+              }
+            });
+            const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
+            if (imgBytes) {
+              console.log("[Stream Preview API] Imagen 3 SDK generated 1:1 scenery backdrop successfully!");
+              const rawBuf = Buffer.from(imgBytes, "base64");
+              backgroundBuffer = await sharp(rawBuf)
+                .resize(1024, 1024, { fit: "cover", position: "centre" })
+                .jpeg({ quality: 92 })
+                .toBuffer();
+            }
+          } catch (sdkErr: any) {
+            console.warn("[Stream Preview API] Imagen 3 SDK failed:", sdkErr?.message || sdkErr);
           }
         }
 
-        // 2. Tertiary: @google/genai SDK fallback with multimodal payload
+        // 3. Tertiary: Multimodal Image Outpainting using the Card's Artwork with strict scenery prompt
         if (!backgroundBuffer) {
-          try {
-            console.log("[Stream Preview API] Attempting multimodal artwork expansion via SDK...");
-            const sdkRes = await ai.models.generateContent({
-              model: "gemini-2.5-flash-image",
-              contents: [
-                {
-                  role: "user",
-                  parts: [
-                    {
-                      inlineData: {
-                        mimeType: "image/jpeg",
-                        data: rawIllustrationBase64
-                      }
-                    },
-                    {
-                      text: artworkExpansionPrompt
-                    }
-                  ]
-                }
-              ],
-              config: {
-                responseModalities: ["TEXT", "IMAGE"]
-              }
-            });
+          const multimodalModels = [
+            "gemini-2.5-flash-image",
+            "gemini-3.1-flash-image-preview",
+            "gemini-3.1-flash-lite-image"
+          ];
 
-            const parts = sdkRes.candidates?.[0]?.content?.parts || [];
-            for (const part of parts) {
-              const imgData = (part as any).inlineData?.data || (part as any).inline_data?.data;
-              if (imgData) {
-                console.log("[Stream Preview API] SDK multimodal artwork expansion succeeded!");
-                const rawBuf = Buffer.from(imgData, "base64");
-                backgroundBuffer = await sharp(rawBuf)
-                  .resize(1024, 1024, { fit: "cover", position: "centre" })
-                  .jpeg({ quality: 92 })
-                  .toBuffer();
-                break;
+          for (const imgModel of multimodalModels) {
+            if (backgroundBuffer) break;
+            try {
+              console.log(`[Stream Preview API] Attempting multimodal artwork expansion with ${imgModel}...`);
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+              const payload = {
+                contents: [
+                  {
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType: "image/jpeg",
+                          data: rawIllustrationBase64
+                        }
+                      },
+                      {
+                        text: `Seamless continuous background environment expansion: ${sceneryOutpaintPrompt}`
+                      }
+                    ]
+                  }
+                ],
+                generationConfig: {
+                  responseModalities: ["TEXT", "IMAGE"]
+                }
+              };
+
+              const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(20000)
+              });
+
+              if (res.ok) {
+                const json = await res.json();
+                const parts = json?.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  const imgData = part.inlineData?.data || (part as any).inline_data?.data;
+                  if (imgData) {
+                    console.log(`[Stream Preview API] ${imgModel} successfully generated extended artwork backdrop!`);
+                    const rawBuf = Buffer.from(imgData, "base64");
+                    backgroundBuffer = await sharp(rawBuf)
+                      .resize(1024, 1024, { fit: "cover", position: "centre" })
+                      .jpeg({ quality: 92 })
+                      .toBuffer();
+                    break;
+                  }
+                }
+              } else {
+                const errText = await res.text();
+                console.warn(`[Stream Preview API] ${imgModel} REST HTTP ${res.status}:`, errText.slice(0, 160));
               }
+            } catch (modelErr: any) {
+              console.warn(`[Stream Preview API] ${imgModel} failed:`, modelErr?.message || modelErr);
             }
-          } catch (sdkErr: any) {
-            console.warn("[Stream Preview API] SDK multimodal artwork expansion failed:", sdkErr?.message || sdkErr);
           }
         }
       } catch (outpaintErr) {
         console.warn("[Stream Preview API] AI artwork expansion exception:", outpaintErr);
       }
 
-      // 3. Bulletproof ambient blur fallback if all AI image generators fail
+      // 4. Bulletproof ambient blur fallback if all AI image generators fail
       if (!backgroundBuffer) {
         console.log("[Stream Preview API] AI artwork expansion models unavailable or rate-limited. Falling back to ambient blur backdrop of the card artwork.");
         usedFallback = true;
@@ -657,7 +680,8 @@ Requirements:
       cutoutCardBuffer: roundedCardBuffer,
       metadata: enrichedMetadata,
       cardScale,
-      shadowStyle
+      shadowStyle,
+      showOverlay
     });
 
     const resultImageUrl = `data:image/png;base64,${finalResultBuffer.toString("base64")}`;
