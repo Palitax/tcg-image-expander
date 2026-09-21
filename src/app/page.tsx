@@ -122,7 +122,7 @@ const STREAM_STEPS: ProgressStep[] = [
 const STREAM_EXTENDED_STEPS: ProgressStep[] = [
   { id: "DETECT", label: "KI-Kartenerkennung & OCR", description: "Gemini extrahiert Karte, Name, Nummer und Set-Kürzel", status: "idle" },
   { id: "DATABASE", label: "TCG-Set-Datenbankabgleich", description: "Offizieller Set-Name wird ermittelt und abgeglichen", status: "idle" },
-  { id: "OUTPAINT", label: "KI-Artwork-Erweiterung", description: "Imagen 3 erweitert das Kunstwerk auf 1:1 Stream-Format", status: "idle" },
+  { id: "OUTPAINT", label: "KI-Artwork-Erweiterung", description: "KI erweitert das Original-Artwork der Karte nahtlos auf 1:1 Stream-Format", status: "idle" },
   { id: "COMPOSE", label: "Manacards-Stream-Compositing", description: "Stream-Preview-Rahmen, Typografie und Slogan werden gerendert", status: "idle" }
 ];
 

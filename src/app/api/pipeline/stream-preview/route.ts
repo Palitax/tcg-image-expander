@@ -299,15 +299,42 @@ export async function POST(request: Request) {
         });
         roundedCardBuffer = homographyResult.cutoutBuffer;
 
-        // Crop inner illustration for ambient blur fallback (center 84% x 46%)
-        const illW = Math.max(10, Math.round(homographyResult.width * 0.84));
-        const illH = Math.max(10, Math.round(homographyResult.height * 0.46));
-        const illX = Math.round(homographyResult.width * 0.08);
-        const illY = Math.round(homographyResult.height * 0.12);
+        // Extract inner illustration for AI artwork expansion and ambient fallback
+        const isFullArt = !!homographyResult.analysis.is_full_art;
+        let illX: number;
+        let illY: number;
+        let illW: number;
+        let illH: number;
+
+        if (homographyResult.analysis.illustration_box && Array.isArray(homographyResult.analysis.illustration_box) && homographyResult.analysis.illustration_box.length === 4) {
+          const [ymin, xmin, ymax, xmax] = homographyResult.analysis.illustration_box.map(Number);
+          illX = Math.round((xmin / 1000) * homographyResult.width);
+          illY = Math.round((ymin / 1000) * homographyResult.height);
+          illW = Math.max(10, Math.round(((xmax - xmin) / 1000) * homographyResult.width));
+          illH = Math.max(10, Math.round(((ymax - ymin) / 1000) * homographyResult.height));
+        } else if (isFullArt) {
+          illX = Math.round(homographyResult.width * 0.03);
+          illY = Math.round(homographyResult.height * 0.03);
+          illW = Math.round(homographyResult.width * 0.94);
+          illH = Math.round(homographyResult.height * 0.94);
+        } else {
+          illW = Math.max(10, Math.round(homographyResult.width * 0.84));
+          illH = Math.max(10, Math.round(homographyResult.height * 0.46));
+          illX = Math.round(homographyResult.width * 0.08);
+          illY = Math.round(homographyResult.height * 0.12);
+        }
+
+        // Clamp inside cutout bounds
+        illX = Math.max(0, Math.min(illX, homographyResult.width - 10));
+        illY = Math.max(0, Math.min(illY, homographyResult.height - 10));
+        illW = Math.max(10, Math.min(illW, homographyResult.width - illX));
+        illH = Math.max(10, Math.min(illH, homographyResult.height - illY));
+
         let illustrationBuffer: Buffer;
         try {
           illustrationBuffer = await sharp(homographyResult.cutoutBuffer)
             .extract({ left: illX, top: illY, width: illW, height: illH })
+            .resize(768, 768, { fit: "inside" })
             .png()
             .toBuffer();
         } catch {
@@ -338,6 +365,7 @@ export async function POST(request: Request) {
           sceneryDescription: homographyResult.analysis.scene_prompt || "",
           hasSampleWatermark: false,
           usedFallback: false,
+          isFullArt,
           originalWidth: width,
           originalHeight: height
         };
@@ -439,9 +467,9 @@ export async function POST(request: Request) {
     }
 
     if (!backgroundBuffer) {
-      // Use clean inner illustration extracted by extractCardCutout
+      // Use clean inner illustration extracted by extractCardCutout or extractCardHomography
       const croppedIllustrationBuffer = cardCutoutResult.illustrationBuffer;
-      const illustrationBase64 = cardCutoutResult.illustrationBase64.includes(",")
+      const rawIllustrationBase64 = cardCutoutResult.illustrationBase64.includes(",")
         ? cardCutoutResult.illustrationBase64.split(",")[1]
         : cardCutoutResult.illustrationBase64;
 
@@ -451,13 +479,13 @@ export async function POST(request: Request) {
         // If vision in Step 1 didn't produce sceneryDescription, run quick fallback describer
         if (!description) {
           try {
-            const describePrompt = `Analyze this trading card illustration. Write a vivid, detailed prompt describing ONLY the environment scenery, landscape, room setting, background elements, artistic style (e.g. anime watercolor, vibrant fantasy digital art), color palette, lighting, and general aesthetic. You MUST completely ignore and exclude any characters, pokemon creatures, figures, humans, text, or card borders in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery.`;
+            const describePrompt = `Analyze this trading card illustration. Write a concise, vivid description of the scenery, environment, art medium (e.g. watercolor, digital anime painting), color palette, and lighting. Return only the descriptive prompt for the background scenery.`;
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
             const payload = {
               contents: [
                 {
                   parts: [
-                    { inlineData: { mimeType: "image/jpeg", data: illustrationBase64 } },
+                    { inlineData: { mimeType: "image/jpeg", data: rawIllustrationBase64 } },
                     { text: describePrompt }
                   ]
                 }
@@ -468,7 +496,7 @@ export async function POST(request: Request) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(3000)
+              signal: AbortSignal.timeout(3500)
             });
 
             if (res.ok) {
@@ -485,136 +513,31 @@ export async function POST(request: Request) {
           .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy motif")
           .trim();
 
-        const outpaintPrompt = `Anime scenery wallpaper, seamless extended background environment: ${cleanDesc}. Vibrant, highly detailed fantasy environment, beautiful lighting, consistent color palette, masterwork art style. Exclude all characters, figures, pokemon, text, symbols, and card borders.`;
+        const cardTitle = cardCutoutResult.cardName || "Trading card";
+        const promptContext = cleanDesc ? ` Artwork context: ${cleanDesc}.` : "";
+        const artworkExpansionPrompt = `You are a master digital artist. This image is the authentic artwork of the collectible trading card "${cardTitle}".
+Task: Seamlessly expand and outpaint this artwork in all directions to fill a square 1024x1024 (1:1) format.
+Requirements:
+1. Preserve the characters, subjects, foreground, palette, lighting, textures, and exact drawing/painting art style from the original image.
+2. Extend the background environment, scenery, atmosphere, and landscape naturally and continuously from the borders of the artwork to the edges of the canvas.
+3. Blend the extensions seamlessly with the original content with zero visible seams or abrupt borders.
+4. Do NOT add any card borders, card frames, text, numbers, HP, energy symbols, or watermarks.
+5. Fill the entire canvas completely from edge to edge with the beautiful extended scene.${promptContext}`;
 
-        console.log(`[Stream Preview API] Outpainting prompt: "${outpaintPrompt.slice(0, 120)}..."`);
+        console.log(`[Stream Preview API] Starting multimodal artwork expansion for "${cardTitle}"...`);
 
-        // 1. Primary: Fast Imagen 3 generation attempt via REST :predict
-        try {
-          console.log("[Stream Preview API] Attempting Imagen 3 predict (1:1)...");
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
-          const payload = {
-            instances: [{ prompt: outpaintPrompt }],
-            parameters: {
-              sampleCount: 1,
-              aspectRatio: "1:1",
-              safetySetting: "block_only_high",
-              outputOptions: { mimeType: "image/jpeg" }
-            }
-          };
+        // 1. Primary & Secondary: Multimodal Image Outpainting using the Card's Artwork
+        const multimodalModels = [
+          "gemini-2.5-flash-image",
+          "gemini-3.1-flash-image-preview",
+          "gemini-3.1-flash-lite-image"
+        ];
 
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(25000)
-          });
-
-          if (res.ok) {
-            const json = await res.json();
-            const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-            if (bytes) {
-              const rawBuf = Buffer.from(bytes, "base64");
-              backgroundBuffer = await sharp(rawBuf)
-                .resize(1024, 1024, { fit: "cover", position: "centre" })
-                .jpeg({ quality: 92 })
-                .toBuffer();
-              console.log(`[Stream Preview API] Imagen 3 generated backdrop successfully (${backgroundBuffer.length} bytes).`);
-            }
-          } else {
-            const errText = await res.text();
-            console.warn(`[Stream Preview API] Imagen 3 HTTP ${res.status}:`, errText.slice(0, 160));
-          }
-        } catch (imgErr: any) {
-          console.warn("[Stream Preview API] Imagen 3 call failed:", imgErr?.message || imgErr);
-        }
-
-        // 2. Secondary: Imagen 3 via @google/genai SDK generateImages
-        if (!backgroundBuffer) {
+        for (const imgModel of multimodalModels) {
+          if (backgroundBuffer) break;
           try {
-            console.log("[Stream Preview API] Attempting Imagen 3 SDK generateImages...");
-            const imagenRes = await ai.models.generateImages({
-              model: "imagen-3.0-generate-002",
-              prompt: outpaintPrompt,
-              config: {
-                numberOfImages: 1,
-                aspectRatio: "1:1",
-                outputMimeType: "image/jpeg"
-              }
-            });
-            const imgBytes = imagenRes.generatedImages?.[0]?.image?.imageBytes;
-            if (imgBytes) {
-              const rawBuf = Buffer.from(imgBytes, "base64");
-              backgroundBuffer = await sharp(rawBuf)
-                .resize(1024, 1024, { fit: "cover", position: "centre" })
-                .jpeg({ quality: 92 })
-                .toBuffer();
-              console.log("[Stream Preview API] Imagen 3 SDK generated backdrop successfully.");
-            }
-          } catch (sdkImgErr: any) {
-            console.warn("[Stream Preview API] Imagen 3 SDK failed:", sdkImgErr?.message || sdkImgErr);
-          }
-        }
-
-        // 3. Tertiary: Dedicated Gemini Image Generation Models (gemini-2.5-flash-image, gemini-3.1-flash-image-preview)
-        // Note: Models require responseModalities: ["TEXT", "IMAGE"]
-        if (!backgroundBuffer) {
-          const dedicatedImgModels = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview"];
-          for (const imgModel of dedicatedImgModels) {
-            if (backgroundBuffer) break;
-            try {
-              console.log(`[Stream Preview API] Attempting REST image generation with ${imgModel}...`);
-              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
-              const payload = {
-                contents: [
-                  {
-                    parts: [
-                      { text: `Create a beautiful anime scenery background wallpaper: ${outpaintPrompt}` }
-                    ]
-                  }
-                ],
-                generationConfig: {
-                  responseModalities: ["TEXT", "IMAGE"]
-                }
-              };
-
-              const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-                signal: AbortSignal.timeout(8000)
-              });
-
-              if (res.ok) {
-                const json = await res.json();
-                const parts = json?.candidates?.[0]?.content?.parts || [];
-                for (const part of parts) {
-                  const imgData = part.inlineData?.data || (part as any).inline_data?.data;
-                  if (imgData) {
-                    console.log(`[Stream Preview API] ${imgModel} REST generated image successfully! Resizing to 1024x1024 (1:1)...`);
-                    const rawBuf = Buffer.from(imgData, "base64");
-                    backgroundBuffer = await sharp(rawBuf)
-                      .resize(1024, 1024, { fit: "cover", position: "centre" })
-                      .jpeg({ quality: 92 })
-                      .toBuffer();
-                    break;
-                  }
-                }
-              } else {
-                const errText = await res.text();
-                console.warn(`[Stream Preview API] ${imgModel} REST error ${res.status}:`, errText.slice(0, 160));
-              }
-            } catch (gErr: any) {
-              console.warn(`[Stream Preview API] ${imgModel} REST failed:`, gErr?.message || gErr);
-            }
-          }
-        }
-
-        // 4. Quaternary: Multimodal Image Outpainting using the Card's Cropped Illustration
-        if (!backgroundBuffer && illustrationBase64) {
-          try {
-            console.log("[Stream Preview API] Attempting multimodal artwork expansion with illustration...");
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(apiKey)}`;
+            console.log(`[Stream Preview API] Attempting multimodal artwork expansion with ${imgModel}...`);
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
             const payload = {
               contents: [
                 {
@@ -622,11 +545,11 @@ export async function POST(request: Request) {
                     {
                       inlineData: {
                         mimeType: "image/jpeg",
-                        data: illustrationBase64
+                        data: rawIllustrationBase64
                       }
                     },
                     {
-                      text: `Expand this card illustration outwards into a seamless, high-quality full background scenery wallpaper. Match the exact same art style, colors, and lighting. Fill the entire canvas completely from top to bottom with the scenery. Do NOT include any characters, Pokemon, figures, or text. Do NOT leave any blank white, transparent, or checkerboard areas.`
+                      text: artworkExpansionPrompt
                     }
                   ]
                 }
@@ -640,7 +563,7 @@ export async function POST(request: Request) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(8000)
+              signal: AbortSignal.timeout(25000)
             });
 
             if (res.ok) {
@@ -649,7 +572,7 @@ export async function POST(request: Request) {
               for (const part of parts) {
                 const imgData = part.inlineData?.data || (part as any).inline_data?.data;
                 if (imgData) {
-                  console.log("[Stream Preview API] Multimodal illustration expansion succeeded!");
+                  console.log(`[Stream Preview API] ${imgModel} successfully generated extended artwork backdrop!`);
                   const rawBuf = Buffer.from(imgData, "base64");
                   backgroundBuffer = await sharp(rawBuf)
                     .resize(1024, 1024, { fit: "cover", position: "centre" })
@@ -658,18 +581,66 @@ export async function POST(request: Request) {
                   break;
                 }
               }
+            } else {
+              const errText = await res.text();
+              console.warn(`[Stream Preview API] ${imgModel} REST HTTP ${res.status}:`, errText.slice(0, 160));
             }
-          } catch (multimodalErr: any) {
-            console.warn("[Stream Preview API] Multimodal outpaint failed:", multimodalErr?.message || multimodalErr);
+          } catch (modelErr: any) {
+            console.warn(`[Stream Preview API] ${imgModel} failed:`, modelErr?.message || modelErr);
+          }
+        }
+
+        // 2. Tertiary: @google/genai SDK fallback with multimodal payload
+        if (!backgroundBuffer) {
+          try {
+            console.log("[Stream Preview API] Attempting multimodal artwork expansion via SDK...");
+            const sdkRes = await ai.models.generateContent({
+              model: "gemini-2.5-flash-image",
+              contents: [
+                {
+                  role: "user",
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: "image/jpeg",
+                        data: rawIllustrationBase64
+                      }
+                    },
+                    {
+                      text: artworkExpansionPrompt
+                    }
+                  ]
+                }
+              ],
+              config: {
+                responseModalities: ["TEXT", "IMAGE"]
+              }
+            });
+
+            const parts = sdkRes.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              const imgData = (part as any).inlineData?.data || (part as any).inline_data?.data;
+              if (imgData) {
+                console.log("[Stream Preview API] SDK multimodal artwork expansion succeeded!");
+                const rawBuf = Buffer.from(imgData, "base64");
+                backgroundBuffer = await sharp(rawBuf)
+                  .resize(1024, 1024, { fit: "cover", position: "centre" })
+                  .jpeg({ quality: 92 })
+                  .toBuffer();
+                break;
+              }
+            }
+          } catch (sdkErr: any) {
+            console.warn("[Stream Preview API] SDK multimodal artwork expansion failed:", sdkErr?.message || sdkErr);
           }
         }
       } catch (outpaintErr) {
-        console.warn("[Stream Preview API] AI backdrop generation exception:", outpaintErr);
+        console.warn("[Stream Preview API] AI artwork expansion exception:", outpaintErr);
       }
 
-      // 4. Bulletproof ambient blur fallback if all AI image generators fail
+      // 3. Bulletproof ambient blur fallback if all AI image generators fail
       if (!backgroundBuffer) {
-        console.log("[Stream Preview API] All AI image generators failed. Falling back to ambient blur backdrop.");
+        console.log("[Stream Preview API] AI artwork expansion models unavailable or rate-limited. Falling back to ambient blur backdrop of the card artwork.");
         usedFallback = true;
         backgroundBuffer = await sharp(croppedIllustrationBuffer)
           .resize(1024, 1024, { fit: "cover" })

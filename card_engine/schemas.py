@@ -27,3 +27,11 @@ class CardAnalysisResult(BaseModel):
         default=False,
         description="True für kleine japanische Spiele wie Yu-Gi-Oh (59x86mm), False für Standard-Karten wie Pokémon/MTG/One Piece (63x88mm)"
     )
+    illustration_box: Optional[List[int]] = Field(
+        default=None,
+        description="Bounding Box [ymin, xmin, ymax, xmax] normalisiert 0-1000 des Artwork-Bereichs. Bei Full-Art/AR/SAR/SIR-Karten erstreckt sich das Artwork fast über die gesamte Karte (z.B. [40, 40, 960, 960]). Bei Vintage/Standard-Karten ist es das obere Illustrationsfenster."
+    )
+    is_full_art: Optional[bool] = Field(
+        default=False,
+        description="True, falls das Artwork die gesamte Karte ausfüllt (Full Art, Art Rare, SAR, Special Illustration Rare), False bei traditionellen Karten mit separatem Illustrationsrahmen."
+    )

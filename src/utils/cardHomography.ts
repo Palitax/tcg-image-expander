@@ -17,6 +17,8 @@ export interface CardAnalysisResult {
   scene_prompt: string;
   corners: CardCorners;
   is_small_japanese_game?: boolean;
+  illustration_box?: [number, number, number, number];
+  is_full_art?: boolean;
 }
 
 export interface CardHomographyResult {

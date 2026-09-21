@@ -170,49 +170,106 @@ export async function POST(request: Request) {
 
         const candidateRatios = getCandidateRatios(targetRatio);
 
-        for (const candidateRatio of candidateRatios) {
-          if (generatedBase64) break;
-
-          // 1. Try Imagen 3 via Direct REST :predict
-          try {
-            console.log(`[Outpaint API] Attempting REST Imagen predict for candidate ratio ${candidateRatio} (target: ${targetRatio})...`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              instances: [
-                { prompt: outpaintPrompt }
-              ],
-              parameters: {
-                sampleCount: 1,
-                aspectRatio: candidateRatio,
-                safetySetting: "block_only_high",
-                outputOptions: {
-                  mimeType: "image/jpeg"
+        // When mode === "outpaint", prioritize multimodal Gemini image models with the actual artwork!
+        if (mode !== "backdrop" && !isDisplay) {
+          const dedicatedImgModels = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview", "gemini-3.1-flash-lite-image"];
+          for (const imgModel of dedicatedImgModels) {
+            if (generatedBase64) break;
+            try {
+              console.log(`[Outpaint API] Attempting multimodal artwork expansion with ${imgModel} for target ratio ${targetRatio}...`);
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+              const payload = {
+                contents: [
+                  {
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType: "image/png",
+                          data: base64Data
+                        }
+                      },
+                      { text: `Seamless extended background environment: ${outpaintPrompt}` }
+                    ]
+                  }
+                ],
+                generationConfig: {
+                  responseModalities: ["TEXT", "IMAGE"]
                 }
-              }
-            };
+              };
 
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(8000)
-            });
+              const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(20000)
+              });
 
-            if (res.ok) {
-              const json = await res.json();
-              const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
-              if (bytes) {
-                console.log(`[Outpaint API] REST Imagen generated image successfully for ratio ${candidateRatio}`);
-                generatedBase64 = bytes;
-                break;
+              if (res.ok) {
+                const json = await res.json();
+                const parts = json?.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  const imgData = part.inlineData?.data || (part as any).inline_data?.data;
+                  if (imgData) {
+                    console.log(`[Outpaint API] ${imgModel} REST generated image successfully!`);
+                    generatedBase64 = imgData;
+                    break;
+                  }
+                }
+              } else {
+                const errText = await res.text();
+                console.warn(`[Outpaint API] ${imgModel} REST error ${res.status}:`, errText.slice(0, 160));
               }
-            } else {
-              const errText = await res.text();
-              console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}:`, errText.slice(0, 160));
+            } catch (gErr: any) {
+              console.warn(`[Outpaint API] ${imgModel} REST failed:`, gErr?.message || gErr);
+              lastImageError = gErr;
             }
-          } catch (restErr: any) {
-            console.warn(`[Outpaint API] REST Imagen failed:`, restErr?.message || restErr);
-            lastImageError = restErr;
+          }
+        }
+
+        // Secondary / Fallback: Try Imagen 3 via Direct REST :predict
+        if (!generatedBase64) {
+          for (const candidateRatio of candidateRatios) {
+            if (generatedBase64) break;
+            try {
+              console.log(`[Outpaint API] Attempting REST Imagen predict for candidate ratio ${candidateRatio} (target: ${targetRatio})...`);
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`;
+              const payload = {
+                instances: [
+                  { prompt: outpaintPrompt }
+                ],
+                parameters: {
+                  sampleCount: 1,
+                  aspectRatio: candidateRatio,
+                  safetySetting: "block_only_high",
+                  outputOptions: {
+                    mimeType: "image/jpeg"
+                  }
+                }
+              };
+
+              const res = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(8000)
+              });
+
+              if (res.ok) {
+                const json = await res.json();
+                const bytes = json?.predictions?.[0]?.bytesBase64Encoded;
+                if (bytes) {
+                  console.log(`[Outpaint API] REST Imagen generated image successfully for ratio ${candidateRatio}`);
+                  generatedBase64 = bytes;
+                  break;
+                }
+              } else {
+                const errText = await res.text();
+                console.warn(`[Outpaint API] REST Imagen HTTP ${res.status}:`, errText.slice(0, 160));
+              }
+            } catch (restErr: any) {
+              console.warn(`[Outpaint API] REST Imagen failed:`, restErr?.message || restErr);
+              lastImageError = restErr;
+            }
           }
         }
 

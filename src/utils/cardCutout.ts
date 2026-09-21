@@ -18,6 +18,7 @@ export interface CardCutoutResult {
   sceneryDescription: string;
   hasSampleWatermark: boolean;
   usedFallback: boolean;
+  isFullArt?: boolean;
   originalWidth: number;
   originalHeight: number;
 }
@@ -345,6 +346,7 @@ export async function extractCardCutout(
   let sceneryDescription = "";
   let hasSampleWatermark = false;
   let usedFallback = false;
+  let isFullArt = false;
 
   // 2. Gemini AI Vision Analysis (PRIMARY GROUND TRUTH AUTHORITY)
   if (apiKey && apiKey.trim()) {
@@ -385,7 +387,9 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
    - "footer_left_marker":
      - Bounding box [ymin, xmin, ymax, xmax] of the bottom-left set identifier strip (Set-Code, Rarity, Card-Number, e.g. "085/083 AR").
    - "illustration_box":
-     - Bounding box [ymin, xmin, ymax, xmax] of the inner illustration area inside the card frame (excluding card text, HP, power, and borders).
+     - Bounding box [ymin, xmin, ymax, xmax] of the inner illustration area inside the card frame (excluding card text, HP, power, and borders). For Full-Art / AR / SAR / SIR cards where the art covers the whole card, return the full artwork area (e.g. [30, 30, 970, 970]).
+   - "is_full_art":
+     - True if the card is Full Art, Art Rare, SAR, SIR, Character Rare where the illustration covers the entire card, False for standard half-art cards.
    - "box_2d":
      - General fallback bounding box [ymin, xmin, ymax, xmax] of the physical card itself.
 
@@ -449,6 +453,10 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
                     items: { type: "INTEGER" },
                     description: "Bounding box of the inner illustration area as [ymin, xmin, ymax, xmax] integers normalized 0 to 1000."
                   },
+                  is_full_art: {
+                    type: "BOOLEAN",
+                    description: "True if Full Art / AR / SAR / SIR card, False for standard half-art."
+                  },
                   cardName: { type: "STRING" },
                   cardNumber: { type: "STRING" },
                   setCode: { type: "STRING" },
@@ -492,6 +500,7 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
         setName = parsed.setName || "";
         sceneryDescription = parsed.sceneryDescription || "";
         hasSampleWatermark = !!parsed.hasSampleWatermark;
+        isFullArt = !!parsed.is_full_art;
 
         // 2a. Determine horizontal bounds (x1, x2)
         let aiX1: number | null = null;
@@ -815,10 +824,10 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
     .toBuffer();
 
   // 7. Extract Inner Illustration for Outpainting
-  let ix1 = illustrationCoords?.x1 ?? Math.round(cx1 + extractW * 0.08);
-  let iy1 = illustrationCoords?.y1 ?? Math.round(cy1 + extractH * 0.10);
-  let ix2 = illustrationCoords?.x2 ?? Math.round(cx2 - extractW * 0.08);
-  let iy2 = illustrationCoords?.y2 ?? Math.round(cy1 + extractH * 0.58);
+  let ix1 = illustrationCoords?.x1 ?? Math.round(cx1 + extractW * (isFullArt ? 0.03 : 0.08));
+  let iy1 = illustrationCoords?.y1 ?? Math.round(cy1 + extractH * (isFullArt ? 0.03 : 0.10));
+  let ix2 = illustrationCoords?.x2 ?? Math.round(cx2 - extractW * (isFullArt ? 0.03 : 0.08));
+  let iy2 = illustrationCoords?.y2 ?? (isFullArt ? Math.round(cy2 - extractH * 0.03) : Math.round(cy1 + extractH * 0.58));
 
   // Clamp illustration bounds strictly inside the extracted card
   ix1 = Math.max(cx1, Math.min(ix1, cx2 - 10));
@@ -831,8 +840,8 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
 
   const illustrationBuffer = await sharp(workingBuffer)
     .extract({ left: ix1, top: iy1, width: extractIllW, height: extractIllH })
-    .resize(512, 512, { fit: "inside" })
-    .jpeg({ quality: 85 })
+    .resize(768, 768, { fit: "inside" })
+    .jpeg({ quality: 90 })
     .toBuffer();
 
   return {
@@ -849,6 +858,7 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
     sceneryDescription,
     hasSampleWatermark,
     usedFallback,
+    isFullArt,
     originalWidth: width,
     originalHeight: height
   };
