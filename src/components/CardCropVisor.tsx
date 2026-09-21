@@ -4,7 +4,6 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   Move,
   Maximize2,
-  Minimize2,
   ChevronUp,
   ChevronDown,
   ChevronLeft,
@@ -144,6 +143,18 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     setBox(newBox);
     onChange(newBox);
   };
+
+  // Synchronisiere Zustand wenn sich das Bild ändert
+  useEffect(() => {
+    setNaturalSize(null);
+  }, [imageUrl]);
+
+  // Synchronisiere Stanzrahmen wenn initialBox von der übergeordneten Komponente übergeben wird
+  useEffect(() => {
+    if (initialBox && initialBox.width > 0 && initialBox.height > 0) {
+      setBox(initialBox);
+    }
+  }, [initialBox]);
 
   // ResizeObserver auf dem Wrapper
   useEffect(() => {

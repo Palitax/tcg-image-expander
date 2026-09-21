@@ -21,6 +21,12 @@ import {
   Pencil,
   X,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ArrowLeft,
+  ArrowRight,
+  ArrowLeftRight,
+  CheckCheck,
   Package,
   Activity,
   Crop,
@@ -47,6 +53,12 @@ import {
 } from "@/utils/db";
 import { supabase } from "@/utils/supabaseClient";
 import { CardCropVisor, type CropBox } from "@/components/CardCropVisor";
+import { 
+  analyzeAndPairCardImages, 
+  sanitizeCardFileName,
+  type StreamBatchCard, 
+  type StreamCardSide 
+} from "@/utils/streamBatchPairing";
 
 const isLocalMode = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -693,6 +705,7 @@ export default function Home() {
   const [isBoosterBatchProcessing, setIsBoosterBatchProcessing] = useState<boolean>(false);
   const [isCsvLoading, setIsCsvLoading] = useState<boolean>(false);
   const [csvStatusMsg, setCsvStatusMsg] = useState<string>("");
+  const [autoGroupDuplex, setAutoGroupDuplex] = useState<boolean>(true);
 
   const cancelBatchRef = useRef<boolean>(false);
 
@@ -869,8 +882,15 @@ export default function Home() {
       const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
 
-      setStreamBatchItems(prev => {
-        const currentCount = prev.length;
+      // 1. Intelligente Vorder- & Rückseiten-Analyse für Stream-Cards
+      setStreamCards(prev => {
+        const existingFiles: File[] = [];
+        prev.forEach(card => {
+          existingFiles.push(card.front.file);
+          if (card.back) existingFiles.push(card.back.file);
+        });
+
+        const currentCount = existingFiles.length;
         if (currentCount >= 100) {
           alert("Maximal 100 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
           return prev;
@@ -879,6 +899,39 @@ export default function Home() {
         let filesToAdd = imageFiles;
         if (currentCount + imageFiles.length > 100) {
           alert(`Es können nur noch ${100 - currentCount} Bilder hinzugefügt werden (Maximal 100 insgesamt).`);
+          filesToAdd = imageFiles.slice(0, 100 - currentCount);
+        }
+
+        const allFiles = [...existingFiles, ...filesToAdd];
+        const newCards = analyzeAndPairCardImages(allFiles, autoGroupDuplex);
+
+        if (prev.length === 0 && newCards.length > 0) {
+          const firstCard = newCards[0];
+          setActiveStreamCardIndex(0);
+          setActiveStreamSide("front");
+          setStreamFile(firstCard.front.file);
+          setStreamPreviewUrl(firstCard.front.previewUrl);
+          setStreamCropBox(firstCard.front.cropBox);
+          setStreamResultUrl(null);
+          setStreamCutoutUrl(null);
+          setStreamBgImageUrl(null);
+          setStreamErrorMessage(null);
+          setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
+          setStreamElapsedTime(0);
+          setStreamActiveStepMessage("");
+          setNewArtworkName(firstCard.cardName ? `${firstCard.cardName} - Vorderseite` : firstCard.front.file.name.replace(/\.[^/.]+$/, ""));
+        }
+
+        return newCards;
+      });
+
+      // 2. Synchronisation mit streamBatchItems für Abwärtskompatibilität
+      setStreamBatchItems(prev => {
+        const currentCount = prev.length;
+        if (currentCount >= 100) return prev;
+
+        let filesToAdd = imageFiles;
+        if (currentCount + imageFiles.length > 100) {
           filesToAdd = imageFiles.slice(0, 100 - currentCount);
         }
 
@@ -891,24 +944,10 @@ export default function Home() {
           isSaved: false
         }));
 
-        if (prev.length === 0) {
-          const selectedFile = filesToAdd[0];
-          setStreamFile(selectedFile);
-          setStreamPreviewUrl(URL.createObjectURL(selectedFile));
-          setStreamResultUrl(null);
-          setStreamCutoutUrl(null);
-          setStreamBgImageUrl(null);
-          setStreamErrorMessage(null);
-          setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
-          setStreamElapsedTime(0);
-          setStreamActiveStepMessage("");
-          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-        }
-
         return [...prev, ...newItems];
       });
     }
-  }, []);
+  }, [autoGroupDuplex]);
 
   const handleCsvImport = useCallback(async (csvFile: File, studioType: 'card' | 'display' | 'booster' | 'stream') => {
     setIsCsvLoading(true);
@@ -1050,6 +1089,9 @@ export default function Home() {
   const [streamElapsedTime, setStreamElapsedTime] = useState<number>(0);
   const [streamActiveStepMessage, setStreamActiveStepMessage] = useState<string>("");
   const [streamBatchItems, setStreamBatchItems] = useState<BatchItem[]>([]);
+  const [streamCards, setStreamCards] = useState<StreamBatchCard[]>([]);
+  const [activeStreamCardIndex, setActiveStreamCardIndex] = useState<number>(0);
+  const [activeStreamSide, setActiveStreamSide] = useState<"front" | "back">("front");
   const [isStreamBatchProcessing, setIsStreamBatchProcessing] = useState<boolean>(false);
   const [streamCustomBgFile, setStreamCustomBgFile] = useState<File | null>(null);
   const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
@@ -1061,6 +1103,7 @@ export default function Home() {
   const [streamMattingEngine, setStreamMattingEngine] = useState<"gemini_homography" | "ai_matting" | "tcg_cutout">("gemini_homography");
   const [lastExtractedEngine, setLastExtractedEngine] = useState<"gemini_homography" | "ai_matting" | "tcg_cutout">("gemini_homography");
   const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
+  const streamVisorRef = useRef<HTMLDivElement | null>(null);
 
   // Case Maker states
   const [selectedArtworkId, setSelectedArtworkId] = useState<string | null>(null);
@@ -3439,7 +3482,176 @@ export default function Home() {
     }
   };
 
-  const handleProcessStreamImage = async (customFile?: File | unknown) => {
+  // =========================================================================
+  // Stream Cards Navigation & Stanzvisier Steuerung
+  // =========================================================================
+
+  // Wählt eine Karte und Seite für das Stanzvisier aus und synchronisiert die Vorschau
+  const selectStreamCard = (cardIdx: number, side: "front" | "back" = "front") => {
+    if (cardIdx < 0 || cardIdx >= streamCards.length) return;
+    const card = streamCards[cardIdx];
+    if (!card) return;
+
+    setActiveStreamCardIndex(cardIdx);
+    setActiveStreamSide(side);
+
+    const sideData = side === "back" && card.back ? card.back : card.front;
+    setStreamFile(sideData.file);
+    setStreamPreviewUrl(sideData.previewUrl);
+    setStreamCropBox(sideData.cropBox || null);
+    setStreamResultUrl(sideData.resultImageUrl || null);
+    setStreamCutoutUrl(sideData.cutoutImageUrl || null);
+    setStreamBgImageUrl(sideData.backgroundImageUrl || null);
+    setStreamErrorMessage(sideData.error || null);
+
+    const sideLabel = side === "back" ? "Rückseite" : "Vorderseite";
+    setNewArtworkName(`${card.cardName} - ${sideLabel}`);
+
+    if (sideData.metadata) {
+      setStreamMetadata({
+        cardName: sideData.metadata.cardName || "",
+        cardNumber: sideData.metadata.cardNumber || "",
+        setCode: sideData.metadata.setCode || "",
+        setName: sideData.metadata.setName || "",
+        slogan: sideData.metadata.slogan || "MANACARDS – Unpack the magic"
+      });
+    }
+  };
+
+  // Speichert die Stanzvisier-Position exakt für die aktuell ausgewählte Karte & Seite
+  const handleStreamCropBoxChange = (newBox: CropBox) => {
+    setStreamCropBox(newBox);
+    setStreamCards(prev => prev.map((card, idx) => {
+      if (idx !== activeStreamCardIndex) return card;
+
+      if (activeStreamSide === "front") {
+        const updatedFront: StreamCardSide = {
+          ...card.front,
+          cropBox: newBox,
+          isVisorCustomized: true
+        };
+        // Bei Duplex: Falls Rückseite existiert und noch kein individuelles Visier hat, synchronisieren
+        let updatedBack = card.back;
+        if (card.back && !card.back.isVisorCustomized) {
+          updatedBack = {
+            ...card.back,
+            cropBox: newBox
+          };
+        }
+        return {
+          ...card,
+          front: updatedFront,
+          back: updatedBack
+        };
+      } else {
+        return {
+          ...card,
+          back: card.back ? {
+            ...card.back,
+            cropBox: newBox,
+            isVisorCustomized: true
+          } : null
+        };
+      }
+    }));
+  };
+
+  // Überträgt die aktuelle Visierposition auf alle Karten im Stapel
+  const applyCropBoxToAllCards = () => {
+    if (!streamCropBox) return;
+    setStreamCards(prev => prev.map(card => ({
+      ...card,
+      front: {
+        ...card.front,
+        cropBox: { ...streamCropBox },
+        isVisorCustomized: true
+      },
+      back: card.back ? {
+        ...card.back,
+        cropBox: { ...streamCropBox },
+        isVisorCustomized: true
+      } : null
+    })));
+  };
+
+  // Tauscht Vorder- und Rückseite einer spezifischen Karte
+  const handleSwapCardSides = (cardIdx: number) => {
+    setStreamCards(prev => prev.map((card, idx) => {
+      if (idx !== cardIdx || !card.back) return card;
+      return {
+        ...card,
+        front: { ...card.back },
+        back: { ...card.front }
+      };
+    }));
+
+    if (activeStreamCardIndex === cardIdx) {
+      const card = streamCards[cardIdx];
+      if (card && card.back) {
+        const sideToLoad = activeStreamSide === "front" ? card.back : card.front;
+        setStreamFile(sideToLoad.file);
+        setStreamPreviewUrl(sideToLoad.previewUrl);
+        setStreamCropBox(sideToLoad.cropBox || null);
+      }
+    }
+  };
+
+  // Tauscht Vorder- und Rückseite ALLER Karten im Stapel
+  const handleSwapAllCardSides = () => {
+    setStreamCards(prev => prev.map(card => {
+      if (!card.back) return card;
+      return {
+        ...card,
+        front: { ...card.back },
+        back: { ...card.front }
+      };
+    }));
+
+    const currentCard = streamCards[activeStreamCardIndex];
+    if (currentCard && currentCard.back) {
+      const newActive = activeStreamSide === "front" ? currentCard.back : currentCard.front;
+      setStreamFile(newActive.file);
+      setStreamPreviewUrl(newActive.previewUrl);
+      setStreamCropBox(newActive.cropBox || null);
+    }
+  };
+
+  // Schaltet die automatische Duplex-Gruppierung um und analysiert die hochgeladenen Dateien neu
+  const toggleAutoGroupDuplex = () => {
+    const nextVal = !autoGroupDuplex;
+    setAutoGroupDuplex(nextVal);
+    setStreamCards(prev => {
+      const allFiles: File[] = [];
+      prev.forEach(card => {
+        allFiles.push(card.front.file);
+        if (card.back) allFiles.push(card.back.file);
+      });
+      if (allFiles.length === 0) return prev;
+      const reanalyzed = analyzeAndPairCardImages(allFiles, nextVal);
+      if (activeStreamCardIndex >= reanalyzed.length) {
+        setActiveStreamCardIndex(0);
+      }
+      return reanalyzed;
+    });
+  };
+
+  // Ändert den Namen einer Karte
+  const handleCardNameChange = (cardIdx: number, newName: string) => {
+    setStreamCards(prev => prev.map((card, idx) => {
+      if (idx !== cardIdx) return card;
+      return { ...card, cardName: newName };
+    }));
+  };
+
+  // =========================================================================
+  // Stream Bildverarbeitung (Single & Batch)
+  // =========================================================================
+
+  const handleProcessStreamImage = async (
+    customFile?: File | unknown,
+    customCropBox?: CropBox | null,
+    existingBgImage?: string
+  ) => {
     const rawFile = (customFile instanceof File) ? customFile : streamFile;
     if (!rawFile) return;
     console.log(`[Stream Studio] Starting single image processing (${streamMode}): "${rawFile.name}" (${(rawFile.size / 1024).toFixed(1)} KB)`);
@@ -3461,6 +3673,9 @@ export default function Home() {
       if (streamMode === "classic" && streamCustomBgFile) {
         formData.append("backgroundImage", streamCustomBgFile);
       }
+      if (existingBgImage) {
+        formData.append("existingBgImage", existingBgImage);
+      }
       formData.append("cardScale", streamCardScale.toString());
       formData.append("shadowStyle", streamShadowStyle);
       formData.append("showOverlay", streamShowOverlay ? "true" : "false");
@@ -3468,12 +3683,13 @@ export default function Home() {
       formData.append("bottomTrim", streamBottomTrim.toString());
       formData.append("mattingEngine", streamMattingEngine);
 
-      if (streamCropBox) {
-        formData.append("cropBox", JSON.stringify(streamCropBox));
-        formData.append("cropX", streamCropBox.x.toString());
-        formData.append("cropY", streamCropBox.y.toString());
-        formData.append("cropW", streamCropBox.width.toString());
-        formData.append("cropH", streamCropBox.height.toString());
+      const cropToUse = customCropBox !== undefined ? customCropBox : streamCropBox;
+      if (cropToUse) {
+        formData.append("cropBox", JSON.stringify(cropToUse));
+        formData.append("cropX", cropToUse.x.toString());
+        formData.append("cropY", cropToUse.y.toString());
+        formData.append("cropW", cropToUse.width.toString());
+        formData.append("cropH", cropToUse.height.toString());
       }
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
@@ -3520,6 +3736,39 @@ export default function Home() {
         updateStreamStepStatus("COMPOSE", "success");
         setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
 
+        if (streamCards.length > 0) {
+          setStreamCards(prev => prev.map((c, idx) => {
+            if (idx !== activeStreamCardIndex) return c;
+            const updatedFront: StreamCardSide = activeStreamSide === "front" ? {
+              ...c.front,
+              status: "completed",
+              resultImageUrl: data.resultImageUrl,
+              cutoutImageUrl: data.cutoutImageUrl,
+              backgroundImageUrl: data.backgroundImageUrl || null,
+              metadata: data.metadata,
+              error: undefined
+            } : c.front;
+            const updatedBack: StreamCardSide | null = (activeStreamSide === "back" && c.back) ? {
+              ...c.back,
+              status: "completed",
+              resultImageUrl: data.resultImageUrl,
+              cutoutImageUrl: data.cutoutImageUrl,
+              backgroundImageUrl: data.backgroundImageUrl || null,
+              metadata: data.metadata,
+              error: undefined
+            } : (c.back ?? null);
+            const cardName = (data.metadata?.cardName && data.metadata.cardName !== rawFile.name.replace(/\.[^/.]+$/, ""))
+              ? data.metadata.cardName
+              : c.cardName;
+            return {
+              ...c,
+              cardName,
+              front: updatedFront,
+              back: updatedBack
+            };
+          }));
+        }
+
         return {
           success: true,
           resultImageUrl: data.resultImageUrl,
@@ -3557,6 +3806,35 @@ export default function Home() {
         updateStreamStepStatus("COMPOSE", "success");
         setStreamActiveStepMessage("Erfolgreich abgeschlossen!");
 
+        if (streamCards.length > 0) {
+          setStreamCards(prev => prev.map((c, idx) => {
+            if (idx !== activeStreamCardIndex) return c;
+            const updatedFront: StreamCardSide = activeStreamSide === "front" ? {
+              ...c.front,
+              status: "completed",
+              resultImageUrl: data.resultImageUrl,
+              cutoutImageUrl: data.cutoutImageUrl,
+              error: undefined
+            } : c.front;
+            const updatedBack: StreamCardSide | null = (activeStreamSide === "back" && c.back) ? {
+              ...c.back,
+              status: "completed",
+              resultImageUrl: data.resultImageUrl,
+              cutoutImageUrl: data.cutoutImageUrl,
+              error: undefined
+            } : (c.back ?? null);
+            const cardName = (data.cardName && data.cardName !== rawFile.name.replace(/\.[^/.]+$/, ""))
+              ? data.cardName
+              : c.cardName;
+            return {
+              ...c,
+              cardName,
+              front: updatedFront,
+              back: updatedBack
+            };
+          }));
+        }
+
         return {
           success: true,
           resultImageUrl: data.resultImageUrl,
@@ -3576,6 +3854,133 @@ export default function Home() {
   };
 
   const startStreamBatchProcessing = async () => {
+    // Falls strukturierte Stream-Cards vorhanden sind:
+    if (streamCards.length > 0) {
+      if (isStreamBatchProcessing) return;
+      console.log(`[Stream Batch] Starte kartenindividuelle Stapelverarbeitung für ${streamCards.length} Karten.`);
+      setIsStreamBatchProcessing(true);
+      cancelBatchRef.current = false;
+
+      // Status aller Karten auf 'pending' zurücksetzen
+      setStreamCards(prev => prev.map(c => ({
+        ...c,
+        front: { ...c.front, status: "pending", error: undefined },
+        back: c.back ? { ...c.back, status: "pending", error: undefined } : null
+      })));
+
+      const cards = [...streamCards];
+      for (let i = 0; i < cards.length; i++) {
+        if (cancelBatchRef.current) {
+          console.log(`[Stream Batch] Stapelverarbeitung durch Nutzer bei Karte ${i + 1}/${cards.length} abgebrochen.`);
+          break;
+        }
+
+        const card = cards[i];
+        setActiveStreamCardIndex(i);
+
+        // --- SCHRITT 1: VORDERSEITE MIT SPEZIFISCHEM STANZVISIER VERARBEITEN ---
+        setActiveStreamSide("front");
+        setStreamFile(card.front.file);
+        setStreamPreviewUrl(card.front.previewUrl);
+        setStreamCropBox(card.front.cropBox);
+        setNewArtworkName(`${card.cardName} - Vorderseite`);
+
+        setStreamCards(prev => prev.map((c, idx) => idx === i ? {
+          ...c,
+          front: { ...c.front, status: "processing" }
+        } : c));
+
+        let frontBgUrl: string | undefined;
+        try {
+          const frontResult = await handleProcessStreamImage(
+            card.front.file,
+            card.front.cropBox
+          );
+
+          if (frontResult && frontResult.success) {
+            frontBgUrl = frontResult.backgroundImageUrl || undefined;
+            const updatedCardName = frontResult.detectedName && frontResult.detectedName !== card.front.file.name.replace(/\.[^/.]+$/, "")
+              ? frontResult.detectedName
+              : card.cardName;
+
+            setStreamCards(prev => prev.map((c, idx) => idx === i ? {
+              ...c,
+              cardName: updatedCardName,
+              front: {
+                ...c.front,
+                status: "completed",
+                resultImageUrl: frontResult.resultImageUrl,
+                cutoutImageUrl: frontResult.cutoutImageUrl,
+                backgroundImageUrl: frontBgUrl,
+                metadata: frontResult.metadata
+              }
+            } : c));
+          } else {
+            throw new Error("Verarbeitung der Vorderseite unvollständig.");
+          }
+        } catch (err: any) {
+          if (cancelBatchRef.current) break;
+          const errStr = getErrorMessage(err);
+          setStreamCards(prev => prev.map((c, idx) => idx === i ? {
+            ...c,
+            front: { ...c.front, status: "failed", error: errStr }
+          } : c));
+        }
+
+        if (cancelBatchRef.current) break;
+
+        // --- SCHRITT 2: RÜCKSEITE VERARBEITEN (falls vorhanden) ---
+        if (card.back) {
+          setActiveStreamSide("back");
+          setStreamFile(card.back.file);
+          setStreamPreviewUrl(card.back.previewUrl);
+          const backCrop = card.back.cropBox || card.front.cropBox;
+          setStreamCropBox(backCrop);
+          setNewArtworkName(`${card.cardName} - Rückseite`);
+
+          setStreamCards(prev => prev.map((c, idx) => idx === i ? {
+            ...c,
+            back: c.back ? { ...c.back, status: "processing" } : null
+          } : c));
+
+          try {
+            const backResult = await handleProcessStreamImage(
+              card.back.file,
+              backCrop,
+              frontBgUrl
+            );
+
+            if (backResult && backResult.success) {
+              setStreamCards(prev => prev.map((c, idx) => idx === i ? {
+                ...c,
+                back: c.back ? {
+                  ...c.back,
+                  status: "completed",
+                  resultImageUrl: backResult.resultImageUrl,
+                  cutoutImageUrl: backResult.cutoutImageUrl,
+                  backgroundImageUrl: backResult.backgroundImageUrl || frontBgUrl
+                } : null
+              } : c));
+            } else {
+              throw new Error("Verarbeitung der Rückseite unvollständig.");
+            }
+          } catch (err: any) {
+            if (cancelBatchRef.current) break;
+            const errStr = getErrorMessage(err);
+            setStreamCards(prev => prev.map((c, idx) => idx === i ? {
+              ...c,
+              back: c.back ? { ...c.back, status: "failed", error: errStr } : null
+            } : c));
+          }
+        }
+      }
+
+      console.log(`[Stream Batch] Stapelverarbeitung für alle Karten beendet.`);
+      setIsStreamBatchProcessing(false);
+      return;
+    }
+
+    // Fallback falls streamCards leer ist:
     if (streamBatchItems.length === 0 || isStreamBatchProcessing) return;
     console.log(`[Stream Batch] Starting batch processing for ${streamBatchItems.length} items.`);
     setIsStreamBatchProcessing(true);
@@ -3658,6 +4063,42 @@ export default function Home() {
   };
 
   const downloadAllStreamBatchItems = async () => {
+    // 1. Wenn Stream-Cards vorhanden sind:
+    if (streamCards.length > 0) {
+      const filesToDownload: { url: string; filename: string }[] = [];
+
+      streamCards.forEach((card) => {
+        const safeBase = sanitizeCardFileName(card.cardName, `Karte_${card.cardNumberIndex}`);
+        const hasBoth = Boolean(card.front.resultImageUrl && card.back?.resultImageUrl);
+
+        if (card.front.resultImageUrl) {
+          const suffix = (hasBoth || card.back) ? "_Vorderseite" : "";
+          filesToDownload.push({
+            url: card.front.resultImageUrl,
+            filename: `${safeBase}${suffix}.png`
+          });
+        }
+
+        if (card.back && card.back.resultImageUrl) {
+          filesToDownload.push({
+            url: card.back.resultImageUrl,
+            filename: `${safeBase}_Rueckseite.png`
+          });
+        }
+      });
+
+      if (filesToDownload.length === 0) return;
+
+      if (filesToDownload.length === 1) {
+        triggerDownload(filesToDownload[0].url, filesToDownload[0].filename);
+        return;
+      }
+
+      await triggerZipDownload(filesToDownload, `Whatnot_Stream_Export_${Date.now()}.zip`);
+      return;
+    }
+
+    // 2. Fallback für streamBatchItems:
     const completedItems = streamBatchItems.filter(it => it.status === "completed" && it.resultImageUrl);
     if (completedItems.length === 0) return;
 
@@ -3678,6 +4119,26 @@ export default function Home() {
     });
 
     await triggerZipDownload(filesToDownload, `Whatnot_Stream_Export_${Date.now()}.zip`);
+  };
+
+  const triggerStreamCardDownload = (card: StreamBatchCard) => {
+    const safeBase = sanitizeCardFileName(card.cardName, `Karte_${card.cardNumberIndex}`);
+    const files: { url: string; filename: string }[] = [];
+    const hasBoth = Boolean(card.front.resultImageUrl && card.back?.resultImageUrl);
+
+    if (card.front.resultImageUrl) {
+      const suffix = (hasBoth || card.back) ? "_Vorderseite" : "";
+      files.push({ url: card.front.resultImageUrl, filename: `${safeBase}${suffix}.png` });
+    }
+    if (card.back?.resultImageUrl) {
+      files.push({ url: card.back.resultImageUrl, filename: `${safeBase}_Rueckseite.png` });
+    }
+
+    if (files.length === 1) {
+      triggerDownload(files[0].url, files[0].filename);
+    } else if (files.length > 1) {
+      triggerZipDownload(files, `${safeBase}_Export.zip`);
+    }
   };
 
   const triggerStreamSingleDownload = (url: string, originalFilename: string) => {
@@ -3863,6 +4324,11 @@ export default function Home() {
   };
 
   const handleSaveAllBatchItems = async (studioType: 'card' | 'display' | 'booster' | 'stream') => {
+    if (studioType === "stream" && streamCards.length > 0) {
+      await handleSaveAllStreamCards();
+      return;
+    }
+
     const items = studioType === "card" ? cardBatchItems :
                   studioType === "display" ? displayBatchItems :
                   studioType === "booster" ? boosterBatchItems :
@@ -3873,6 +4339,141 @@ export default function Home() {
 
     for (const item of completedItems) {
       await handleSaveBatchItem(item, studioType);
+    }
+  };
+
+  const handleSaveStreamCardSide = async (
+    sideData: StreamCardSide,
+    cardName: string,
+    sideType: "front" | "back"
+  ) => {
+    if (!sideData.resultImageUrl) return;
+
+    const artId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
+    const timestamp = Date.now();
+    const sideSuffix = sideType === "back" ? " (Rückseite)" : " (Vorderseite)";
+    const artworkTitle = `${cardName.trim()}${sideSuffix}`;
+
+    let imageUrl = sideData.resultImageUrl;
+    let originalCardUrl = sideData.previewUrl;
+    let backgroundUrl = sideData.backgroundImageUrl || undefined;
+    let cardOnlyUrl = sideData.cutoutImageUrl || undefined;
+
+    setIsSaving(true);
+    if (!isLocalMode && currentSpace) {
+      setIsLoginLoading(true);
+      try {
+        if (imageUrl.startsWith("data:image/")) {
+          imageUrl = await uploadBase64ToSupabase(imageUrl, `spaces/${currentSpace.id}/${artId}/final.png`);
+        }
+        if (originalCardUrl && originalCardUrl.startsWith("blob:")) {
+          const response = await fetch(originalCardUrl);
+          const blob = await response.blob();
+          const filename = "stream_scan.png";
+          const path = `spaces/${currentSpace.id}/${artId}/${filename}`;
+          const { error: uploadError } = await supabase.storage
+            .from("tcg-artworks")
+            .upload(path, blob, { contentType: blob.type, upsert: true });
+          if (!uploadError) {
+            const { data: { publicUrl } } = supabase.storage
+              .from("tcg-artworks")
+              .getPublicUrl(path);
+            originalCardUrl = publicUrl;
+          }
+        }
+        if (backgroundUrl && backgroundUrl.startsWith("data:image/")) {
+          backgroundUrl = await uploadBase64ToSupabase(backgroundUrl, `spaces/${currentSpace.id}/${artId}/bg.png`);
+        }
+        if (cardOnlyUrl && cardOnlyUrl.startsWith("data:image/")) {
+          const filename = "stream_cutout.png";
+          cardOnlyUrl = await uploadBase64ToSupabase(cardOnlyUrl, `spaces/${currentSpace.id}/${artId}/${filename}`);
+        }
+
+        if (originalCardUrl && cardOnlyUrl) {
+          originalCardUrl = `${originalCardUrl}?card_only=${encodeURIComponent(cardOnlyUrl)}&is_stream=true`;
+        }
+
+        const { error } = await supabase
+          .from("artworks")
+          .insert({
+            id: artId,
+            space_id: currentSpace.id,
+            name: artworkTitle,
+            image_url: imageUrl,
+            original_card_url: originalCardUrl || null,
+            background_url: backgroundUrl || null,
+            aspect_ratio: "1:1",
+            timestamp: timestamp
+          });
+
+        if (error) throw error;
+      } catch (err) {
+        const message = getErrorMessage(err);
+        alert("Fehler beim Speichern in der Datenbank: " + message);
+        setIsLoginLoading(false);
+        setIsSaving(false);
+        return;
+      } finally {
+        setIsLoginLoading(false);
+      }
+    } else {
+      const localArtwork: SavedArtwork = {
+        id: artId,
+        name: artworkTitle,
+        imageUrl: imageUrl,
+        originalCardUrl: originalCardUrl,
+        backgroundUrl: backgroundUrl,
+        cardOnlyUrl: cardOnlyUrl,
+        aspectRatio: "1:1",
+        timestamp: timestamp,
+        isCase: false,
+        isDisplay: false,
+        isBooster: false,
+        isStream: true
+      };
+
+      try {
+        await saveArtwork(localArtwork);
+      } catch (err) {
+        const message = getErrorMessage(err);
+        alert("Fehler beim lokalen Speichern: " + message);
+        setIsSaving(false);
+        return;
+      }
+    }
+
+    setIsSaving(false);
+
+    setStreamCards(prev => prev.map(c => {
+      if (sideType === "front" && c.front.id === sideData.id) {
+        return { ...c, front: { ...c.front, isSaved: true } };
+      }
+      if (sideType === "back" && c.back && c.back.id === sideData.id) {
+        return { ...c, back: { ...c.back, isSaved: true } };
+      }
+      return c;
+    }));
+
+    try {
+      const artworks = await getSavedArtworks();
+      setSavedArtworks(artworks);
+    } catch (e) {
+      console.error("Failed to load artworks:", e);
+    }
+  };
+
+  const handleSaveStreamCard = async (card: StreamBatchCard) => {
+    if (card.front.resultImageUrl && !card.front.isSaved) {
+      await handleSaveStreamCardSide(card.front, card.cardName, "front");
+    }
+    if (card.back && card.back.resultImageUrl && !card.back.isSaved) {
+      await handleSaveStreamCardSide(card.back, card.cardName, "back");
+    }
+  };
+
+  const handleSaveAllStreamCards = async () => {
+    for (const card of streamCards) {
+      await handleSaveStreamCard(card);
     }
   };
 
@@ -3955,6 +4556,10 @@ export default function Home() {
         setBoosterErrorMessage(null);
       } else {
         setStreamBatchItems([]);
+        setStreamCards([]);
+        setActiveStreamCardIndex(0);
+        setActiveStreamSide("front");
+        setStreamCropBox(null);
         setStreamFile(null);
         setStreamPreviewUrl(null);
         setStreamResultUrl(null);
@@ -4304,6 +4909,421 @@ export default function Home() {
     );
   };
 
+  const renderStreamCardsBatchUI = () => {
+    if (streamCards.length === 0) return null;
+
+    const completedCount = streamCards.filter(c => 
+      c.front.status === "completed" && (!c.back || c.back.status === "completed")
+    ).length;
+    const failedCount = streamCards.filter(c => 
+      c.front.status === "failed" || (c.back && c.back.status === "failed")
+    ).length;
+    const processingCount = streamCards.filter(c => 
+      c.front.status === "processing" || (c.back && c.back.status === "processing")
+    ).length;
+    const pendingCount = streamCards.filter(c => 
+      (c.front.status === "pending" || !c.front.resultImageUrl) || 
+      (c.back && (c.back.status === "pending" || !c.back.resultImageUrl))
+    ).length;
+
+    const allCompletedSidesCount = streamCards.reduce((acc, c) => {
+      let cnt = 0;
+      if (c.front.status === "completed" && c.front.resultImageUrl) cnt++;
+      if (c.back?.status === "completed" && c.back.resultImageUrl) cnt++;
+      return acc + cnt;
+    }, 0);
+
+    const hasAnySaved = streamCards.every(c => 
+      c.front.isSaved && (!c.back || c.back.isSaved)
+    );
+
+    const resetStreamCardsBatch = () => {
+      setStreamCards([]);
+      setStreamBatchItems([]);
+      setActiveStreamCardIndex(0);
+      setActiveStreamSide("front");
+      setStreamCropBox(null);
+      setStreamFile(null);
+      setStreamPreviewUrl(null);
+      setStreamResultUrl(null);
+      setStreamCutoutUrl(null);
+      setStreamErrorMessage(null);
+    };
+
+    return (
+      <div 
+        {...getStreamBatchDropProps()}
+        className={`rounded-2xl border backdrop-blur-xl p-6 shadow-2xl mt-4 w-full animate-in fade-in duration-300 relative transition-all duration-300 ${
+          isStreamBatchDragActive 
+            ? "border-purple-500 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.2)]" 
+            : "border-zinc-800 bg-zinc-900/40"
+        }`}
+      >
+        <input {...getStreamBatchInputProps()} />
+        {isStreamBatchDragActive && (
+          <div className="absolute inset-0 bg-zinc-950/80 rounded-2xl flex flex-col items-center justify-center z-10 border border-purple-500/50 backdrop-blur-[2px]">
+            <Upload className="w-8 h-8 text-purple-400 animate-bounce mb-2" />
+            <p className="text-sm font-semibold text-purple-300">Weitere Scans hierher ziehen, um sie hinzuzufügen...</p>
+          </div>
+        )}
+
+        {/* Header Bar */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 border-b border-zinc-800 pb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Package className="w-5 h-5 text-purple-400" />
+              Stapelverarbeitung ({streamCards.length} {streamCards.length === 1 ? "Karte" : "Karten"}
+              {streamCards.some(c => c.back) ? " • Vorder- & Rückseiten" : ""})
+            </h2>
+            <p className="text-xs text-zinc-500 mt-1">
+              {completedCount} vollständig, {processingCount > 0 ? `${processingCount} in Arbeit, ` : ""}{failedCount > 0 ? `${failedCount} fehlgeschlagen, ` : ""}{pendingCount} wartend.
+              Platziere das Stanzvisier für jede Karte, bevor du den Stapel startest.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Start Batch button */}
+            {!isStreamBatchProcessing && pendingCount > 0 && (
+              <button
+                type="button"
+                onClick={startStreamBatchProcessing}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(147,51,234,0.3)] cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4" />
+                Stapelverarbeitung starten
+              </button>
+            )}
+
+            {/* Cancel Processing button */}
+            {isStreamBatchProcessing && (
+              <button
+                type="button"
+                onClick={() => {
+                  cancelBatchRef.current = true;
+                  handleCancelStreamProcessing();
+                }}
+                className="px-4 py-2 rounded-xl border border-red-500/30 hover:border-red-500/50 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                Verarbeitung abbrechen
+              </button>
+            )}
+
+            {/* Duplex Toggle Button */}
+            {!isStreamBatchProcessing && (
+              <button
+                type="button"
+                onClick={toggleAutoGroupDuplex}
+                className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  autoGroupDuplex
+                    ? "border-purple-500/40 bg-purple-950/30 text-purple-300"
+                    : "border-zinc-800 bg-zinc-950/40 text-zinc-400 hover:text-zinc-200"
+                }`}
+                title="Schaltet zwischen Duplex (Vorder- und Rückseite zu einer Karte gebündelt) und Einzelseiten um"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5 text-purple-400" />
+                Duplex-Modus ({autoGroupDuplex ? "Ein" : "Aus"})
+              </button>
+            )}
+
+            {/* Swap all sides button */}
+            {!isStreamBatchProcessing && streamCards.some(c => c.back) && (
+              <button
+                type="button"
+                onClick={handleSwapAllCardSides}
+                className="px-3 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 text-zinc-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Tauscht Vorder- und Rückseite bei allen Karten im Stapel"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Alle VS ⇄ RS tauschen
+              </button>
+            )}
+
+            {/* Download all button */}
+            {!isStreamBatchProcessing && allCompletedSidesCount > 0 && (
+              <button
+                type="button"
+                onClick={downloadAllStreamBatchItems}
+                className="px-4 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                title="Alle erstellten Vorder- und Rückseiten als ZIP-Archiv herunterladen"
+              >
+                <Download className="w-4 h-4 text-purple-400" />
+                Alle herunterladen (ZIP)
+              </button>
+            )}
+
+            {/* Save all button */}
+            {!isStreamBatchProcessing && allCompletedSidesCount > 0 && !hasAnySaved && (
+              <button
+                type="button"
+                onClick={handleSaveAllStreamCards}
+                className="px-4 py-2 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-955/10 text-purple-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                title="Alle Karten in der Bibliothek speichern"
+              >
+                <Bookmark className="w-4 h-4 text-purple-400" />
+                Alle in Bibliothek speichern
+              </button>
+            )}
+
+            {/* Reset button */}
+            {!isStreamBatchProcessing && (
+              <button
+                type="button"
+                onClick={resetStreamCardsBatch}
+                className="px-4 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/20 text-zinc-400 hover:text-zinc-200 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Liste zurücksetzen
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Cards Grid */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 max-h-[560px] overflow-y-auto pr-1">
+          {streamCards.map((card, idx) => {
+            const isCardActive = idx === activeStreamCardIndex;
+            const isProcessingCard = card.front.status === "processing" || (card.back && card.back.status === "processing");
+            const isCompletedCard = card.front.status === "completed" && (!card.back || card.back.status === "completed");
+            const isFailedCard = card.front.status === "failed" || (card.back && card.back.status === "failed");
+            const hasCustomVisor = card.front.isVisorCustomized || Boolean(card.back?.isVisorCustomized);
+
+            return (
+              <div
+                key={card.id}
+                className={`p-4 rounded-xl border flex flex-col gap-3 transition-all ${
+                  isCardActive
+                    ? "border-purple-500/80 bg-purple-950/20 shadow-[0_0_20px_rgba(168,85,247,0.15)] ring-1 ring-purple-500/50"
+                    : isProcessingCard
+                    ? "border-purple-500/40 bg-purple-500/5"
+                    : isCompletedCard
+                    ? "border-emerald-500/20 bg-emerald-500/5"
+                    : isFailedCard
+                    ? "border-red-500/20 bg-red-500/5"
+                    : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700"
+                }`}
+              >
+                {/* Top Row: Index, Name, Status & Visor Badge */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className="text-xs text-purple-400 font-mono font-bold shrink-0">#{card.cardNumberIndex}</span>
+                    <input
+                      type="text"
+                      value={card.cardName}
+                      onChange={(e) => handleCardNameChange(idx, e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-zinc-200 hover:text-white focus:text-white border-b border-transparent hover:border-zinc-700 focus:border-purple-500 focus:outline-none transition-colors truncate max-w-[240px]"
+                      placeholder="Kartenname..."
+                      title="Kartenname bearbeiten"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* Visor placement badge */}
+                    {hasCustomVisor ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1" title="Stanzvisier wurde für diese Karte individuell ausgerichtet">
+                        <Check className="w-3 h-3" />
+                        Visier arretiert
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-800/80 border border-zinc-700/60 text-zinc-400" title="Verwendet das Standard-Stanzvisier">
+                        Auto-Visier
+                      </span>
+                    )}
+
+                    {/* Status Badge */}
+                    {isProcessingCard ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-955/50 border border-purple-500/30 text-purple-300 animate-pulse flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        Verarbeite...
+                      </span>
+                    ) : isCompletedCard ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-955/50 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        Abgeschlossen
+                      </span>
+                    ) : isFailedCard ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-955/50 border border-red-500/30 text-red-400 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Fehler
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-900 border border-zinc-800 text-zinc-400">
+                        Wartend
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Middle Row: Card Sides (Vorderseite & Rückseite) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* FRONT SIDE */}
+                  <div 
+                    onClick={() => {
+                      selectStreamCard(idx, "front");
+                      streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                    className={`p-2.5 rounded-xl border flex items-center gap-3 transition-all cursor-pointer ${
+                      isCardActive && activeStreamSide === "front"
+                        ? "border-purple-500 bg-purple-500/10"
+                        : "border-zinc-800/80 bg-zinc-900/60 hover:border-zinc-700"
+                    }`}
+                  >
+                    <div className="w-12 h-16 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={card.front.resultImageUrl || card.front.previewUrl}
+                        alt="Vorderseite"
+                        className="w-full h-full object-cover"
+                      />
+                      {card.front.status === "processing" && (
+                        <div className="absolute inset-0 bg-purple-955/50 flex items-center justify-center backdrop-blur-[1px]">
+                          <RefreshCw className="w-4 h-4 text-purple-300 animate-spin" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-white flex items-center gap-1">
+                          🎴 Vorderseite
+                        </span>
+                        {card.front.isVisorCustomized && (
+                          <span className="text-[9px] text-emerald-400 font-medium">Visier ✓</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-zinc-400 truncate mt-0.5" title={card.front.file.name}>
+                        {card.front.file.name}
+                      </p>
+                      <p className="text-[9px] text-zinc-500 mt-0.5">
+                        {(card.front.file.size / 1024).toFixed(0)} KB
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* BACK SIDE (if exists) */}
+                  {card.back ? (
+                    <div 
+                      onClick={() => {
+                        selectStreamCard(idx, "back");
+                        streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
+                      className={`p-2.5 rounded-xl border flex items-center gap-3 transition-all cursor-pointer ${
+                        isCardActive && activeStreamSide === "back"
+                          ? "border-purple-500 bg-purple-500/10"
+                          : "border-zinc-800/80 bg-zinc-900/60 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="w-12 h-16 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={card.back.resultImageUrl || card.back.previewUrl}
+                          alt="Rückseite"
+                          className="w-full h-full object-cover"
+                        />
+                        {card.back.status === "processing" && (
+                          <div className="absolute inset-0 bg-purple-955/50 flex items-center justify-center backdrop-blur-[1px]">
+                            <RefreshCw className="w-4 h-4 text-purple-300 animate-spin" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-zinc-300 flex items-center gap-1">
+                            🔄 Rückseite
+                          </span>
+                          {card.back.isVisorCustomized && (
+                            <span className="text-[9px] text-emerald-400 font-medium">Visier ✓</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-zinc-400 truncate mt-0.5" title={card.back.file.name}>
+                          {card.back.file.name}
+                        </p>
+                        <p className="text-[9px] text-zinc-500 mt-0.5">
+                          {(card.back.file.size / 1024).toFixed(0)} KB
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 flex items-center justify-center text-center">
+                      <span className="text-[11px] text-zinc-600 font-medium">Keine Rückseite zugeordnet</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Error message display if failed */}
+                {(card.front.error || card.back?.error) && (
+                  <div className="text-[10px] text-red-400 bg-red-950/20 p-2 rounded-lg border border-red-500/20">
+                    {card.front.error || card.back?.error}
+                  </div>
+                )}
+
+                {/* Bottom Row Actions for this card */}
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-800/80">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        selectStreamCard(idx, "front");
+                        streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
+                      className="px-2.5 py-1 rounded-lg border border-purple-500/30 hover:border-purple-500/60 bg-purple-950/20 text-purple-300 hover:text-white text-[11px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                      title="Stanzvisier für diese Karte im Editor öffnen und ausrichten"
+                    >
+                      <Crop className="w-3.5 h-3.5 text-purple-400" />
+                      Visier anpassen
+                    </button>
+
+                    {card.back && (
+                      <button
+                        type="button"
+                        onClick={() => handleSwapCardSides(idx)}
+                        className="px-2.5 py-1 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-zinc-200 text-[11px] font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                        title="Vorder- und Rückseite dieser Karte vertauschen"
+                      >
+                        <ArrowLeftRight className="w-3 h-3" />
+                        VS ⇄ RS tauschen
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {/* Single card download button */}
+                    {(card.front.resultImageUrl || card.back?.resultImageUrl) && (
+                      <button
+                        type="button"
+                        onClick={() => triggerStreamCardDownload(card)}
+                        className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                        title={card.back?.resultImageUrl ? "Beide Seiten dieser Karte herunterladen (ZIP)" : "Diese Karte herunterladen (PNG)"}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    {/* Single card save button */}
+                    {(card.front.resultImageUrl || card.back?.resultImageUrl) && (
+                      <button
+                        type="button"
+                        disabled={(card.front.isSaved && (!card.back || card.back.isSaved)) || isSaving}
+                        onClick={() => handleSaveStreamCard(card)}
+                        className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                          card.front.isSaved && (!card.back || card.back.isSaved)
+                            ? "border-emerald-500/30 bg-emerald-955/20 text-emerald-400"
+                            : "border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-300 hover:text-white"
+                        }`}
+                        title={card.front.isSaved && (!card.back || card.back.isSaved) ? "In Bibliothek gespeichert" : "Diese Karte in Bibliothek speichern"}
+                      >
+                        <Bookmark className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const handleReset = () => {
     setFile(null);
     setCardBatchItems([]);
@@ -4359,6 +5379,10 @@ export default function Home() {
     // Reset Stream Studio states
     setStreamFile(null);
     setStreamBatchItems([]);
+    setStreamCards([]);
+    setActiveStreamCardIndex(0);
+    setActiveStreamSide("front");
+    setStreamCropBox(null);
     setStreamPreviewUrl(null);
     setStreamResultUrl(null);
     setStreamCutoutUrl(null);
@@ -6898,36 +7922,159 @@ export default function Home() {
             {streamFile && (
               <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left Column: Uploaded Card Preview + Detection Checklist */}
-                <section className="lg:col-span-6 flex flex-col gap-6">
+                <section ref={streamVisorRef} className="lg:col-span-6 flex flex-col gap-6">
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-2xl">
-                    <div className="flex items-center justify-between gap-4 mb-4">
-                      <h2 className="text-lg font-semibold text-white flex items-center gap-2 truncate">
-                        <ImageIcon className="w-5 h-5 text-purple-400" />
-                        <span className="truncate">{streamFile.name}</span>
-                      </h2>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStreamFile(null);
-                          setStreamPreviewUrl(null);
-                          setStreamResultUrl(null);
-                          setStreamCutoutUrl(null);
-                          setStreamBgImageUrl(null);
-                          setStreamErrorMessage(null);
-                        }}
-                        className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-white transition-colors cursor-pointer"
-                        title="Auswahl aufheben"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
+                    {streamCards.length > 0 && streamCards[activeStreamCardIndex] ? (
+                      <div className="flex flex-col gap-3 mb-4">
+                        {/* Navigation Stepper & Card Title */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={activeStreamCardIndex === 0}
+                              onClick={() => selectStreamCard(activeStreamCardIndex - 1, activeStreamSide)}
+                              className="p-1.5 rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-300 hover:text-white hover:border-purple-500/50 disabled:opacity-30 disabled:pointer-events-none transition-all cursor-pointer"
+                              title="Vorherige Karte"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </button>
+                            <span className="text-xs font-semibold text-purple-300">
+                              Karte {activeStreamCardIndex + 1} von {streamCards.length}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={activeStreamCardIndex === streamCards.length - 1}
+                              onClick={() => selectStreamCard(activeStreamCardIndex + 1, activeStreamSide)}
+                              className="p-1.5 rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-300 hover:text-white hover:border-purple-500/50 disabled:opacity-30 disabled:pointer-events-none transition-all cursor-pointer"
+                              title="Nächste Karte"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {/* Status badge */}
+                            {(activeStreamSide === "front" ? streamCards[activeStreamCardIndex].front.isVisorCustomized : streamCards[activeStreamCardIndex].back?.isVisorCustomized) ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
+                                <Check className="w-3 h-3" /> Visier arretiert
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-800/80 border border-zinc-700/60 text-zinc-400">
+                                Auto-Visier
+                              </span>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStreamFile(null);
+                                setStreamPreviewUrl(null);
+                                setStreamResultUrl(null);
+                                setStreamCutoutUrl(null);
+                                setStreamBgImageUrl(null);
+                                setStreamErrorMessage(null);
+                              }}
+                              className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                              title="Auswahl aufheben"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Card Name editable input */}
+                        <div className="flex items-center gap-2 bg-zinc-950/60 p-2 rounded-xl border border-zinc-800">
+                          <span className="text-[11px] text-zinc-500 font-medium shrink-0 pl-1">Kartenname:</span>
+                          <input
+                            type="text"
+                            value={streamCards[activeStreamCardIndex].cardName}
+                            onChange={(e) => handleCardNameChange(activeStreamCardIndex, e.target.value)}
+                            className="flex-1 bg-transparent text-xs font-semibold text-zinc-200 focus:outline-none focus:text-white"
+                            placeholder="Kartenname eingeben..."
+                          />
+                        </div>
+
+                        {/* Side Selector (Front / Back) & Visier-Übertragen */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          {streamCards[activeStreamCardIndex].back ? (
+                            <div className="flex items-center gap-1.5 bg-zinc-950/80 p-1 rounded-xl border border-zinc-800">
+                              <button
+                                type="button"
+                                onClick={() => selectStreamCard(activeStreamCardIndex, "front")}
+                                className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                  activeStreamSide === "front"
+                                    ? "bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.3)]"
+                                    : "text-zinc-400 hover:text-zinc-200"
+                                }`}
+                              >
+                                🎴 Vorderseite
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => selectStreamCard(activeStreamCardIndex, "back")}
+                                className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                  activeStreamSide === "back"
+                                    ? "bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.3)]"
+                                    : "text-zinc-400 hover:text-zinc-200"
+                                }`}
+                              >
+                                🔄 Rückseite
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSwapCardSides(activeStreamCardIndex)}
+                                className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors ml-1"
+                                title="Vorder- und Rückseite dieser Karte vertauschen"
+                              >
+                                <ArrowLeftRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-zinc-400 font-medium">Einseitige Karte</span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={applyCropBoxToAllCards}
+                            className="px-2.5 py-1 rounded-lg border border-purple-500/30 hover:border-purple-500/50 bg-purple-950/20 hover:bg-purple-950/40 text-purple-300 text-[11px] font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                            title="Dieses Stanzvisier auf alle anderen Karten anwenden"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-purple-400" />
+                            Auf alle Karten anwenden
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-4 mb-4">
+                        <h2 className="text-lg font-semibold text-white flex items-center gap-2 truncate">
+                          <ImageIcon className="w-5 h-5 text-purple-400" />
+                          <span className="truncate">{streamFile.name}</span>
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStreamFile(null);
+                            setStreamPreviewUrl(null);
+                            setStreamResultUrl(null);
+                            setStreamCutoutUrl(null);
+                            setStreamBgImageUrl(null);
+                            setStreamErrorMessage(null);
+                          }}
+                          className="p-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                          title="Auswahl aufheben"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex flex-col gap-5">
                       {streamPreviewUrl && (
                         <div className="relative w-full">
                           <CardCropVisor
+                            key={`${streamCards[activeStreamCardIndex]?.id || "stream"}_${activeStreamSide}_${streamPreviewUrl}`}
                             imageUrl={streamPreviewUrl}
-                            onChange={(box) => setStreamCropBox(box)}
+                            onChange={handleStreamCropBoxChange}
                             initialBox={streamCropBox}
                           />
                           {isStreamProcessing && (
@@ -7279,6 +8426,18 @@ export default function Home() {
                               <span>Herunterladen (PNG)</span>
                             </button>
 
+                            {streamCards.length > 0 && streamCards[activeStreamCardIndex]?.back?.resultImageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => triggerStreamCardDownload(streamCards[activeStreamCardIndex])}
+                                className="py-3 px-3.5 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-950/20 text-purple-300 hover:text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                                title="Beide Seiten dieser Karte (Vorder- und Rückseite) als ZIP herunterladen"
+                              >
+                                <Download className="w-3.5 h-3.5 text-purple-400" />
+                                <span>Beide Seiten (ZIP)</span>
+                              </button>
+                            )}
+
                             {streamCutoutUrl && (
                               <button
                                 type="button"
@@ -7297,9 +8456,13 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() => {
-                                setSaveTarget("stream");
-                                setNewArtworkName(streamMetadata.cardName ? `${streamMetadata.cardName} - ${streamMetadata.cardNumber}` : streamFile.name.replace(/\.[^/.]+$/, ""));
-                                setIsSaveModalOpen(true);
+                                if (streamCards.length > 0 && streamCards[activeStreamCardIndex]) {
+                                  handleSaveStreamCard(streamCards[activeStreamCardIndex]);
+                                } else {
+                                  setSaveTarget("stream");
+                                  setNewArtworkName(streamMetadata.cardName ? `${streamMetadata.cardName} - ${streamMetadata.cardNumber}` : streamFile.name.replace(/\.[^/.]+$/, ""));
+                                  setIsSaveModalOpen(true);
+                                }
                               }}
                               className="p-3 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-955/20 hover:bg-purple-955/40 text-purple-300 font-semibold text-xs flex items-center justify-center transition-all cursor-pointer"
                               title="In Bibliothek speichern"
@@ -7328,7 +8491,7 @@ export default function Home() {
             )}
 
             {/* Stream Batch UI */}
-            {renderBatchUI("stream")}
+            {streamCards.length > 0 ? renderStreamCardsBatchUI() : renderBatchUI("stream")}
           </div>
         ) : activeTab === "case" ? (
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
