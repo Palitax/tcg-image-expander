@@ -20,6 +20,7 @@ export interface CardAnalysisResult {
   is_small_japanese_game?: boolean;
   illustration_box?: [number, number, number, number];
   is_full_art?: boolean;
+  is_card_back?: boolean;
 }
 
 export interface CardHomographyResult {

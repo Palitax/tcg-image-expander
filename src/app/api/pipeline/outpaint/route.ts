@@ -149,18 +149,20 @@ export async function POST(request: Request) {
         description = "Fantasy scenery background in vibrant colorful aesthetic";
       }
 
-      // Filter and sanitize description to prevent safety triggers in Imagen
+      // Filter and sanitize description to prevent character injection and safety triggers
       let sanitizedDescription = description
         .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy element")
+        .replace(/\b(pokemon|pokémon|pokeball|pokéball|yamper|pikachu|charizard|corgi|dog|cat|puppy|creature|monster|character|figure|human|person|face|toy)\b/gi, "")
+        .replace(/\s+/g, " ")
         .trim();
 
       let outpaintPrompt = "";
       if (isDisplay) {
-        outpaintPrompt = `A beautiful, high-quality scenery backdrop: ${sanitizedDescription}. High quality, detailed, continuous landscape in the same aesthetic and art style. Exclude any characters, boxes, or text.`;
+        outpaintPrompt = `An ultra-clean, pristine 4K resolution scenery backdrop: ${sanitizedDescription}. High quality, immaculate sharp focus, continuous clean landscape in the same aesthetic and art style, zero grain, zero noise. Completely exclude any characters, boxes, Pokémon, or text.`;
       } else if (mode === "backdrop") {
-        outpaintPrompt = `A beautiful, high-quality scenery backdrop: ${sanitizedDescription}. High quality, detailed, continuous landscape in the same aesthetic and art style. Exclude any characters or text.`;
+        outpaintPrompt = `An ultra-clean, pristine 4K resolution digital anime scenery backdrop: ${sanitizedDescription}. Masterpiece, immaculate sharp lines, smooth gradients, zero grain, zero noise. Completely exclude any characters, figures, Pokémon, or text. Empty scenery only.`;
       } else {
-        outpaintPrompt = `A beautiful, continuous, seamless background expansion of this scene: ${sanitizedDescription}. Expand the background environment to fill the target aspect ratio, preserving the exact same anime/art style, drawing technique, color palette, lighting, and general aesthetic. Do NOT replicate, extend, or generate any characters, figures, humans, text, play cost symbols, power attributes, or card borders. Focus strictly on extending the background scenery.`;
+        outpaintPrompt = `An ultra-clean, continuous 4K seamless background expansion of this scene: ${sanitizedDescription}. Masterpiece quality, immaculate clean lines, smooth gradients, zero grain, zero noise. Do NOT replicate, extend, or generate any characters, Pokémon, figures, humans, text, or card borders. Focus strictly on extending the empty background scenery.`;
       }
 
       // Helper function to generate single background image for a given aspect ratio
@@ -170,63 +172,62 @@ export async function POST(request: Request) {
 
         const candidateRatios = getCandidateRatios(targetRatio);
 
-        // When mode === "outpaint", prioritize multimodal Gemini image models with the actual artwork!
-        if (mode !== "backdrop" && !isDisplay) {
-          const dedicatedImgModels = ["gemini-2.5-flash-image", "gemini-3.1-flash-image-preview", "gemini-3.1-flash-lite-image"];
-          for (const imgModel of dedicatedImgModels) {
-            if (generatedBase64) break;
-            try {
-              console.log(`[Outpaint API] Attempting multimodal artwork expansion with ${imgModel} for target ratio ${targetRatio}...`);
-              const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
-              const payload = {
-                contents: [
-                  {
-                    parts: [
-                      {
-                        inlineData: {
-                          mimeType: "image/png",
-                          data: base64Data
-                        }
-                      },
-                      { text: `Seamless extended background environment: ${outpaintPrompt}` }
-                    ]
-                  }
-                ],
-                generationConfig: {
-                  responseModalities: ["TEXT", "IMAGE"]
-                }
-              };
+        // 1. Primary for backdrop: Pure text-to-image with Gemini image models (never includes character)
+        const dedicatedImgModels = [
+          "gemini-2.5-flash-image",
+          "gemini-3.1-flash-image-preview",
+          "gemini-3.1-flash-image",
+          "gemini-3.1-flash-lite-image",
+          "gemini-3-pro-image"
+        ];
 
-              const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-                signal: AbortSignal.timeout(20000)
-              });
-
-              if (res.ok) {
-                const json = await res.json();
-                const parts = json?.candidates?.[0]?.content?.parts || [];
-                for (const part of parts) {
-                  const imgData = part.inlineData?.data || (part as any).inline_data?.data;
-                  if (imgData) {
-                    console.log(`[Outpaint API] ${imgModel} REST generated image successfully!`);
-                    generatedBase64 = imgData;
-                    break;
-                  }
+        for (const imgModel of dedicatedImgModels) {
+          if (generatedBase64) break;
+          try {
+            console.log(`[Outpaint API] Generating clean 4K backdrop with ${imgModel} for target ratio ${targetRatio}...`);
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+            const payload = {
+              contents: [
+                {
+                  parts: [
+                    { text: `${outpaintPrompt} (Format aspect ratio: ${targetRatio})` }
+                  ]
                 }
-              } else {
-                const errText = await res.text();
-                console.warn(`[Outpaint API] ${imgModel} REST error ${res.status}:`, errText.slice(0, 160));
+              ],
+              generationConfig: {
+                responseModalities: ["TEXT", "IMAGE"]
               }
-            } catch (gErr: any) {
-              console.warn(`[Outpaint API] ${imgModel} REST failed:`, gErr?.message || gErr);
-              lastImageError = gErr;
+            };
+
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+              signal: AbortSignal.timeout(22000)
+            });
+
+            if (res.ok) {
+              const json = await res.json();
+              const parts = json?.candidates?.[0]?.content?.parts || [];
+              for (const part of parts) {
+                const imgData = part.inlineData?.data || (part as any).inline_data?.data;
+                if (imgData) {
+                  console.log(`[Outpaint API] ${imgModel} successfully generated clean 4K backdrop!`);
+                  generatedBase64 = imgData;
+                  break;
+                }
+              }
+            } else {
+              const errText = await res.text();
+              console.warn(`[Outpaint API] ${imgModel} REST error ${res.status}:`, errText.slice(0, 160));
             }
+          } catch (gErr: any) {
+            console.warn(`[Outpaint API] ${imgModel} REST failed:`, gErr?.message || gErr);
+            lastImageError = gErr;
           }
         }
 
-        // Secondary / Fallback: Try Imagen 3 via Direct REST :predict
+        // 2. Secondary / Fallback: Try Imagen via Direct REST :predict
         if (!generatedBase64) {
           for (const candidateRatio of candidateRatios) {
             if (generatedBase64) break;

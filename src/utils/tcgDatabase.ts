@@ -231,6 +231,15 @@ export const JAPANESE_TOTAL_COUNT_MAP: Record<string, { code: string; name: stri
   "100": { code: "SV9", name: "Battle Partners" }
 };
 
+export function cleanTcgString(val?: string): string {
+  if (!val) return "";
+  const s = val.trim();
+  if (/^(n\/?a|na|none|null|undefined|-|\?)$/i.test(s)) {
+    return "";
+  }
+  return s;
+}
+
 /**
  * Enriches and validates extracted card metadata against the TCG database.
  */
@@ -239,11 +248,30 @@ export function enrichCardMetadata(params: {
   cardNumber?: string;
   setCode?: string;
   setName?: string;
+  slogan?: string;
 }): CardMetadata {
-  let cardName = (params.cardName || "").trim();
-  let cardNumber = (params.cardNumber || "").trim();
-  let setCode = (params.setCode || "").trim();
-  let setName = (params.setName || "").trim();
+  let cardName = cleanTcgString(params.cardName);
+  let cardNumber = cleanTcgString(params.cardNumber);
+  let setCode = cleanTcgString(params.setCode);
+  let setName = cleanTcgString(params.setName);
+  const slogan = cleanTcgString(params.slogan) || "MANACARDS – Unpack the magic";
+
+  // Check for card back
+  const isBack = 
+    cardName.toLowerCase().includes("card back") || 
+    cardName.toLowerCase().includes("rückseite") ||
+    cardName.toLowerCase().includes("pokemon card back") ||
+    cardName.toLowerCase().includes("pokémon card back");
+
+  if (isBack && !cardNumber && !setCode) {
+    return {
+      cardName: "Pokémon Card Back",
+      cardNumber: "",
+      setCode: "",
+      setName: "",
+      slogan
+    };
+  }
 
   // Detect and clean raw scan filenames like "0020_pokemon_m4_087-083_frogadier_front"
   if (cardName.includes("_") || cardName.includes("-")) {
@@ -328,15 +356,15 @@ export function enrichCardMetadata(params: {
 
   // Fallbacks: Never leave generic "TCG" or "Collection"
   if (!cardName) cardName = "Trading Card";
-  if (!cardNumber) cardNumber = "001";
-  if (setCode === "TCG") setCode = "";
-  if (setName === "Collection") setName = "";
+  if (setCode === "TCG" || /^(n\/?a|na)$/i.test(setCode)) setCode = "";
+  if (setName === "Collection" || /^(n\/?a|na)$/i.test(setName)) setName = "";
+  if (/^(n\/?a|na)$/i.test(cardNumber)) cardNumber = "";
 
   return {
     cardName,
     cardNumber,
     setCode,
     setName,
-    slogan: "MANACARDS – Unpack the magic"
+    slogan
   };
 }

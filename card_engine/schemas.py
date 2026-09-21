@@ -19,7 +19,7 @@ class CardAnalysisResult(BaseModel):
     set_code: str = Field(description="Set-Identifikator (z.B. 'M1S', 'M2', 'SV6', 'OP-05')")
     set_name: Optional[str] = Field(default="", description="Offizieller englischer Set-Name (z.B. 'Inferno X', 'Ninja Spinner', 'Mega Brave', '151', 'Ancient Roar', 'Romance Dawn')")
     scene_prompt: str = Field(
-        description="Vollständiger, detaillierter Prompt der Umgebung, des Artworks, Lichts und Stils für Imagen 3 (ohne Text, Charaktere oder Pokémon)"
+        description="Detaillierter Prompt der UMGEBUNG, des Raumes, Lichts und Kunststils für 4K-Bildgenerierung. STRIKT OHNE jegliche Charaktere, Pokémon, Tiere, Figuren, Gesichter, Bälle oder Spielsymbole."
     )
     corners: CardCorners = Field(
         description="Die 4 exakten Eckpunkte der physischen Pappe. Transparente Hüllen (Penny Sleeves), Toploader oder Überhänge müssen strikt ignoriert werden!"
@@ -35,4 +35,8 @@ class CardAnalysisResult(BaseModel):
     is_full_art: Optional[bool] = Field(
         default=False,
         description="True, falls das Artwork die gesamte Karte ausfüllt (Full Art, Art Rare, SAR, Special Illustration Rare), False bei traditionellen Karten mit separatem Illustrationsrahmen."
+    )
+    is_card_back: Optional[bool] = Field(
+        default=False,
+        description="True, falls das Bild die Rückseite einer Sammelkarte zeigt (z.B. klassische Pokémon-Kartenrückseite mit blauem Wirbel/Pokéball, Magic-Rückseite)."
     )

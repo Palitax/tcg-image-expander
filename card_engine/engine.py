@@ -98,11 +98,15 @@ class TCGStreamEngine:
             "Deine Aufgabe ist es, die Sammelkarte im Bild pixelgenau zu lokalisieren und zu analysieren:\n\n"
             "1. OCR & METADATEN:\n"
             "   - card_name: Offizieller englischer Kartenname (Japanisch übersetzen, z.B. 'ワンパチ' -> 'Yamper', 'ヌイコグマ' -> 'Stufful', 'ユキカブリ' -> 'Snover').\n"
-            "   - collector_number: Exakte Sammlernummer (z.B. '086/080', '075/063', '067/063', '083/080', '195/193').\n"
-            "   - set_code: Set-Kürzel unten links (z.B. 'M2', 'M1', 'M4', 'SV5a', 'SV4K', 'OP05'). Falls ein Regulationszeichen in einer Box steht (z.B. [I], [H], [G]), ignoriere diesen einzelnen Buchstaben und lies das eigentliche Set-Kürzel direkt daneben (z.B. 'M2').\n"
-            "   - set_name: Offizieller englischer Set-Name (z.B. 'Inferno X', 'Ninja Spinner', 'Mega Brave', 'Crimson Haze', 'Ancient Roar', '151').\n\n"
-            "2. SCENE PROMPT:\n"
-            "   - scene_prompt: Detaillierte, bildhafte Beschreibung der Umgebung, des Artworks, Lichts, Raumes und Kunststils für eine nahtlose KI-Hintergrunderweiterung. Erwähne Stil, Farben, Beleuchtung und Umgebungselemente.\n\n"
+            "   - collector_number: Exakte Sammlernummer (z.B. '086/080', '075/063', '067/063', '083/080', '195/193'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - set_code: Set-Kürzel unten links (z.B. 'M2', 'M1', 'M4', 'SV5a', 'SV4K', 'OP05'). Falls ein Regulationszeichen in einer Box steht (z.B. [I], [H], [G]), ignoriere diesen einzelnen Buchstaben und lies das eigentliche Set-Kürzel direkt daneben (z.B. 'M2'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - set_name: Offizieller englischer Set-Name (z.B. 'Inferno X', 'Ninja Spinner', 'Mega Brave', 'Crimson Haze', 'Ancient Roar', '151'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - WICHTIG BEI KARTENRÜCKSEITEN:\n"
+            "     Falls das Bild die RÜCKSEITE einer Sammelkarte zeigt (z.B. klassische Pokémon-Rückseite mit blauem Wirbel/Pokéball, One Piece Rücken, Magic-Rückseite):\n"
+            "     Setze is_card_back=True, card_name='Card Back', collector_number='', set_code='', set_name=''! Niemals 'N/A' eintragen!\n\n"
+            "2. SCENE PROMPT (STRIKT CHARAKTER- UND POKÉMON-FREI!):\n"
+            "   - scene_prompt: Detaillierte, bildhafte Beschreibung AUSSCHLIESSLICH der Umgebung, Kulisse, Natur, Raum, Beleuchtung, Farbpalette und des Kunststils (z.B. digital anime painting, soft warm ambient lighting, immaculate 4k clean sharp detail).\n"
+            "   - STRIKT VERBOTEN: Erwähne NIEMALS das Pokémon, Charaktere, Lebewesen, Figuren, Menschen, Gesichter, Bälle oder Pokémon-Gegenstände! Die beschriebene Szene muss 100% menschen- und pokémonleer sein (z.B. statt 'Yamper liegt auf dem Bett mit einem Pokéball' beschreibe NUR 'gemütliches, sonnendurchflutetes Zimmer im Anime-Stil mit Holzregalen, Vorhängen und einem weichen Bett').\n\n"
             "3. ARTWORK-BEREICH (illustration_box & is_full_art):\n"
             "   - is_full_art: Setze auf True, falls das Artwork die gesamte Karte einnimmt (Full Art, Art Rare / AR, SAR, SIR, Character Rare). Bei Vintage- oder normalen Karten mit separatem Bildrahmen setze auf False.\n"
             "   - illustration_box: Bounding Box [ymin, xmin, ymax, xmax] im Bereich 0-1000 des Artwork-Bereichs. Bei Full Art fast die gesamte Karte (z.B. [40, 40, 960, 960]), bei Standardkarten nur das obere Bildfenster.\n\n"
@@ -120,6 +124,14 @@ class TCGStreamEngine:
         models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"]
         last_err = None
 
+        def _clean_tcg_field(val: Optional[str]) -> str:
+            if not val:
+                return ""
+            s = val.strip()
+            if s.lower() in ("n/a", "na", "none", "null", "undefined", "-", "?"):
+                return ""
+            return s
+
         for model_name in models:
             try:
                 response = client.models.generate_content(
@@ -136,7 +148,21 @@ class TCGStreamEngine:
                     )
                 )
                 if response.text:
-                    return CardAnalysisResult.model_validate_json(response.text)
+                    parsed = CardAnalysisResult.model_validate_json(response.text)
+                    # Felder bereinigen
+                    parsed.collector_number = _clean_tcg_field(parsed.collector_number)
+                    parsed.set_code = _clean_tcg_field(parsed.set_code)
+                    if parsed.set_name:
+                        parsed.set_name = _clean_tcg_field(parsed.set_name)
+                    
+                    # Kartenrückseite-Schutz
+                    if parsed.is_card_back or "back" in parsed.card_name.lower() or "rückseite" in parsed.card_name.lower():
+                        parsed.is_card_back = True
+                        parsed.collector_number = ""
+                        parsed.set_code = ""
+                        parsed.set_name = ""
+                    
+                    return parsed
             except Exception as err:
                 last_err = err
                 continue

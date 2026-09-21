@@ -3507,13 +3507,17 @@ export default function Home() {
     const sideLabel = side === "back" ? "Rückseite" : "Vorderseite";
     setNewArtworkName(`${card.cardName} - ${sideLabel}`);
 
-    if (sideData.metadata) {
+    const metaToLoad = (side === "back" && card.back && !card.back.metadata)
+      ? card.front.metadata
+      : sideData.metadata;
+
+    if (metaToLoad) {
       setStreamMetadata({
-        cardName: sideData.metadata.cardName || "",
-        cardNumber: sideData.metadata.cardNumber || "",
-        setCode: sideData.metadata.setCode || "",
-        setName: sideData.metadata.setName || "",
-        slogan: sideData.metadata.slogan || "MANACARDS – Unpack the magic"
+        cardName: metaToLoad.cardName || "",
+        cardNumber: metaToLoad.cardNumber || "",
+        setCode: metaToLoad.setCode || "",
+        setName: metaToLoad.setName || "",
+        slogan: metaToLoad.slogan || "MANACARDS – Unpack the magic"
       });
     }
   };
@@ -3650,7 +3654,9 @@ export default function Home() {
   const handleProcessStreamImage = async (
     customFile?: File | unknown,
     customCropBox?: CropBox | null,
-    existingBgImage?: string
+    existingBgImage?: string,
+    inheritedMetadata?: any,
+    isBackSide?: boolean
   ) => {
     const rawFile = (customFile instanceof File) ? customFile : streamFile;
     if (!rawFile) return;
@@ -3682,6 +3688,16 @@ export default function Home() {
       formData.append("verticalOffset", streamVerticalOffset.toString());
       formData.append("bottomTrim", streamBottomTrim.toString());
       formData.append("mattingEngine", streamMattingEngine);
+
+      if (inheritedMetadata) {
+        formData.append("inheritedMetadata", JSON.stringify(inheritedMetadata));
+      } else if (activeStreamSide === "back" && streamCards[activeStreamCardIndex]?.front?.metadata) {
+        formData.append("inheritedMetadata", JSON.stringify(streamCards[activeStreamCardIndex].front.metadata));
+      }
+
+      if (isBackSide || activeStreamSide === "back") {
+        formData.append("isBackSide", "true");
+      }
 
       const cropToUse = customCropBox !== undefined ? customCropBox : streamCropBox;
       if (cropToUse) {
@@ -3891,6 +3907,7 @@ export default function Home() {
         } : c));
 
         let frontBgUrl: string | undefined;
+        let frontMetadata: any = card.front.metadata;
         try {
           const frontResult = await handleProcessStreamImage(
             card.front.file,
@@ -3899,6 +3916,9 @@ export default function Home() {
 
           if (frontResult && frontResult.success) {
             frontBgUrl = frontResult.backgroundImageUrl || undefined;
+            if (frontResult.metadata) {
+              frontMetadata = frontResult.metadata;
+            }
             const updatedCardName = frontResult.detectedName && frontResult.detectedName !== card.front.file.name.replace(/\.[^/.]+$/, "")
               ? frontResult.detectedName
               : card.cardName;
@@ -3947,7 +3967,9 @@ export default function Home() {
             const backResult = await handleProcessStreamImage(
               card.back.file,
               backCrop,
-              frontBgUrl
+              frontBgUrl,
+              frontMetadata,
+              true
             );
 
             if (backResult && backResult.success) {
@@ -3958,7 +3980,8 @@ export default function Home() {
                   status: "completed",
                   resultImageUrl: backResult.resultImageUrl,
                   cutoutImageUrl: backResult.cutoutImageUrl,
-                  backgroundImageUrl: backResult.backgroundImageUrl || frontBgUrl
+                  backgroundImageUrl: backResult.backgroundImageUrl || frontBgUrl,
+                  metadata: backResult.metadata || frontMetadata
                 } : null
               } : c));
             } else {

@@ -76,17 +76,29 @@ export function buildStreamPreviewVectorSvg(
   const boldFont = getBoldFont();
   const regularFont = getRegularFont();
 
-  const line1Parts = [metadata.cardName, metadata.cardNumber];
-  if (metadata.setCode && metadata.setCode !== "TCG") {
-    line1Parts.push(metadata.setCode);
-  }
-  const line1 = line1Parts.filter(Boolean).join(" - ");
+  const cleanField = (val?: string): string => {
+    if (!val) return "";
+    const trimmed = val.trim();
+    if (/^(n\/?a|na|none|null|undefined|-|\?)$/i.test(trimmed)) return "";
+    return trimmed;
+  };
 
-  let line2 = metadata.setName || "";
+  const line1Parts: string[] = [];
+  const cName = cleanField(metadata.cardName);
+  const cNum = cleanField(metadata.cardNumber);
+  const cSet = cleanField(metadata.setCode);
+
+  if (cName) line1Parts.push(cName);
+  if (cNum) line1Parts.push(cNum);
+  if (cSet && cSet !== "TCG") line1Parts.push(cSet);
+
+  const line1 = line1Parts.join(" - ");
+
+  let line2 = cleanField(metadata.setName) || "";
   if (line2 === "Collection" || line2 === "TCG") {
     line2 = "";
   }
-  const line3 = metadata.slogan || "MANACARDS – Unpack the magic";
+  const line3 = cleanField(metadata.slogan) || "MANACARDS – Unpack the magic";
 
   // Dynamic font sizing for long card titles
   let line1FontSize = 40;
