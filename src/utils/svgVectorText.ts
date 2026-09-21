@@ -76,8 +76,16 @@ export function buildStreamPreviewVectorSvg(
   const boldFont = getBoldFont();
   const regularFont = getRegularFont();
 
-  const line1 = [metadata.cardName, metadata.cardNumber, metadata.setCode].filter(Boolean).join(" - ");
-  const line2 = metadata.setName || "";
+  const line1Parts = [metadata.cardName, metadata.cardNumber];
+  if (metadata.setCode && metadata.setCode !== "TCG") {
+    line1Parts.push(metadata.setCode);
+  }
+  const line1 = line1Parts.filter(Boolean).join(" - ");
+
+  let line2 = metadata.setName || "";
+  if (line2 === "Collection" || line2 === "TCG") {
+    line2 = "";
+  }
   const line3 = metadata.slogan || "MANACARDS – Unpack the magic";
 
   // Dynamic font sizing for long card titles
@@ -95,10 +103,17 @@ export function buildStreamPreviewVectorSvg(
   const leftLineEnd = Math.max(75, Math.round(512 - line3Width / 2 - 40));
   const rightLineStart = Math.min(949, Math.round(512 + line3Width / 2 + 40));
 
+  // Top Left STREAM PREVIEW badge with clean line spacing (never cut into the text)
+  const badgeText = "STREAM PREVIEW";
+  const badgeFontSize = 23;
+  const badgeWidth = getTextWidth(boldFont, badgeText, badgeFontSize);
+  const badgePath = renderTextToSvgPath(boldFont, badgeText, 42, 54, badgeFontSize, "left", "#ffffff");
+  const topLineStart = Math.max(285, Math.round(42 + badgeWidth + 22));
+
   // Convert all text to pure vector SVG path shapes (matching reference typography & vertical rhythm)
-  const badgePath = renderTextToSvgPath(boldFont, "STREAM PREVIEW", 42, 54, 23, "left", "#ffffff");
-  const line1Path = renderTextToSvgPath(boldFont, line1, 512, 896, line1FontSize, "center", "#ffffff");
-  const line2Path = renderTextToSvgPath(boldFont, line2, 512, 938, line2FontSize, "center", "#ffffff");
+  const line1Y = line2 ? 896 : 918;
+  const line1Path = renderTextToSvgPath(boldFont, line1, 512, line1Y, line1FontSize, "center", "#ffffff");
+  const line2Path = line2 ? renderTextToSvgPath(boldFont, line2, 512, 938, line2FontSize, "center", "#ffffff") : "";
   const line3Path = renderTextToSvgPath(regularFont, line3, 512, 980, 22, "center", "#ffffff");
 
   const svgContent = `
@@ -146,7 +161,7 @@ export function buildStreamPreviewVectorSvg(
 
   <!-- Framing Neon Lines -->
   <!-- Top & Right framing path -->
-  <path d="M 240 46 L 950 46 Q 982 46 982 78 L 982 922 Q 982 971 933 971 L ${rightLineStart} 971" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />
+  <path d="M ${topLineStart} 46 L 950 46 Q 982 46 982 78 L 982 922 Q 982 971 933 971 L ${rightLineStart} 971" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />
   
   <!-- Left & Bottom framing path -->
   <path d="M 42 78 L 42 922 Q 42 971 91 971 L ${leftLineEnd} 971" fill="none" stroke="url(#lineGlow)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />

@@ -14,6 +14,7 @@ export interface CardAnalysisResult {
   card_name: string;
   collector_number: string;
   set_code: string;
+  set_name?: string;
   scene_prompt: string;
   corners: CardCorners;
   is_small_japanese_game?: boolean;

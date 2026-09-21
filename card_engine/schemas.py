@@ -17,6 +17,7 @@ class CardAnalysisResult(BaseModel):
     card_name: str = Field(description="Offizieller englischer Kartenname (z.B. 'Stufful', 'Snover', 'Charcadet')")
     collector_number: str = Field(description="Karten-Sammlernummer (z.B. '075/063', '067/063', '083/080')")
     set_code: str = Field(description="Set-Identifikator (z.B. 'M1S', 'M2', 'SV6', 'OP-05')")
+    set_name: Optional[str] = Field(default="", description="Offizieller englischer Set-Name (z.B. 'Inferno X', 'Ninja Spinner', 'Mega Brave', '151', 'Ancient Roar', 'Romance Dawn')")
     scene_prompt: str = Field(
         description="Vollständiger, detaillierter Prompt der Umgebung, des Artworks, Lichts und Stils für Imagen 3 (ohne Text, Charaktere oder Pokémon)"
     )

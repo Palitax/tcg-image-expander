@@ -368,7 +368,7 @@ export async function POST(request: Request) {
           cardName: homographyResult.analysis.card_name || cardFile.name.replace(/\.[^/.]+$/, ""),
           cardNumber: homographyResult.analysis.collector_number || "",
           setCode: homographyResult.analysis.set_code || "",
-          setName: "",
+          setName: homographyResult.analysis.set_name || "",
           sceneryDescription: homographyResult.analysis.scene_prompt || "",
           hasSampleWatermark: false,
           usedFallback: false,

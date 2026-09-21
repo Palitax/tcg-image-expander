@@ -70,6 +70,7 @@ def main():
             "card_name": analysis.card_name,
             "collector_number": analysis.collector_number,
             "set_code": analysis.set_code,
+            "set_name": getattr(analysis, "set_name", "") or "",
             "corners": analysis.corners.model_dump(),
             "width": card_bgra.shape[1],
             "height": card_bgra.shape[0]

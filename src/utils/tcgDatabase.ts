@@ -12,6 +12,17 @@ export interface TcgSetInfo {
 }
 
 export const TCG_SETS: Record<string, TcgSetInfo> = {
+  // === POKÉMON TCG - JAPANESE MEGA EVOLUTION ERA (2025/2026) ===
+  "M1": { code: "M1", name: "Mega Brave", series: "Mega Evolution", language: "Japanese" },
+  "M1S": { code: "M1S", name: "Mega Brave", series: "Mega Evolution", language: "Japanese" },
+  "M1B": { code: "M1B", name: "Mega Symphonia", series: "Mega Evolution", language: "Japanese" },
+  "M2": { code: "M2", name: "Inferno X", series: "Mega Evolution", language: "Japanese" },
+  "M2A": { code: "M2a", name: "Mega Dream ex", series: "Mega Evolution", language: "Japanese" },
+  "M3": { code: "M3", name: "Nihil Zero", series: "Mega Evolution", language: "Japanese" },
+  "M4": { code: "M4", name: "Ninja Spinner", series: "Mega Evolution", language: "Japanese" },
+  "M5": { code: "M5", name: "Abyss Eye", series: "Mega Evolution", language: "Japanese" },
+  "M6": { code: "M6", name: "Storm Emeralda", series: "Mega Evolution", language: "Japanese" },
+
   // === POKÉMON TCG - JAPANESE SCARLET & VIOLET ===
   "SV1S": { code: "SV1S", name: "Scarlet ex", series: "Scarlet & Violet", language: "Japanese" },
   "SV1V": { code: "SV1V", name: "Violet ex", series: "Scarlet & Violet", language: "Japanese" },
@@ -192,9 +203,33 @@ export interface CardMetadata {
  */
 export function normalizeSetCode(rawCode: string): string {
   if (!rawCode) return "";
-  const cleaned = rawCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  let cleaned = rawCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  // Strip single-letter regulation marks if prepended to set code (e.g. "IM2" -> "M2", "HM4" -> "M4", "GSV4K" -> "SV4K", "ISV5A" -> "SV5A")
+  const regMatch = cleaned.match(/^[D-J](M\d[A-Z]?|SV\d{1,2}[A-Z]?|S\d{1,2}[A-Z]?|OP\d{2})$/);
+  if (regMatch) {
+    cleaned = regMatch[1];
+  }
   return cleaned;
 }
+
+/**
+ * Deterministic mapping of Japanese main set card counts to set code and official set name.
+ * e.g. "086/080" -> 080 -> M2 "Inferno X", "087/083" -> 083 -> SV5a "Crimson Haze".
+ */
+export const JAPANESE_TOTAL_COUNT_MAP: Record<string, { code: string; name: string }> = {
+  "080": { code: "M2", name: "Inferno X" },
+  "083": { code: "SV5a", name: "Crimson Haze" },
+  "066": { code: "SV4K", name: "Ancient Roar" },
+  "063": { code: "SV5M", name: "Cyber Judge" },
+  "071": { code: "SV5K", name: "Wild Force" },
+  "165": { code: "SV2a", name: "Pokémon Card 151" },
+  "190": { code: "SV4a", name: "Shiny Treasure ex" },
+  "106": { code: "SV8", name: "Supercharged Breaker" },
+  "102": { code: "SV7", name: "Stellar Miracle" },
+  "101": { code: "SV6", name: "Mask of Change" },
+  "086": { code: "SV8a", name: "Terastal Festival" },
+  "100": { code: "SV9", name: "Battle Partners" }
+};
 
 /**
  * Enriches and validates extracted card metadata against the TCG database.
@@ -259,6 +294,16 @@ export function enrichCardMetadata(params: {
     cardNumber = numberMatch[1];
   }
 
+  // Infer set from total card count in card number (e.g. "086/080" -> 080 -> M2 "Inferno X") if setCode is missing or generic
+  if ((!setCode || setCode === "TCG") && cardNumber.includes("/")) {
+    const totalMatch = cardNumber.match(/\/(\d{3})/);
+    if (totalMatch && JAPANESE_TOTAL_COUNT_MAP[totalMatch[1]]) {
+      const mapped = JAPANESE_TOTAL_COUNT_MAP[totalMatch[1]];
+      setCode = mapped.code;
+      if (!setName) setName = mapped.name;
+    }
+  }
+
   const normKey = normalizeSetCode(setCode);
   const matchedSet = TCG_SETS[normKey];
 
@@ -281,11 +326,11 @@ export function enrichCardMetadata(params: {
     }
   }
 
-  // Fallbacks
+  // Fallbacks: Never leave generic "TCG" or "Collection"
   if (!cardName) cardName = "Trading Card";
   if (!cardNumber) cardNumber = "001";
-  if (!setCode) setCode = "TCG";
-  if (!setName) setName = "Collection";
+  if (setCode === "TCG") setCode = "";
+  if (setName === "Collection") setName = "";
 
   return {
     cardName,
