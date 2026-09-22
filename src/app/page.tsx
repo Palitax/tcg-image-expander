@@ -226,7 +226,7 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   throw new Error(errorMessage);
 };
 
-const MAX_SAFE_FILE_SIZE = 2.8 * 1024 * 1024; // 2.8 MB (sicher unter Vercels 4.5 MB Limit)
+const MAX_SAFE_FILE_SIZE = 2.0 * 1024 * 1024; // 2.0 MB (sicher unter Vercels 4.5 MB Limit)
 
 interface OptimizedImageResult {
   file: File;
@@ -310,7 +310,7 @@ const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<Optim
         return;
       }
 
-      console.log(`[Image Optimizer] Datei ${(file.size / 1024 / 1024).toFixed(2)}MB überschreitet 2.8MB. Starte automatische Bildoptimierung...`);
+      console.log(`[Image Optimizer] Datei ${(file.size / 1024 / 1024).toFixed(2)}MB überschreitet ${(MAX_SAFE_FILE_SIZE / 1024 / 1024).toFixed(1)}MB. Starte automatische Bildoptimierung...`);
 
       const isPng = file.type === "image/png" || file.name.toLowerCase().endsWith(".png");
 
@@ -446,6 +446,40 @@ const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<Optim
 
     img.src = url;
   });
+};
+
+const ensureSafeUploadedFiles = async (
+  files: File[],
+  onProgress?: (current: number, total: number, fileName: string) => void
+): Promise<File[]> => {
+  const oversizedFiles = files.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+  if (oversizedFiles.length === 0) {
+    return files;
+  }
+
+  console.log(`[Pre-Upload Optimizer] ${oversizedFiles.length} von ${files.length} Dateien überschreiten ${(MAX_SAFE_FILE_SIZE / 1024 / 1024).toFixed(1)}MB. Starte Vorab-Optimierung...`);
+
+  let completedOversized = 0;
+  const processedFiles = await Promise.all(
+    files.map(async (file) => {
+      if (file.size <= MAX_SAFE_FILE_SIZE) {
+        return file;
+      }
+      try {
+        const res = await optimizeImageFile(file);
+        completedOversized++;
+        if (onProgress) {
+          onProgress(completedOversized, oversizedFiles.length, file.name);
+        }
+        return res.file;
+      } catch (err) {
+        console.error(`[Pre-Upload Optimizer] Fehler beim Optimieren von ${file.name}:`, err);
+        return file;
+      }
+    })
+  );
+
+  return processedFiles;
 };
 
 const ensureSafeBase64 = async (base64Str: string | null | undefined, maxDim = 900): Promise<string> => {
@@ -916,11 +950,13 @@ export default function Home() {
   const [isBoosterBatchProcessing, setIsBoosterBatchProcessing] = useState<boolean>(false);
   const [isCsvLoading, setIsCsvLoading] = useState<boolean>(false);
   const [csvStatusMsg, setCsvStatusMsg] = useState<string>("");
+  const [isOptimizingUploads, setIsOptimizingUploads] = useState<boolean>(false);
+  const [uploadOptimizationMsg, setUploadOptimizationMsg] = useState<string>("");
   const [autoGroupDuplex, setAutoGroupDuplex] = useState<boolean>(true);
 
   const cancelBatchRef = useRef<boolean>(false);
 
-  const appendCardBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
+  const appendCardBatchFiles = useCallback(async (acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       if (!skipCsvCheck) {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
@@ -929,8 +965,22 @@ export default function Home() {
         }
       }
 
-      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
+
+      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+      if (oversized.length > 0) {
+        setIsOptimizingUploads(true);
+        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`);
+        try {
+          imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
+            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+          });
+        } finally {
+          setIsOptimizingUploads(false);
+          setUploadOptimizationMsg("");
+        }
+      }
 
       setCardBatchItems(prev => {
         const currentCount = prev.length;
@@ -974,7 +1024,7 @@ export default function Home() {
     }
   }, []);
 
-  const appendDisplayBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
+  const appendDisplayBatchFiles = useCallback(async (acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       if (!skipCsvCheck) {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
@@ -983,8 +1033,22 @@ export default function Home() {
         }
       }
 
-      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
+
+      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+      if (oversized.length > 0) {
+        setIsOptimizingUploads(true);
+        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`);
+        try {
+          imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
+            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+          });
+        } finally {
+          setIsOptimizingUploads(false);
+          setUploadOptimizationMsg("");
+        }
+      }
 
       setDisplayBatchItems(prev => {
         const currentCount = prev.length;
@@ -1027,7 +1091,7 @@ export default function Home() {
     }
   }, []);
 
-  const appendBoosterBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
+  const appendBoosterBatchFiles = useCallback(async (acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       if (!skipCsvCheck) {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
@@ -1036,8 +1100,22 @@ export default function Home() {
         }
       }
 
-      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
+
+      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+      if (oversized.length > 0) {
+        setIsOptimizingUploads(true);
+        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`);
+        try {
+          imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
+            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+          });
+        } finally {
+          setIsOptimizingUploads(false);
+          setUploadOptimizationMsg("");
+        }
+      }
 
       setBoosterBatchItems(prev => {
         const currentCount = prev.length;
@@ -1081,7 +1159,7 @@ export default function Home() {
     }
   }, []);
 
-  const appendStreamBatchFiles = useCallback((acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
+  const appendStreamBatchFiles = useCallback(async (acceptedFiles: File[], _fileRejections?: unknown, _event?: unknown, skipCsvCheck = false) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       if (!skipCsvCheck) {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
@@ -1090,8 +1168,22 @@ export default function Home() {
         }
       }
 
-      const imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
+      let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
+
+      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+      if (oversized.length > 0) {
+        setIsOptimizingUploads(true);
+        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vor dem Stanzvisier-Zuschnitt optimiert...`);
+        try {
+          imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
+            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+          });
+        } finally {
+          setIsOptimizingUploads(false);
+          setUploadOptimizationMsg("");
+        }
+      }
 
       // 1. Intelligente Vorder- & Rückseiten-Analyse für Stream-Cards
       setStreamCards(prev => {
@@ -2627,9 +2719,22 @@ export default function Home() {
     noClick: true
   });
 
-  const onStreamBgDrop = useCallback((acceptedFiles: File[]) => {
+  const onStreamBgDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
-      const bgFile = acceptedFiles[0];
+      let bgFile = acceptedFiles[0];
+      if (bgFile.size > MAX_SAFE_FILE_SIZE) {
+        setIsOptimizingUploads(true);
+        setUploadOptimizationMsg("Hintergrundbild wird für Stream Studio optimiert...");
+        try {
+          const res = await optimizeImageFile(bgFile);
+          bgFile = res.file;
+        } catch (err) {
+          console.error("Fehler beim Optimieren des Hintergrundbildes:", err);
+        } finally {
+          setIsOptimizingUploads(false);
+          setUploadOptimizationMsg("");
+        }
+      }
       setStreamCustomBgFile(bgFile);
       setStreamCustomBgPreview(URL.createObjectURL(bgFile));
     }
@@ -6152,6 +6257,13 @@ export default function Home() {
                   </div>
                 </div>
               )}
+
+              {isOptimizingUploads && (
+                <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                  <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                  <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden vorab optimiert..."}</span>
+                </div>
+              )}
             </div>
 
             {/* Run Button */}
@@ -6884,6 +6996,13 @@ export default function Home() {
                     )}
                   </div>
                 )}
+
+                {isOptimizingUploads && (
+                  <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                    <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                    <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden vorab optimiert..."}</span>
+                  </div>
+                )}
               </div>
             </section>
 
@@ -7343,6 +7462,13 @@ export default function Home() {
                             <X className="w-4 h-4" />
                           </button>
                         )}
+                      </div>
+                    )}
+
+                    {isOptimizingUploads && (
+                      <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                        <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                        <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden vorab optimiert..."}</span>
                       </div>
                     )}
                   </div>
@@ -8022,9 +8148,19 @@ export default function Home() {
                         </span>
                       </>
                     )}
+                    <span className="px-3 py-1 rounded-lg bg-purple-950/40 border border-purple-800/40 text-[11px] font-medium text-purple-300">
+                      🛡️ Auto-Komprimierung vor Visier (≤ 2 MB)
+                    </span>
                   </div>
                 </div>
               </div>
+
+              {isOptimizingUploads && (
+                <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                  <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                  <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden für das Stanzvisier optimiert..."}</span>
+                </div>
+              )}
             </div>
 
             {/* Active Card Single Preview & Process Section */}

@@ -550,7 +550,7 @@ export async function POST(request: Request) {
         const bgBase64 = existingBgParam.split(",")[1];
         backgroundBuffer = await sharp(Buffer.from(bgBase64, "base64"))
           .resize(1024, 1024, { fit: "cover", kernel: "lanczos3" })
-          .png()
+          .jpeg({ quality: 85 })
           .toBuffer();
         console.log("[Stream Preview API] Vorhandenes Hintergrundbild erfolgreich wiederverwendet.");
       } catch (bgReuseErr) {
@@ -563,7 +563,7 @@ export async function POST(request: Request) {
         const customBgArrayBuf = await customBgFile.arrayBuffer();
         backgroundBuffer = await sharp(Buffer.from(customBgArrayBuf))
           .resize(1024, 1024, { fit: "cover", kernel: "lanczos3" })
-          .png()
+          .jpeg({ quality: 85 })
           .toBuffer();
       } catch (bgErr) {
         console.warn("[Stream Preview API] Custom background read failed:", bgErr);
@@ -671,7 +671,7 @@ CRITICAL MANDATORY RULE: Completely ignore, omit, and exclude any Pokémon, char
                   const rawBuf = Buffer.from(imgData, "base64");
                   backgroundBuffer = await sharp(rawBuf)
                     .resize(1024, 1024, { fit: "cover", position: "centre", kernel: "lanczos3" })
-                    .png()
+                    .jpeg({ quality: 85 })
                     .toBuffer();
                   break;
                 }
@@ -717,7 +717,7 @@ CRITICAL MANDATORY RULE: Completely ignore, omit, and exclude any Pokémon, char
                   const rawBuf = Buffer.from(bytes, "base64");
                   backgroundBuffer = await sharp(rawBuf)
                     .resize(1024, 1024, { fit: "cover", position: "centre", kernel: "lanczos3" })
-                    .png()
+                    .jpeg({ quality: 85 })
                     .toBuffer();
                   break;
                 }
@@ -739,7 +739,7 @@ CRITICAL MANDATORY RULE: Completely ignore, omit, and exclude any Pokémon, char
           .resize(1024, 1024, { fit: "cover", kernel: "lanczos3" })
           .blur(45)
           .modulate({ brightness: 0.65, saturation: 0.9 })
-          .png()
+          .jpeg({ quality: 85 })
           .toBuffer();
       }
     }
