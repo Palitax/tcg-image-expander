@@ -817,11 +817,31 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
     `<svg width="${targetW}" height="${targetH}"><rect x="0" y="0" width="${targetW}" height="${targetH}" rx="${cornerRadius}" ry="${cornerRadius}" fill="white"/></svg>`
   );
 
-  const cutoutCardBuffer = await sharp(rawExtractedCard)
+  let cutoutCardBuffer = await sharp(rawExtractedCard)
     .ensureAlpha()
     .composite([{ input: roundedMaskSvg, blend: "dest-in" }])
-    .png({ compressionLevel: 7 })
+    .png({ compressionLevel: 9, effort: 7 })
     .toBuffer();
+
+  // Sicherheitsprüfung: Puffer unter 1.8 MB halten, damit Base64-JSON unter 4.5 MB Serverlimit bleibt
+  if (cutoutCardBuffer.length > 1.8 * 1024 * 1024) {
+    const safeW = Math.round(targetW * 0.8);
+    const safeH = Math.round(targetH * 0.8);
+    const safeCornerRadius = Math.max(4, Math.round(safeW * cornerRadiusPercent));
+    const safeMaskSvg = Buffer.from(
+      `<svg width="${safeW}" height="${safeH}"><rect x="0" y="0" width="${safeW}" height="${safeH}" rx="${safeCornerRadius}" ry="${safeCornerRadius}" fill="white"/></svg>`
+    );
+    const safeExtracted = await sharp(workingBuffer)
+      .extract({ left: cx1, top: cy1, width: extractW, height: extractH })
+      .resize(safeW, safeH)
+      .png()
+      .toBuffer();
+    cutoutCardBuffer = await sharp(safeExtracted)
+      .ensureAlpha()
+      .composite([{ input: safeMaskSvg, blend: "dest-in" }])
+      .png({ compressionLevel: 9, effort: 7 })
+      .toBuffer();
+  }
 
   // 7. Extract Inner Illustration for Outpainting
   let ix1 = illustrationCoords?.x1 ?? Math.round(cx1 + extractW * (isFullArt ? 0.03 : 0.08));

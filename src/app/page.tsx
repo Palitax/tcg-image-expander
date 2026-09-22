@@ -200,7 +200,7 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   console.error(`[API HTTP Error] Status ${response.status}: ${response.statusText}`, "Raw response:", rawText);
 
   if (response.status === 413) {
-    throw new Error("Die Bilddatei ist zu groß für den Server (über 4.5 MB).");
+    throw new Error("Die Bilddatei ist zu groß für den Server (über 4.5 MB). Sie wird für dich automatisch komprimiert.");
   }
 
   // Handle error status with full server detail preservation
@@ -226,55 +226,163 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
   throw new Error(errorMessage);
 };
 
-const optimizeImageFile = async (file: File, maxDimension = 2500): Promise<File> => {
-  if (file.size <= 3 * 1024 * 1024) return file;
+const MAX_SAFE_FILE_SIZE = 2.8 * 1024 * 1024; // 2.8 MB (sicher unter Vercels 4.5 MB Limit)
+
+const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<File> => {
+  // Wenn Datei bereits sicher unter dem Limit liegt, unverändert nutzen
+  if (file.size <= MAX_SAFE_FILE_SIZE) {
+    return file;
+  }
+
+  console.log(`[Image Optimizer] Datei ${(file.size / 1024 / 1024).toFixed(2)}MB überschreitet 2.8MB. Starte automatische Bildoptimierung...`);
 
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-    img.onload = () => {
+
+    img.onload = async () => {
       URL.revokeObjectURL(url);
-      let { width, height } = img;
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
-        } else {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
+      const originalW = img.naturalWidth || img.width;
+      const originalH = img.naturalHeight || img.height;
+
+      const isPng = file.type === "image/png" || file.name.toLowerCase().endsWith(".png");
+
+      let currentMaxDim = Math.min(maxDimension, Math.max(originalW, originalH));
+      let currentQuality = 0.88;
+      let bestBlob: Blob | null = null;
+
+      for (let attempt = 0; attempt < 4; attempt++) {
+        let width = originalW;
+        let height = originalH;
+
+        if (width > currentMaxDim || height > currentMaxDim) {
+          if (width > height) {
+            height = Math.round((height * currentMaxDim) / width);
+            width = currentMaxDim;
+          } else {
+            width = Math.round((width * currentMaxDim) / height);
+            height = currentMaxDim;
+          }
         }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          break;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Prüfe ob PNG tatsächlich Transparenz enthält
+        let hasTransparency = false;
+        if (isPng) {
+          try {
+            const imgData = ctx.getImageData(0, 0, width, height).data;
+            const step = Math.max(1, Math.floor(imgData.length / 4000)) * 4;
+            for (let i = 3; i < imgData.length; i += step) {
+              if (imgData[i] < 250) {
+                hasTransparency = true;
+                break;
+              }
+            }
+          } catch {
+            hasTransparency = false;
+          }
+        }
+
+        // Bei Transparenz WebP nutzen, sonst ultra-kompaktes JPEG
+        const targetMime = hasTransparency ? "image/webp" : "image/jpeg";
+
+        const blob: Blob | null = await new Promise((res) => {
+          canvas.toBlob(res, targetMime, currentQuality);
+        });
+
+        if (blob) {
+          console.log(`[Image Optimizer] Versuch ${attempt + 1}: ${targetMime} ${width}x${height} q=${currentQuality.toFixed(2)} -> ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
+
+          if (!bestBlob || blob.size < bestBlob.size) {
+            bestBlob = blob;
+          }
+
+          if (blob.size <= MAX_SAFE_FILE_SIZE) {
+            const ext = targetMime === "image/webp" ? ".webp" : ".jpg";
+            const newName = file.name.replace(/\.[^/.]+$/, "") + ext;
+            const optimizedFile = new File([blob], newName, { type: targetMime });
+            console.log(`[Image Optimizer] Bildgröße erfolgreich reduziert: ${(file.size / 1024 / 1024).toFixed(2)}MB -> ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
+            resolve(optimizedFile);
+            return;
+          }
+        }
+
+        // Auflösung & Qualität für den nächsten Durchlauf anpassen
+        currentMaxDim = Math.round(currentMaxDim * 0.8);
+        currentQuality = Math.max(0.65, currentQuality - 0.08);
       }
 
+      if (bestBlob && (bestBlob.size < file.size || file.size > MAX_SAFE_FILE_SIZE)) {
+        const mime = bestBlob.type || "image/jpeg";
+        const ext = mime === "image/webp" ? ".webp" : ".jpg";
+        const newName = file.name.replace(/\.[^/.]+$/, "") + ext;
+        const optimizedFile = new File([bestBlob], newName, { type: mime });
+        console.log(`[Image Optimizer] Best-effort komprimierte Datei: ${(optimizedFile.size / 1024 / 1024).toFixed(2)}MB`);
+        resolve(optimizedFile);
+        return;
+      }
+
+      resolve(file);
+    };
+
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      console.error("[Image Optimizer] Bild konnte im Browser nicht geladen werden:", e);
+      resolve(file);
+    };
+
+    img.src = url;
+  });
+};
+
+const ensureSafeBase64 = async (base64Str: string | null | undefined, maxDim = 900): Promise<string> => {
+  if (!base64Str) return "";
+  // Base64-Strings unter 1.8MB sind für JSON-Payloads völlig unbedenklich
+  if (base64Str.length < 1.8 * 1024 * 1024) return base64Str;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
       const canvas = document.createElement("canvas");
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext("2d");
       if (!ctx) {
-        resolve(file);
+        resolve(base64Str);
         return;
       }
       ctx.drawImage(img, 0, 0, width, height);
-
-      const mimeType = file.type === "image/png" ? "image/png" : "image/jpeg";
-      canvas.toBlob(
-        (blob) => {
-          if (blob && blob.size < file.size) {
-            const optimizedFile = new File([blob], file.name, { type: mimeType });
-            console.log(`[Image Optimizer] Reduced file size: ${(file.size / 1024 / 1024).toFixed(2)}MB -> ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
-            resolve(optimizedFile);
-          } else {
-            resolve(file);
-          }
-        },
-        mimeType,
-        0.90
-      );
+      try {
+        const webp = canvas.toDataURL("image/webp", 0.90);
+        if (webp && webp.startsWith("data:image/webp") && webp.length < base64Str.length) {
+          resolve(webp);
+          return;
+        }
+      } catch {}
+      const png = canvas.toDataURL("image/png");
+      resolve(png.length < base64Str.length ? png : base64Str);
     };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(file);
-    };
-    img.src = url;
+    img.onerror = () => resolve(base64Str);
+    img.src = base64Str;
   });
 };
 
@@ -2109,12 +2217,15 @@ export default function Home() {
     setCaseBgResultUrl(null);
 
     try {
+      const safeCard = await ensureSafeBase64(caseCardImage, 900);
+      const safeBg = (caseBgImage && caseBgImage !== "ambient") ? await ensureSafeBase64(caseBgImage, 1024) : null;
+
       const response = await fetchWithRetry("/api/pipeline/case", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          cardImage: caseCardImage,
-          backgroundImage: caseBgImage === "ambient" ? null : caseBgImage,
+          cardImage: safeCard,
+          backgroundImage: safeBg,
           isCaseOverlay: isCaseOverlayLoaded
         })
       });
@@ -2629,13 +2740,16 @@ export default function Home() {
       let finalResult169 = "";
       let finalResult916 = "";
 
+      const rawCardToMerge = cropTrimmedCard || trimmedCard;
+      const safeCardToMerge = await ensureSafeBase64(rawCardToMerge, 900);
+
       if (verticalBackgroundImage) {
         const [merge169Res, merge916Res] = await Promise.all([
           fetchWithRetry("/api/pipeline/merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
-              originalImage: cropTrimmedCard || trimmedCard, 
+              originalImage: safeCardToMerge, 
               backgroundImage,
               isTrimmed: !!(cropTrimmedCard || trimmedCard)
             }),
@@ -2645,7 +2759,7 @@ export default function Home() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
-              originalImage: cropTrimmedCard || trimmedCard, 
+              originalImage: safeCardToMerge, 
               backgroundImage: verticalBackgroundImage,
               isTrimmed: !!(cropTrimmedCard || trimmedCard)
             }),
@@ -2662,7 +2776,7 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
-            originalImage: cropTrimmedCard || trimmedCard, 
+            originalImage: safeCardToMerge, 
             backgroundImage,
             isTrimmed: !!(cropTrimmedCard || trimmedCard)
           }),
@@ -2844,15 +2958,18 @@ export default function Home() {
       let finalDisplayResult169 = "";
       let finalDisplayResult916 = "";
 
+      const safeDisplayCutout = await ensureSafeBase64(cutoutImage, 800);
+      const safeWatermark = watermarkPreviewUrl ? await ensureSafeBase64(watermarkPreviewUrl, 500) : null;
+
       if (verticalBackgroundImage) {
         const [merge169Res, merge916Res] = await Promise.all([
           fetchWithRetry("/api/pipeline/display-merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
-              displayCutout: cutoutImage, 
+              displayCutout: safeDisplayCutout, 
               backgroundImage,
-              watermarkImage: watermarkPreviewUrl,
+              watermarkImage: safeWatermark,
               watermarkPosition,
               watermarkOpacity,
               watermarkScale
@@ -2863,9 +2980,9 @@ export default function Home() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
-              displayCutout: cutoutImage, 
+              displayCutout: safeDisplayCutout, 
               backgroundImage: verticalBackgroundImage,
-              watermarkImage: watermarkPreviewUrl,
+              watermarkImage: safeWatermark,
               watermarkPosition,
               watermarkOpacity,
               watermarkScale
@@ -2883,9 +3000,9 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
-            displayCutout: cutoutImage, 
+            displayCutout: safeDisplayCutout, 
             backgroundImage,
-            watermarkImage: watermarkPreviewUrl,
+            watermarkImage: safeWatermark,
             watermarkPosition,
             watermarkOpacity,
             watermarkScale
@@ -3069,15 +3186,18 @@ export default function Home() {
       let finalBoosterResult169 = "";
       let finalBoosterResult916 = "";
 
+      const safeBoosterCutout = await ensureSafeBase64(cutoutImage, 800);
+      const safeWatermark = watermarkPreviewUrl ? await ensureSafeBase64(watermarkPreviewUrl, 500) : null;
+
       if (verticalBackgroundImage) {
         const [merge169Res, merge916Res] = await Promise.all([
           fetchWithRetry("/api/pipeline/display-merge", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
-              displayCutout: cutoutImage, 
+              displayCutout: safeBoosterCutout, 
               backgroundImage,
-              watermarkImage: watermarkPreviewUrl,
+              watermarkImage: safeWatermark,
               watermarkPosition,
               watermarkOpacity,
               watermarkScale
@@ -3088,9 +3208,9 @@ export default function Home() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
-              displayCutout: cutoutImage, 
+              displayCutout: safeBoosterCutout, 
               backgroundImage: verticalBackgroundImage,
-              watermarkImage: watermarkPreviewUrl,
+              watermarkImage: safeWatermark,
               watermarkPosition,
               watermarkOpacity,
               watermarkScale
@@ -3108,9 +3228,9 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
-            displayCutout: cutoutImage, 
+            displayCutout: safeBoosterCutout, 
             backgroundImage,
-            watermarkImage: watermarkPreviewUrl,
+            watermarkImage: safeWatermark,
             watermarkPosition,
             watermarkOpacity,
             watermarkScale
@@ -3739,7 +3859,8 @@ export default function Home() {
       const formData = new FormData();
       formData.append("cardImage", fileToProcess);
       if (streamMode === "classic" && streamCustomBgFile) {
-        formData.append("backgroundImage", streamCustomBgFile);
+        const optimizedBg = await optimizeImageFile(streamCustomBgFile);
+        formData.append("backgroundImage", optimizedBg);
       }
       if (existingBgImage) {
         formData.append("existingBgImage", existingBgImage);
@@ -6478,7 +6599,10 @@ export default function Home() {
                               if (f) {
                                 setWatermarkFile(f);
                                 const reader = new FileReader();
-                                reader.onload = () => setWatermarkPreviewUrl(reader.result as string);
+                                reader.onload = async () => {
+                                  const safeWm = await ensureSafeBase64(reader.result as string, 500);
+                                  setWatermarkPreviewUrl(safeWm);
+                                };
                                 reader.readAsDataURL(f);
                               }
                             }}

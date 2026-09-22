@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       apiKey,
       skipCardCrop,
       cornerRadiusPercent: 0.038,
-      maxCardDimension: 1200,
+      maxCardDimension: 1000,
       edgePaddingPx,
       verticalOffsetPx,
       bottomTrimPx,

@@ -165,7 +165,7 @@ export async function POST(request: Request) {
           left: finalLeft
         }
       ])
-      .png()
+      .png({ compressionLevel: 8 })
       .toBuffer();
 
     const finalBase64 = finalResultBuffer.toString("base64");

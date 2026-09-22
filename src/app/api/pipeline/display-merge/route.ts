@@ -218,7 +218,7 @@ export async function POST(request: Request) {
 
     const finalResultBuffer = await sharp(backgroundBuffer)
       .composite(compositeArray)
-      .png()
+      .png({ compressionLevel: 8 })
       .toBuffer();
 
     const finalBase64 = finalResultBuffer.toString("base64");
