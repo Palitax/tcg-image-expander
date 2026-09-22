@@ -25,14 +25,38 @@ class TCGStreamEngine:
 
         # Lokale TCG-Set-Datenbank
         self.set_database: Dict[str, str] = {
-            "M1S": "Twilight Masquerade",
-            "M2": "Supercharged Breaker",
-            "M2A": "Battle Partners",
-            "SV6": "Twilight Masquerade",
-            "SV06": "Twilight Masquerade",
-            "SV7": "Stellar Crown",
-            "SV8": "Surging Sparks",
+            "M1": "Mega Brave",
+            "M1S": "Mega Brave",
+            "M1B": "Mega Symphonia",
+            "M2": "Inferno X",
+            "M2A": "Mega Dream ex",
+            "M3": "Nihil Zero",
+            "M4": "Ninja Spinner",
+            "M5": "Abyss Eye",
+            "M6": "Storm Emeralda",
+            "SV1S": "Scarlet ex",
+            "SV1V": "Violet ex",
+            "SV1A": "Triplet Beat",
+            "SV2D": "Clay Burst",
+            "SV2P": "Snow Hazard",
+            "SV2A": "Pokémon Card 151",
+            "SV3": "Ruler of the Black Flame",
+            "SV3A": "Raging Surf",
+            "SV4K": "Ancient Roar",
+            "SV4M": "Future Flash",
+            "SV4A": "Shiny Treasure ex",
+            "SV5K": "Wild Force",
+            "SV5M": "Cyber Judge",
+            "SV5A": "Crimson Haze",
+            "SV6": "Mask of Change",
+            "SV6A": "Night Wanderer",
+            "SV7": "Stellar Miracle",
+            "SV7A": "Paradise Dragona",
+            "SV8": "Supercharged Breaker",
             "SV8A": "Terastal Festival",
+            "SV9": "Battle Partners",
+            "SV9A": "Heat Wave Arena",
+            "SV10": "The Glory of Team Rocket",
             "OP05": "Awakening of the New Era",
             "OP-05": "Awakening of the New Era",
             "OP06": "Wings of the Captain",
@@ -97,10 +121,10 @@ class TCGStreamEngine:
             "Du bist ein ultra-präziser Computer-Vision-Experte für Trading Card Games (Pokémon, One Piece, Magic etc.).\n"
             "Deine Aufgabe ist es, die Sammelkarte im Bild pixelgenau zu lokalisieren und zu analysieren:\n\n"
             "1. OCR & METADATEN:\n"
-            "   - card_name: Offizieller englischer Kartenname (Japanisch übersetzen, z.B. 'ワンパチ' -> 'Yamper', 'ヌイコグマ' -> 'Stufful', 'ユキカブリ' -> 'Snover').\n"
-            "   - collector_number: Exakte Sammlernummer (z.B. '086/080', '075/063', '067/063', '083/080', '195/193'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
-            "   - set_code: Set-Kürzel unten links (z.B. 'M2', 'M1', 'M4', 'SV5a', 'SV4K', 'OP05'). Falls ein Regulationszeichen in einer Box steht (z.B. [I], [H], [G]), ignoriere diesen einzelnen Buchstaben und lies das eigentliche Set-Kürzel direkt daneben (z.B. 'M2'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
-            "   - set_name: Offizieller englischer Set-Name (z.B. 'Inferno X', 'Ninja Spinner', 'Mega Brave', 'Crimson Haze', 'Ancient Roar', '151'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - card_name: Offizieller englischer Kartenname (Japanisch übersetzen, z.B. 'ワンパチ' -> 'Yamper', 'ヌイコグマ' -> 'Stufful', 'ユキカブリ' -> 'Snover', 'エリキテル' -> 'Helioptile').\n"
+            "   - collector_number: Exakte Sammlernummer (z.B. '086/080', '075/063', '070/063', '067/063', '083/080', '195/193'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - set_code: Set-Kürzel unten links (z.B. 'M1S', 'M1', 'M2', 'M4', 'SV5a', 'SV4K', 'OP05'). Falls ein Regulationszeichen in einer Box steht (z.B. [I], [H], [G]), ignoriere diesen einzelnen Buchstaben und lies das eigentliche Set-Kürzel direkt daneben (z.B. 'M1S', 'M2'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - set_name: Offizieller englischer Set-Name (z.B. 'Mega Brave', 'Inferno X', 'Ninja Spinner', 'Crimson Haze', 'Ancient Roar', '151'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
             "   - WICHTIG BEI KARTENRÜCKSEITEN:\n"
             "     Falls das Bild die RÜCKSEITE einer Sammelkarte zeigt (z.B. klassische Pokémon-Rückseite mit blauem Wirbel/Pokéball, One Piece Rücken, Magic-Rückseite):\n"
             "     Setze is_card_back=True, card_name='Card Back', collector_number='', set_code='', set_name=''! Niemals 'N/A' eintragen!\n\n"
@@ -155,9 +179,28 @@ class TCGStreamEngine:
                     if parsed.set_name:
                         parsed.set_name = _clean_tcg_field(parsed.set_name)
                     
-                    # Kartenrückseite-Schutz
-                    if parsed.is_card_back or "back" in parsed.card_name.lower() or "rückseite" in parsed.card_name.lower():
+                    # Fallback auf lokale Set-Datenbank falls set_name fehlt
+                    if parsed.set_code and not parsed.set_name:
+                        norm_code = parsed.set_code.strip().upper().replace("-", "")
+                        if norm_code in self.set_database:
+                            parsed.set_name = self.set_database[norm_code]
+
+                    # Kartenrückseite-Schutz:
+                    # Eine Karte ist NUR DANN eine Rückseite, wenn KEINE Sammlernummer und KEIN Set-Code vorhanden sind!
+                    is_explicit_back_name = any(
+                        x in parsed.card_name.lower() for x in ["card back", "pokémon card back", "pokemon card back", "rückseite"]
+                    )
+                    has_front_identifiers = bool(parsed.collector_number or parsed.set_code)
+
+                    if has_front_identifiers:
+                        # Hat Sammlernummer oder Set-Kürzel -> Garantiert eine Vorderseite!
+                        parsed.is_card_back = False
+                        if is_explicit_back_name:
+                            parsed.card_name = ""
+                    elif parsed.is_card_back or is_explicit_back_name:
+                        # Reale Kartenrückseite ohne Sammlernummer/Set-Kürzel
                         parsed.is_card_back = True
+                        parsed.card_name = "Pokémon Card Back"
                         parsed.collector_number = ""
                         parsed.set_code = ""
                         parsed.set_name = ""

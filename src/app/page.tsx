@@ -3412,6 +3412,13 @@ export default function Home() {
         formData.append("bottomTrim", streamBottomTrim.toString());
         formData.append("mattingEngine", streamMattingEngine);
 
+        if (activeStreamSide === "back") {
+          formData.append("isBackSide", "true");
+          if (streamCards[activeStreamCardIndex]?.front?.metadata) {
+            formData.append("inheritedMetadata", JSON.stringify(streamCards[activeStreamCardIndex].front.metadata));
+          }
+        }
+
         if (streamCropBox) {
           formData.append("cropBox", JSON.stringify(streamCropBox));
           formData.append("cropX", streamCropBox.x.toString());
@@ -3435,6 +3442,9 @@ export default function Home() {
           if (data.cutoutImageUrl) {
             setStreamCutoutUrl(data.cutoutImageUrl);
           }
+          if (data.metadata) {
+            setStreamMetadata(data.metadata);
+          }
           setLastExtractedEngine(streamMattingEngine);
           if (streamFile) {
             setStreamBatchItems(prev =>
@@ -3442,9 +3452,31 @@ export default function Home() {
                 ...it,
                 resultImageUrl: data.resultImageUrl,
                 cutoutImageUrl: data.cutoutImageUrl || it.cutoutImageUrl,
-                metadata: streamMetadata
+                metadata: data.metadata || streamMetadata
               } : it)
             );
+          }
+          if (streamCards.length > 0) {
+            setStreamCards(prev => prev.map((c, idx) => {
+              if (idx !== activeStreamCardIndex) return c;
+              const isBack = activeStreamSide === "back";
+              const updatedMeta = data.metadata || streamMetadata;
+              return {
+                ...c,
+                front: !isBack ? {
+                  ...c.front,
+                  resultImageUrl: data.resultImageUrl,
+                  cutoutImageUrl: data.cutoutImageUrl || c.front.cutoutImageUrl,
+                  metadata: updatedMeta
+                } : c.front,
+                back: (isBack && c.back) ? {
+                  ...c.back,
+                  resultImageUrl: data.resultImageUrl,
+                  cutoutImageUrl: data.cutoutImageUrl || c.back.cutoutImageUrl,
+                  metadata: updatedMeta
+                } : (c.back ?? null)
+              };
+            }));
           }
         }
       } else {
@@ -3463,14 +3495,37 @@ export default function Home() {
         const data = await parseResponseData(response, "Fehler beim Aktualisieren der Stream-Vorschau.");
         if (data.resultImageUrl) {
           setStreamResultUrl(data.resultImageUrl);
+          if (data.metadata) {
+            setStreamMetadata(data.metadata);
+          }
           if (streamFile) {
             setStreamBatchItems(prev =>
               prev.map(it => it.file.name === streamFile.name ? {
                 ...it,
                 resultImageUrl: data.resultImageUrl,
-                metadata: streamMetadata
+                metadata: data.metadata || streamMetadata
               } : it)
             );
+          }
+          if (streamCards.length > 0) {
+            setStreamCards(prev => prev.map((c, idx) => {
+              if (idx !== activeStreamCardIndex) return c;
+              const isBack = activeStreamSide === "back";
+              const updatedMeta = data.metadata || streamMetadata;
+              return {
+                ...c,
+                front: !isBack ? {
+                  ...c.front,
+                  resultImageUrl: data.resultImageUrl,
+                  metadata: updatedMeta
+                } : c.front,
+                back: (isBack && c.back) ? {
+                  ...c.back,
+                  resultImageUrl: data.resultImageUrl,
+                  metadata: updatedMeta
+                } : (c.back ?? null)
+              };
+            }));
           }
         }
       }
@@ -3518,6 +3573,14 @@ export default function Home() {
         setCode: metaToLoad.setCode || "",
         setName: metaToLoad.setName || "",
         slogan: metaToLoad.slogan || "MANACARDS – Unpack the magic"
+      });
+    } else {
+      setStreamMetadata({
+        cardName: "",
+        cardNumber: "",
+        setCode: "",
+        setName: "",
+        slogan: "MANACARDS – Unpack the magic"
       });
     }
   };
@@ -3689,14 +3752,17 @@ export default function Home() {
       formData.append("bottomTrim", streamBottomTrim.toString());
       formData.append("mattingEngine", streamMattingEngine);
 
-      if (inheritedMetadata) {
-        formData.append("inheritedMetadata", JSON.stringify(inheritedMetadata));
-      } else if (activeStreamSide === "back" && streamCards[activeStreamCardIndex]?.front?.metadata) {
-        formData.append("inheritedMetadata", JSON.stringify(streamCards[activeStreamCardIndex].front.metadata));
-      }
+      const isProcessingBack = typeof isBackSide === "boolean"
+        ? isBackSide
+        : (activeStreamSide === "back");
 
-      if (isBackSide || activeStreamSide === "back") {
+      if (isProcessingBack) {
         formData.append("isBackSide", "true");
+        if (inheritedMetadata) {
+          formData.append("inheritedMetadata", JSON.stringify(inheritedMetadata));
+        } else if (streamCards[activeStreamCardIndex]?.front?.metadata) {
+          formData.append("inheritedMetadata", JSON.stringify(streamCards[activeStreamCardIndex].front.metadata));
+        }
       }
 
       const cropToUse = customCropBox !== undefined ? customCropBox : streamCropBox;
@@ -3755,7 +3821,7 @@ export default function Home() {
         if (streamCards.length > 0) {
           setStreamCards(prev => prev.map((c, idx) => {
             if (idx !== activeStreamCardIndex) return c;
-            const updatedFront: StreamCardSide = activeStreamSide === "front" ? {
+            const updatedFront: StreamCardSide = !isProcessingBack ? {
               ...c.front,
               status: "completed",
               resultImageUrl: data.resultImageUrl,
@@ -3764,7 +3830,7 @@ export default function Home() {
               metadata: data.metadata,
               error: undefined
             } : c.front;
-            const updatedBack: StreamCardSide | null = (activeStreamSide === "back" && c.back) ? {
+            const updatedBack: StreamCardSide | null = (isProcessingBack && c.back) ? {
               ...c.back,
               status: "completed",
               resultImageUrl: data.resultImageUrl,
@@ -3773,7 +3839,7 @@ export default function Home() {
               metadata: data.metadata,
               error: undefined
             } : (c.back ?? null);
-            const cardName = (data.metadata?.cardName && data.metadata.cardName !== rawFile.name.replace(/\.[^/.]+$/, ""))
+            const cardName = (!isProcessingBack && data.metadata?.cardName && data.metadata.cardName !== rawFile.name.replace(/\.[^/.]+$/, ""))
               ? data.metadata.cardName
               : c.cardName;
             return {
@@ -3911,7 +3977,10 @@ export default function Home() {
         try {
           const frontResult = await handleProcessStreamImage(
             card.front.file,
-            card.front.cropBox
+            card.front.cropBox,
+            undefined,
+            undefined,
+            false
           );
 
           if (frontResult && frontResult.success) {
@@ -4040,7 +4109,7 @@ export default function Home() {
       setNewArtworkName(item.name);
 
       try {
-        const result = await handleProcessStreamImage(item.file);
+        const result = await handleProcessStreamImage(item.file, undefined, undefined, undefined, false);
         if (result && result.success) {
           console.log(`[Stream Batch] Item ${i + 1}/${items.length} ("${item.name}") SUCCEEDED.`);
           setStreamBatchItems(prev => 

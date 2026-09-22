@@ -449,32 +449,41 @@ export async function POST(request: Request) {
       usedFallback = cardCutoutResult.usedFallback;
     }
 
-    // Check if card is back side or if inherited metadata was provided
-    const isDetectedBack =
-      isBackSideParam ||
-      Boolean((cardCutoutResult as any).is_card_back) ||
-      cardCutoutResult.cardName.toLowerCase().includes("card back") ||
-      cardCutoutResult.cardName.toLowerCase().includes("rückseite") ||
-      cardCutoutResult.cardName.toLowerCase().includes("pokemon card back") ||
-      cardCutoutResult.cardName.toLowerCase().includes("pokémon card back");
-
     let finalCardName = cardCutoutResult.cardName || cardFile.name.replace(/\.[^/.]+$/, "");
     let finalCardNumber = cardCutoutResult.cardNumber || "";
     let finalSetCode = cardCutoutResult.setCode || "";
     let finalSetName = cardCutoutResult.setName || "";
 
+    // Check whether card has front card identifiers (collector number or set code)
+    const hasFrontIdentifiers = Boolean(
+      (finalCardNumber && !/^(n\/?a|na|none)$/i.test(finalCardNumber)) ||
+      (finalSetCode && !/^(n\/?a|na|none|tcg)$/i.test(finalSetCode))
+    );
+
+    // If inherited metadata is provided (e.g. from duplex front card), always use it
     if (inheritedMetadata && inheritedMetadata.cardName) {
       console.log(`[Stream Preview API] Übernehme bereitgestellte Metadaten der Vorderseite: "${inheritedMetadata.cardName}"`);
       finalCardName = inheritedMetadata.cardName;
       finalCardNumber = inheritedMetadata.cardNumber || "";
       finalSetCode = inheritedMetadata.setCode || "";
       finalSetName = inheritedMetadata.setName || "";
-    } else if (isDetectedBack) {
-      console.log("[Stream Preview API] Kartenrückseite ohne übergebene Vorderseiten-Metadaten erkannt.");
-      finalCardName = "Pokémon Card Back";
-      finalCardNumber = "";
-      finalSetCode = "";
-      finalSetName = "";
+    } else if (!hasFrontIdentifiers) {
+      // Check if it really is a card back when no front identifiers were found
+      const isExplicitBack =
+        isBackSideParam ||
+        Boolean((cardCutoutResult as any).is_card_back) ||
+        finalCardName.toLowerCase().includes("card back") ||
+        finalCardName.toLowerCase().includes("rückseite") ||
+        finalCardName.toLowerCase().includes("pokemon card back") ||
+        finalCardName.toLowerCase().includes("pokémon card back");
+
+      if (isExplicitBack) {
+        console.log("[Stream Preview API] Kartenrückseite ohne übergebene Vorderseiten-Metadaten erkannt.");
+        finalCardName = "Pokémon Card Back";
+        finalCardNumber = "";
+        finalSetCode = "";
+        finalSetName = "";
+      }
     }
 
     // STEP 3: Enrich card metadata using TCG Database
