@@ -129,12 +129,14 @@ export async function POST(request: Request) {
     const bottomTrimPx = parseInt((formData.get("bottomTrim") as string) || "0", 10) || 0;
     const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
-    let cropBox: { x: number; y: number; width: number; height: number } | null = null;
+    let cropBox: { x: number; y: number; width: number; height: number; imageWidth?: number; imageHeight?: number } | null = null;
     const cropBoxParam = formData.get("cropBox") as string | null;
     const cropX = formData.get("cropX");
     const cropY = formData.get("cropY");
     const cropW = formData.get("cropW");
     const cropH = formData.get("cropH");
+    const cropImageWidth = formData.get("cropImageWidth");
+    const cropImageHeight = formData.get("cropImageHeight");
 
     if (cropBoxParam) {
       try {
@@ -156,6 +158,50 @@ export async function POST(request: Request) {
         width: parseFloat(cropW as string),
         height: parseFloat(cropH as string)
       };
+    }
+
+    if (cropBox && cropImageWidth && cropImageHeight) {
+      cropBox.imageWidth = parseFloat(cropImageWidth as string);
+      cropBox.imageHeight = parseFloat(cropImageHeight as string);
+    }
+
+    if (cropBox && width && height) {
+      if (cropBox.width <= 1.0 && cropBox.height <= 1.0) {
+        cropBox = {
+          x: Math.round(cropBox.x * width),
+          y: Math.round(cropBox.y * height),
+          width: Math.round(cropBox.width * width),
+          height: Math.round(cropBox.height * height),
+          imageWidth: width,
+          imageHeight: height
+        };
+      } else if (cropBox.imageWidth && cropBox.imageHeight && (cropBox.imageWidth !== width || cropBox.imageHeight !== height)) {
+        const sx = width / cropBox.imageWidth;
+        const sy = height / cropBox.imageHeight;
+        console.log(`[Stream Card API] Visier-Skalierung: Referenz ${cropBox.imageWidth}x${cropBox.imageHeight} -> Bild ${width}x${height} (sx=${sx.toFixed(4)}, sy=${sy.toFixed(4)})`);
+        cropBox = {
+          x: Math.round(cropBox.x * sx),
+          y: Math.round(cropBox.y * sy),
+          width: Math.round(cropBox.width * sx),
+          height: Math.round(cropBox.height * sy),
+          imageWidth: width,
+          imageHeight: height
+        };
+      } else if (cropBox.width > width || cropBox.height > height || cropBox.x + cropBox.width > width * 1.05 || cropBox.y + cropBox.height > height * 1.05) {
+        const assumedOrigW = Math.max(cropBox.x + cropBox.width, width);
+        const assumedOrigH = Math.max(cropBox.y + cropBox.height, height);
+        const sx = width / assumedOrigW;
+        const sy = height / assumedOrigH;
+        console.warn(`[Stream Card API] cropBox überschreitet Bildgrenzen: Skaliere von vermuteter Auflösung ${assumedOrigW}x${assumedOrigH} auf ${width}x${height}`);
+        cropBox = {
+          x: Math.round(cropBox.x * sx),
+          y: Math.round(cropBox.y * sy),
+          width: Math.round(cropBox.width * sx),
+          height: Math.round(cropBox.height * sy),
+          imageWidth: width,
+          imageHeight: height
+        };
+      }
     }
 
     if (cropBox) {

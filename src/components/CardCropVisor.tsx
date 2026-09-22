@@ -20,6 +20,8 @@ export interface CropBox {
   y: number;
   width: number;
   height: number;
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 export interface CardCropVisorProps {
@@ -117,10 +119,19 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     let initialY: number;
 
     if (initialBox && initialBox.width > 0 && initialBox.height > 0) {
-      initialX = initialBox.x;
-      initialY = initialBox.y;
-      initialW = initialBox.width;
-      initialH = initialBox.height;
+      if (initialBox.imageWidth && initialBox.imageHeight && (initialBox.imageWidth !== nw || initialBox.imageHeight !== nh)) {
+        const sx = nw / initialBox.imageWidth;
+        const sy = nh / initialBox.imageHeight;
+        initialX = Math.round(initialBox.x * sx);
+        initialY = Math.round(initialBox.y * sy);
+        initialW = Math.round(initialBox.width * sx);
+        initialH = Math.round(initialBox.height * sy);
+      } else {
+        initialX = initialBox.x;
+        initialY = initialBox.y;
+        initialW = initialBox.width;
+        initialH = initialBox.height;
+      }
     } else if (nw >= 1200 && nw <= 1400 && nh >= 1700 && nh <= 1900) {
       // Epson DS-530 Scan (1299 x 1800 px) -> Exakte TCG-Kartenmaße
       initialW = 1170;
@@ -139,7 +150,14 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     initialX = Math.max(0, Math.min(nw - initialW, initialX));
     initialY = Math.max(0, Math.min(nh - initialH, initialY));
 
-    const newBox = { x: initialX, y: initialY, width: initialW, height: initialH };
+    const newBox: CropBox = {
+      x: initialX,
+      y: initialY,
+      width: initialW,
+      height: initialH,
+      imageWidth: nw,
+      imageHeight: nh
+    };
     setBox(newBox);
     onChange(newBox);
   };
@@ -152,9 +170,22 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
   // Synchronisiere Stanzrahmen wenn initialBox von der übergeordneten Komponente übergeben wird
   useEffect(() => {
     if (initialBox && initialBox.width > 0 && initialBox.height > 0) {
-      setBox(initialBox);
+      if (naturalSize && initialBox.imageWidth && initialBox.imageHeight && (initialBox.imageWidth !== naturalSize.width || initialBox.imageHeight !== naturalSize.height)) {
+        const sx = naturalSize.width / initialBox.imageWidth;
+        const sy = naturalSize.height / initialBox.imageHeight;
+        setBox({
+          x: Math.round(initialBox.x * sx),
+          y: Math.round(initialBox.y * sy),
+          width: Math.round(initialBox.width * sx),
+          height: Math.round(initialBox.height * sy),
+          imageWidth: naturalSize.width,
+          imageHeight: naturalSize.height
+        });
+      } else {
+        setBox(initialBox);
+      }
     }
-  }, [initialBox]);
+  }, [initialBox, naturalSize]);
 
   // ResizeObserver auf dem Wrapper
   useEffect(() => {
@@ -182,7 +213,14 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
       const clampedX = Math.max(0, Math.min(naturalSize.width - clampedW, Math.round(next.x)));
       const clampedY = Math.max(0, Math.min(naturalSize.height - clampedH, Math.round(next.y)));
 
-      const finalBox = { x: clampedX, y: clampedY, width: clampedW, height: clampedH };
+      const finalBox: CropBox = {
+        x: clampedX,
+        y: clampedY,
+        width: clampedW,
+        height: clampedH,
+        imageWidth: naturalSize.width,
+        imageHeight: naturalSize.height
+      };
       onChange(finalBox);
       return finalBox;
     });

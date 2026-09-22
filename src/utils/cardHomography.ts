@@ -36,6 +36,8 @@ export interface CardCropBox {
   y: number;
   width: number;
   height: number;
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 export interface ExtractCardHomographyOptions {
@@ -111,8 +113,16 @@ export async function extractCardHomography(
       args.push("--top-padding", options.topPaddingPx.toString());
     }
     if (options.cropBox) {
-      const { x, y, width, height } = options.cropBox;
-      args.push("--crop-box", `${x},${y},${width},${height}`);
+      const { x, y, width, height, imageWidth, imageHeight } = options.cropBox;
+      if (imageWidth && imageHeight && imageWidth > 0 && imageHeight > 0) {
+        const nx = (x / imageWidth).toFixed(6);
+        const ny = (y / imageHeight).toFixed(6);
+        const nw = (width / imageWidth).toFixed(6);
+        const nh = (height / imageHeight).toFixed(6);
+        args.push("--crop-box", `${nx},${ny},${nw},${nh}`);
+      } else {
+        args.push("--crop-box", `${x},${y},${width},${height}`);
+      }
     }
 
     // 3. Python-Prozess ausführen

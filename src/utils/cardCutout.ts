@@ -39,7 +39,7 @@ interface ExtractCardCutoutOptions {
   /** Top border margin expansion in pixels (ensures top border is preserved) */
   topPaddingPx?: number;
   /** Explicit manual crop box coordinates from the interactive visor */
-  cropBox?: { x: number; y: number; width: number; height: number } | null;
+  cropBox?: { x: number; y: number; width: number; height: number; imageWidth?: number; imageHeight?: number } | null;
 }
 
 /**
@@ -324,11 +324,44 @@ export async function extractCardCutout(
   let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
   // Wenn cropBox vom Visier übergeben wurde, exakt diese Koordinaten fest arretieren
-  if (cropBox && cropBox.width > 10 && cropBox.height > 10) {
-    const clampedX = Math.max(0, Math.min(width - 50, Math.round(cropBox.x)));
-    const clampedY = Math.max(0, Math.min(height - 50, Math.round(cropBox.y)));
-    const clampedW = Math.max(50, Math.min(width - clampedX, Math.round(cropBox.width)));
-    const clampedH = Math.max(50, Math.min(height - clampedY, Math.round(cropBox.height)));
+  if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
+    let cbX = cropBox.x;
+    let cbY = cropBox.y;
+    let cbW = cropBox.width;
+    let cbH = cropBox.height;
+
+    // 1. Normalisierte Koordinaten [0..1]
+    if (cbW <= 1.0 && cbH <= 1.0) {
+      cbX *= width;
+      cbY *= height;
+      cbW *= width;
+      cbH *= height;
+    } else if (cropBox.imageWidth && cropBox.imageHeight && (cropBox.imageWidth !== width || cropBox.imageHeight !== height)) {
+      // 2. Referenzauflösung weicht von tatsächlicher Puffergröße ab -> Proportional skalieren
+      const sx = width / cropBox.imageWidth;
+      const sy = height / cropBox.imageHeight;
+      console.log(`[Card Cutout] cropBox skaliert von Referenz ${cropBox.imageWidth}x${cropBox.imageHeight} auf Bild ${width}x${height} (sx=${sx.toFixed(4)}, sy=${sy.toFixed(4)})`);
+      cbX *= sx;
+      cbY *= sy;
+      cbW *= sx;
+      cbH *= sy;
+    } else if (cbW > width || cbH > height || cbX + cbW > width * 1.05 || cbY + cbH > height * 1.05) {
+      // 3. Fallback: cropBox überschreitet Bilddimensionen (z. B. unskalierte Koordinaten eines komprimierten Bildes)
+      const assumedOrigW = Math.max(cbX + cbW, width);
+      const assumedOrigH = Math.max(cbY + cbH, height);
+      const sx = width / assumedOrigW;
+      const sy = height / assumedOrigH;
+      console.warn(`[Card Cutout] cropBox überschreitet Bilddimensionen: Skaliere von vermuteter Auflösung ${assumedOrigW}x${assumedOrigH} auf ${width}x${height}`);
+      cbX *= sx;
+      cbY *= sy;
+      cbW *= sx;
+      cbH *= sy;
+    }
+
+    const clampedX = Math.max(0, Math.min(width - 50, Math.round(cbX)));
+    const clampedY = Math.max(0, Math.min(height - 50, Math.round(cbY)));
+    const clampedW = Math.max(50, Math.min(width - clampedX, Math.round(cbW)));
+    const clampedH = Math.max(50, Math.min(height - clampedY, Math.round(cbH)));
     cardCoords = {
       x1: clampedX,
       y1: clampedY,

@@ -228,14 +228,65 @@ const parseResponseData = async (response: Response, defaultErrorMsg: string): P
 
 const MAX_SAFE_FILE_SIZE = 2.8 * 1024 * 1024; // 2.8 MB (sicher unter Vercels 4.5 MB Limit)
 
-const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<File> => {
-  // Wenn Datei bereits sicher unter dem Limit liegt, unverändert nutzen
-  if (file.size <= MAX_SAFE_FILE_SIZE) {
-    return file;
+interface OptimizedImageResult {
+  file: File;
+  scaleX: number;
+  scaleY: number;
+  originalWidth: number;
+  originalHeight: number;
+  optimizedWidth: number;
+  optimizedHeight: number;
+}
+
+const adaptCropBoxToImage = (
+  cropBox: CropBox,
+  targetWidth: number,
+  targetHeight: number,
+  sourceWidth?: number,
+  sourceHeight?: number
+): CropBox => {
+  const srcW = (sourceWidth && sourceWidth > 0) ? sourceWidth : cropBox.imageWidth;
+  const srcH = (sourceHeight && sourceHeight > 0) ? sourceHeight : cropBox.imageHeight;
+
+  if (!srcW || !srcH || !targetWidth || !targetHeight || (srcW === targetWidth && srcH === targetHeight)) {
+    const clampedX = Math.max(0, Math.min(targetWidth > 0 ? targetWidth - 50 : cropBox.x, Math.round(cropBox.x)));
+    const clampedY = Math.max(0, Math.min(targetHeight > 0 ? targetHeight - 50 : cropBox.y, Math.round(cropBox.y)));
+    const clampedW = Math.max(50, Math.min(targetWidth > 0 ? targetWidth - clampedX : cropBox.width, Math.round(cropBox.width)));
+    const clampedH = Math.max(50, Math.min(targetHeight > 0 ? targetHeight - clampedY : cropBox.height, Math.round(cropBox.height)));
+    return {
+      x: clampedX,
+      y: clampedY,
+      width: clampedW,
+      height: clampedH,
+      imageWidth: targetWidth || srcW,
+      imageHeight: targetHeight || srcH
+    };
   }
 
-  console.log(`[Image Optimizer] Datei ${(file.size / 1024 / 1024).toFixed(2)}MB überschreitet 2.8MB. Starte automatische Bildoptimierung...`);
+  const scaleX = targetWidth / srcW;
+  const scaleY = targetHeight / srcH;
 
+  const scaledX = Math.round(cropBox.x * scaleX);
+  const scaledY = Math.round(cropBox.y * scaleY);
+  const scaledW = Math.round(cropBox.width * scaleX);
+  const scaledH = Math.round(cropBox.height * scaleY);
+
+  const clampedX = Math.max(0, Math.min(targetWidth - 50, scaledX));
+  const clampedY = Math.max(0, Math.min(targetHeight - 50, scaledY));
+  const clampedW = Math.max(50, Math.min(targetWidth - clampedX, scaledW));
+  const clampedH = Math.max(50, Math.min(targetHeight - clampedY, scaledH));
+
+  return {
+    x: clampedX,
+    y: clampedY,
+    width: clampedW,
+    height: clampedH,
+    imageWidth: targetWidth,
+    imageHeight: targetHeight
+  };
+};
+
+const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<OptimizedImageResult> => {
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -245,11 +296,29 @@ const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<File>
       const originalW = img.naturalWidth || img.width;
       const originalH = img.naturalHeight || img.height;
 
+      // Wenn Datei bereits sicher unter dem Limit liegt, unverändert nutzen
+      if (file.size <= MAX_SAFE_FILE_SIZE) {
+        resolve({
+          file,
+          scaleX: 1,
+          scaleY: 1,
+          originalWidth: originalW,
+          originalHeight: originalH,
+          optimizedWidth: originalW,
+          optimizedHeight: originalH
+        });
+        return;
+      }
+
+      console.log(`[Image Optimizer] Datei ${(file.size / 1024 / 1024).toFixed(2)}MB überschreitet 2.8MB. Starte automatische Bildoptimierung...`);
+
       const isPng = file.type === "image/png" || file.name.toLowerCase().endsWith(".png");
 
       let currentMaxDim = Math.min(maxDimension, Math.max(originalW, originalH));
       let currentQuality = 0.88;
       let bestBlob: Blob | null = null;
+      let lastW = originalW;
+      let lastH = originalH;
 
       for (let attempt = 0; attempt < 4; attempt++) {
         let width = originalW;
@@ -264,6 +333,9 @@ const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<File>
             height = currentMaxDim;
           }
         }
+
+        lastW = width;
+        lastH = height;
 
         const canvas = document.createElement("canvas");
         canvas.width = width;
@@ -310,8 +382,16 @@ const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<File>
             const ext = targetMime === "image/webp" ? ".webp" : ".jpg";
             const newName = file.name.replace(/\.[^/.]+$/, "") + ext;
             const optimizedFile = new File([blob], newName, { type: targetMime });
-            console.log(`[Image Optimizer] Bildgröße erfolgreich reduziert: ${(file.size / 1024 / 1024).toFixed(2)}MB -> ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
-            resolve(optimizedFile);
+            console.log(`[Image Optimizer] Bildgröße erfolgreich reduziert: ${(file.size / 1024 / 1024).toFixed(2)}MB -> ${(blob.size / 1024 / 1024).toFixed(2)}MB (${width}x${height})`);
+            resolve({
+              file: optimizedFile,
+              scaleX: width / originalW,
+              scaleY: height / originalH,
+              originalWidth: originalW,
+              originalHeight: originalH,
+              optimizedWidth: width,
+              optimizedHeight: height
+            });
             return;
           }
         }
@@ -326,18 +406,42 @@ const optimizeImageFile = async (file: File, maxDimension = 2000): Promise<File>
         const ext = mime === "image/webp" ? ".webp" : ".jpg";
         const newName = file.name.replace(/\.[^/.]+$/, "") + ext;
         const optimizedFile = new File([bestBlob], newName, { type: mime });
-        console.log(`[Image Optimizer] Best-effort komprimierte Datei: ${(optimizedFile.size / 1024 / 1024).toFixed(2)}MB`);
-        resolve(optimizedFile);
+        console.log(`[Image Optimizer] Best-effort komprimierte Datei: ${(optimizedFile.size / 1024 / 1024).toFixed(2)}MB (${lastW}x${lastH})`);
+        resolve({
+          file: optimizedFile,
+          scaleX: lastW / originalW,
+          scaleY: lastH / originalH,
+          originalWidth: originalW,
+          originalHeight: originalH,
+          optimizedWidth: lastW,
+          optimizedHeight: lastH
+        });
         return;
       }
 
-      resolve(file);
+      resolve({
+        file,
+        scaleX: 1,
+        scaleY: 1,
+        originalWidth: originalW,
+        originalHeight: originalH,
+        optimizedWidth: originalW,
+        optimizedHeight: originalH
+      });
     };
 
     img.onerror = (e) => {
       URL.revokeObjectURL(url);
       console.error("[Image Optimizer] Bild konnte im Browser nicht geladen werden:", e);
-      resolve(file);
+      resolve({
+        file,
+        scaleX: 1,
+        scaleY: 1,
+        originalWidth: 0,
+        originalHeight: 0,
+        optimizedWidth: 0,
+        optimizedHeight: 0
+      });
     };
 
     img.src = url;
@@ -2654,7 +2758,7 @@ export default function Home() {
       updateStepStatus("LAYOUT", "running");
       setActiveStepMessage("Bildgröße wird für Server optimiert...");
       
-      const fileToProcess = await optimizeImageFile(rawFile);
+      const { file: fileToProcess } = await optimizeImageFile(rawFile);
       setActiveStepMessage("Artwork-Bereich wird lokalisiert...");
       
       const cropFormData = new FormData();
@@ -2849,7 +2953,7 @@ export default function Home() {
       updateDisplayStepStatus("LAYOUT", "running");
       setDisplayActiveStepMessage("Bildgröße wird für Server optimiert...");
       
-      const fileToProcess = await optimizeImageFile(rawFile);
+      const { file: fileToProcess } = await optimizeImageFile(rawFile);
       setDisplayActiveStepMessage("Locating display box boundary...");
       
       const cropFormData = new FormData();
@@ -3077,7 +3181,7 @@ export default function Home() {
       updateBoosterStepStatus("LAYOUT", "running");
       setBoosterActiveStepMessage("Bildgröße wird für Server optimiert...");
       
-      const fileToProcess = await optimizeImageFile(rawFile);
+      const { file: fileToProcess } = await optimizeImageFile(rawFile);
       setBoosterActiveStepMessage("Locating booster pack boundary...");
       
       const cropFormData = new FormData();
@@ -3520,7 +3624,7 @@ export default function Home() {
     try {
       // Wenn Originaldatei vorhanden ist und Feinjustierung (Versatz/Trim/Visier) oder Engine geändert wurde, direkt mit dem vorhandenen Hintergrund neu zuschneiden
       if (streamFile && (streamVerticalOffset !== 0 || streamBottomTrim !== 0 || streamMattingEngine !== lastExtractedEngine || streamCropBox !== null)) {
-        const fileToProcess = await optimizeImageFile(streamFile);
+        const { file: fileToProcess, optimizedWidth, optimizedHeight, originalWidth, originalHeight } = await optimizeImageFile(streamFile);
         const formData = new FormData();
         formData.append("cardImage", fileToProcess);
         formData.append("existingBgImage", streamBgImageUrl);
@@ -3539,11 +3643,14 @@ export default function Home() {
         }
 
         if (streamCropBox) {
-          formData.append("cropBox", JSON.stringify(streamCropBox));
-          formData.append("cropX", streamCropBox.x.toString());
-          formData.append("cropY", streamCropBox.y.toString());
-          formData.append("cropW", streamCropBox.width.toString());
-          formData.append("cropH", streamCropBox.height.toString());
+          const scaledCrop = adaptCropBoxToImage(streamCropBox, optimizedWidth, optimizedHeight, originalWidth, originalHeight);
+          formData.append("cropBox", JSON.stringify(scaledCrop));
+          formData.append("cropX", scaledCrop.x.toString());
+          formData.append("cropY", scaledCrop.y.toString());
+          formData.append("cropW", scaledCrop.width.toString());
+          formData.append("cropH", scaledCrop.height.toString());
+          if (scaledCrop.imageWidth) formData.append("cropImageWidth", scaledCrop.imageWidth.toString());
+          if (scaledCrop.imageHeight) formData.append("cropImageHeight", scaledCrop.imageHeight.toString());
         }
 
         const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
@@ -3854,12 +3961,12 @@ export default function Home() {
     setStreamSteps(activeSteps.map(s => ({ ...s, status: "idle" })));
 
     try {
-      const fileToProcess = await optimizeImageFile(rawFile);
+      const { file: fileToProcess, optimizedWidth, optimizedHeight, originalWidth, originalHeight } = await optimizeImageFile(rawFile);
 
       const formData = new FormData();
       formData.append("cardImage", fileToProcess);
       if (streamMode === "classic" && streamCustomBgFile) {
-        const optimizedBg = await optimizeImageFile(streamCustomBgFile);
+        const { file: optimizedBg } = await optimizeImageFile(streamCustomBgFile);
         formData.append("backgroundImage", optimizedBg);
       }
       if (existingBgImage) {
@@ -3887,11 +3994,15 @@ export default function Home() {
 
       const cropToUse = customCropBox !== undefined ? customCropBox : streamCropBox;
       if (cropToUse) {
-        formData.append("cropBox", JSON.stringify(cropToUse));
-        formData.append("cropX", cropToUse.x.toString());
-        formData.append("cropY", cropToUse.y.toString());
-        formData.append("cropW", cropToUse.width.toString());
-        formData.append("cropH", cropToUse.height.toString());
+        const scaledCrop = adaptCropBoxToImage(cropToUse, optimizedWidth, optimizedHeight, originalWidth, originalHeight);
+        console.log(`[Stream Studio] cropBox angepasst: [${cropToUse.x}, ${cropToUse.y}, ${cropToUse.width}, ${cropToUse.height}] (${originalWidth}x${originalHeight}) -> [${scaledCrop.x}, ${scaledCrop.y}, ${scaledCrop.width}, ${scaledCrop.height}] (${optimizedWidth}x${optimizedHeight})`);
+        formData.append("cropBox", JSON.stringify(scaledCrop));
+        formData.append("cropX", scaledCrop.x.toString());
+        formData.append("cropY", scaledCrop.y.toString());
+        formData.append("cropW", scaledCrop.width.toString());
+        formData.append("cropH", scaledCrop.height.toString());
+        if (scaledCrop.imageWidth) formData.append("cropImageWidth", scaledCrop.imageWidth.toString());
+        if (scaledCrop.imageHeight) formData.append("cropImageHeight", scaledCrop.imageHeight.toString());
       }
 
       const localKey = typeof window !== "undefined" ? localStorage.getItem("user_gemini_api_key") : null;
@@ -4084,7 +4195,8 @@ export default function Home() {
         setActiveStreamSide("front");
         setStreamFile(card.front.file);
         setStreamPreviewUrl(card.front.previewUrl);
-        setStreamCropBox(card.front.cropBox);
+        const frontCropToUse = card.front.cropBox || streamCropBox;
+        setStreamCropBox(frontCropToUse);
         setNewArtworkName(`${card.cardName} - Vorderseite`);
 
         setStreamCards(prev => prev.map((c, idx) => idx === i ? {
@@ -4097,7 +4209,7 @@ export default function Home() {
         try {
           const frontResult = await handleProcessStreamImage(
             card.front.file,
-            card.front.cropBox,
+            frontCropToUse,
             undefined,
             undefined,
             false
@@ -4143,7 +4255,7 @@ export default function Home() {
           setActiveStreamSide("back");
           setStreamFile(card.back.file);
           setStreamPreviewUrl(card.back.previewUrl);
-          const backCrop = card.back.cropBox || card.front.cropBox;
+          const backCrop = card.back.cropBox || card.front.cropBox || frontCropToUse || streamCropBox;
           setStreamCropBox(backCrop);
           setNewArtworkName(`${card.cardName} - Rückseite`);
 
