@@ -36,7 +36,6 @@ import {
   Loader2,
   Smartphone,
   Tv,
-  Sliders,
   SlidersHorizontal,
   Sun,
   Eye,
@@ -1095,7 +1094,7 @@ export default function Home() {
   const [isStreamBatchProcessing, setIsStreamBatchProcessing] = useState<boolean>(false);
   const [streamCustomBgFile, setStreamCustomBgFile] = useState<File | null>(null);
   const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
-  const [streamCardScale, setStreamCardScale] = useState<number>(0.54);
+  const [streamCardScale, setStreamCardScale] = useState<number>(0.62);
   const [streamShowOverlay, setStreamShowOverlay] = useState<boolean>(false);
   const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
   const [streamVerticalOffset, setStreamVerticalOffset] = useState<number>(0);
@@ -7455,7 +7454,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     setStreamMode("extended");
-                    setStreamCardScale(0.68);
+                    setStreamCardScale(0.62);
                     setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
                   }}
                   className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
@@ -7471,7 +7470,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     setStreamMode("classic");
-                    setStreamCardScale(0.75);
+                    setStreamCardScale(0.62);
                     setStreamSteps(STREAM_STEPS.map(s => ({ ...s, status: "idle" })));
                   }}
                   className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
@@ -7540,42 +7539,14 @@ export default function Home() {
                     <div>
                       <h2 className="text-base font-semibold text-white flex items-center gap-2 mb-2">
                         <SlidersHorizontal className="w-4 h-4 text-purple-400" />
-                        Kartengröße & Schatten
+                        Schatten & Stream-Overlay
                       </h2>
                       <p className="text-xs text-zinc-400 mb-4">
-                        Passe die Skalierung der Karte innerhalb des Rahmens und den Schatteneffekt an.
+                        Passe den Schatteneffekt und das Stream-Overlay an.
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {/* Card Scale */}
-                      <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                          Kartengröße
-                        </label>
-                        <div className="grid grid-cols-3 gap-1 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
-                          {[
-                            { label: "50%", sub: "Kompakt", val: 0.50 },
-                            { label: "54%", sub: "Standard (wie Bild 2)", val: 0.54 },
-                            { label: "62%", sub: "Groß", val: 0.62 }
-                          ].map(opt => (
-                            <button
-                              key={opt.label}
-                              type="button"
-                              onClick={() => setStreamCardScale(opt.val)}
-                              className={`py-1 px-1 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all ${
-                                streamCardScale === opt.val
-                                  ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
-                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
-                              }`}
-                            >
-                              <span>{opt.label}</span>
-                              <span className="text-[9px] text-zinc-500 font-normal">{opt.sub}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
+                    <div className="flex flex-col gap-4">
                       {/* Shadow Style */}
                       <div>
                         <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
@@ -7584,7 +7555,7 @@ export default function Home() {
                         <select
                           value={streamShadowStyle}
                           onChange={(e) => setStreamShadowStyle(e.target.value as "soft" | "intense" | "glow" | "none")}
-                          className="w-full px-3 py-2 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
+                          className="w-full px-3 py-2.5 bg-zinc-950/80 border border-zinc-800 rounded-xl text-xs text-white focus:border-purple-500 focus:outline-none transition-colors"
                         >
                           <option value="soft">Weicher Schatten (Standard wie Bild 2)</option>
                           <option value="intense">Intensiver 3D-Schatten</option>
@@ -7594,7 +7565,7 @@ export default function Home() {
                       </div>
 
                       {/* Stream Overlay Toggle */}
-                      <div className="sm:col-span-2">
+                      <div>
                         <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
                           Stream-Overlay & Branding
                         </label>
@@ -7627,168 +7598,6 @@ export default function Home() {
                         <p className="text-[10px] text-zinc-500 mt-1">
                           Im Clean-Modus bleibt das erweiterte 1:1 Artwork ohne störende Texte voll sichtbar.
                         </p>
-                      </div>
-
-                      {/* Freistellungs-Engine */}
-                      <div className="sm:col-span-2 pt-2 border-t border-zinc-800/80">
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2 flex items-center justify-between">
-                          <span className="flex items-center gap-1.5">
-                            <Sparkles className="w-3 h-3 text-purple-400" />
-                            Freistellungs-Engine
-                          </span>
-                          <span className="text-[10px] text-zinc-500 font-normal">
-                            {streamMattingEngine === "gemini_homography"
-                              ? "KI Homographie (Empfohlen)"
-                              : streamMattingEngine === "ai_matting"
-                              ? "RMBG-1.4 Alpha Matting"
-                              : "Geometrie-Anker"}
-                          </span>
-                        </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setStreamMattingEngine("gemini_homography")}
-                            className={`p-2.5 rounded-xl text-left border transition-all ${
-                              streamMattingEngine === "gemini_homography"
-                                ? "bg-purple-950/40 border-purple-500/50 text-white shadow-lg shadow-purple-950/20"
-                                : "bg-zinc-950/50 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-xs text-purple-300 flex items-center gap-1.5">
-                                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                                KI Homographie
-                              </span>
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">
-                                Empfohlen
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
-                              4-Punkt Grounding & planare Entzerrung. Beseitigt Hüllenüberstände restlos und bewahrt alle Ränder.
-                            </p>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setStreamMattingEngine("ai_matting")}
-                            className={`p-2.5 rounded-xl text-left border transition-all ${
-                              streamMattingEngine === "ai_matting"
-                                ? "bg-purple-950/40 border-purple-500/50 text-white shadow-lg shadow-purple-950/20"
-                                : "bg-zinc-950/50 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-xs text-purple-300 flex items-center gap-1.5">
-                                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                                KI Alpha Matting
-                              </span>
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
-                                RMBG-1.4
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
-                              Subpixel-präzises Alpha Matting, Kantenglättung (Guided Filter) und Despill gegen Farbränder.
-                            </p>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setStreamMattingEngine("tcg_cutout")}
-                            className={`p-2.5 rounded-xl text-left border transition-all ${
-                              streamMattingEngine === "tcg_cutout"
-                                ? "bg-purple-950/40 border-purple-500/50 text-white shadow-lg shadow-purple-950/20"
-                                : "bg-zinc-950/50 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold text-xs text-purple-300 flex items-center gap-1.5">
-                                <Crop className="w-3.5 h-3.5 text-purple-400" />
-                                Geometrie-Zuschnitt
-                              </span>
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
-                                Anker
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
-                              Erkennt gedruckte Tinten-Anker (Header & Copyright) und rekonstruiert den Rahmen mathematisch.
-                            </p>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Edge & Sleeve Fine-Tuning */}
-                      <div className="sm:col-span-2 pt-2 border-t border-zinc-800/80">
-                        <div className="flex items-center justify-between mb-2">
-                          <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                            <Sliders className="w-3 h-3 text-purple-400" />
-                            Kanten- & Hüllen-Feinjustierung
-                          </label>
-                          <span className="text-[10px] text-purple-300 font-mono">
-                            {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset}px Y / {streamBottomTrim}px Trim
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
-                          {/* Vertical Offset */}
-                          <div>
-                            <div className="flex items-center justify-between text-[11px] text-zinc-300 mb-1">
-                              <span>Vertikaler Versatz</span>
-                              <span className="font-mono text-purple-300">
-                                {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset} px
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min="-30"
-                              max="30"
-                              step="2"
-                              value={streamVerticalOffset}
-                              onChange={(e) => setStreamVerticalOffset(parseInt(e.target.value, 10))}
-                              className="w-full accent-purple-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
-                            />
-                            <div className="flex justify-between text-[9px] text-zinc-500 mt-1">
-                              <span>-30px (mehr oben)</span>
-                              <button
-                                type="button"
-                                onClick={() => setStreamVerticalOffset(0)}
-                                className="text-purple-400 hover:underline"
-                              >
-                                0px (Auto)
-                              </button>
-                              <span>+30px (mehr unten)</span>
-                            </div>
-                          </div>
-
-                          {/* Sleeve Bottom Trim */}
-                          <div>
-                            <div className="flex items-center justify-between text-[11px] text-zinc-300 mb-1">
-                              <span>Hüllen-Schnitt (Boden)</span>
-                              <span className="font-mono text-purple-300">
-                                -{streamBottomTrim} px
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min="0"
-                              max="40"
-                              step="2"
-                              value={streamBottomTrim}
-                              onChange={(e) => setStreamBottomTrim(parseInt(e.target.value, 10))}
-                              className="w-full accent-purple-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
-                            />
-                            <div className="flex justify-between text-[9px] text-zinc-500 mt-1">
-                              <span>0px (Auto)</span>
-                              <button
-                                type="button"
-                                onClick={() => setStreamBottomTrim(0)}
-                                className="text-purple-400 hover:underline"
-                              >
-                                Zurücksetzen
-                              </button>
-                              <span>-40px (Sleeve)</span>
-                            </div>
-                          </div>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -7862,39 +7671,11 @@ export default function Home() {
                         Layout & Effekt-Einstellungen
                       </h2>
                       <p className="text-xs text-zinc-400 mb-4">
-                        Passe die Kartengröße und den Schattenwurf für den Stream optimal an.
+                        Passe den Schattenwurf und das Stream-Overlay für den Stream optimal an.
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {/* Card Scale */}
-                      <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                          Kartengröße auf Hintergrund
-                        </label>
-                        <div className="grid grid-cols-3 gap-1.5 bg-zinc-950/60 p-1 rounded-xl border border-zinc-800">
-                          {[
-                            { label: "50%", sub: "Kompakt", val: 0.50 },
-                            { label: "54%", sub: "Standard (wie Bild 2)", val: 0.54 },
-                            { label: "62%", sub: "Groß", val: 0.62 }
-                          ].map(opt => (
-                            <button
-                              key={opt.label}
-                              type="button"
-                              onClick={() => setStreamCardScale(opt.val)}
-                              className={`py-1.5 px-2 rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-all ${
-                                streamCardScale === opt.val
-                                  ? "bg-purple-600/20 border border-purple-500/40 text-purple-300 shadow-sm"
-                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border border-transparent"
-                              }`}
-                            >
-                              <span>{opt.label}</span>
-                              <span className="text-[9px] text-zinc-500 font-normal">{opt.sub}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
+                    <div className="flex flex-col gap-4">
                       {/* Shadow Style */}
                       <div>
                         <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
@@ -7913,7 +7694,7 @@ export default function Home() {
                       </div>
 
                       {/* Stream Overlay Toggle */}
-                      <div className="sm:col-span-2">
+                      <div>
                         <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
                           Stream-Overlay & Branding (Stapel)
                         </label>
@@ -8399,93 +8180,11 @@ export default function Home() {
                                 </div>
                               </div>
 
-                              {/* Quick Fine-Tuning for Card Position & Sleeve Trim */}
-                              <div className="pt-2.5 pb-1 border-t border-zinc-800/80">
-                                <div className="flex items-center justify-between mb-2">
-                                  <span className="text-[11px] font-semibold text-zinc-300 flex items-center gap-1.5">
-                                    <Sliders className="w-3 h-3 text-purple-400" />
-                                    Kartenausschnitt & Hülle nachjustieren
-                                  </span>
-                                  <span className="text-[10px] text-purple-300 font-mono">
-                                    {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset}px Y / -{streamBottomTrim}px Trim
-                                  </span>
-                                </div>
-
-                                {/* Engine Selector Dropdown */}
-                                <div className="mb-2.5 bg-zinc-900/60 p-2 rounded-lg border border-zinc-800/80">
-                                  <label className="block text-[10px] text-zinc-400 mb-1 font-medium flex items-center justify-between">
-                                    <span className="flex items-center gap-1">
-                                      <Sparkles className="w-2.5 h-2.5 text-purple-400" />
-                                      Freistellungs-Engine
-                                    </span>
-                                    <span className="text-[9px] text-purple-300 font-mono">
-                                      {streamMattingEngine === "gemini_homography" ? "Homographie" : streamMattingEngine === "ai_matting" ? "RMBG-1.4" : "Geometrie"}
-                                    </span>
-                                  </label>
-                                  <select
-                                    value={streamMattingEngine}
-                                    onChange={(e) => setStreamMattingEngine(e.target.value as "gemini_homography" | "ai_matting" | "tcg_cutout")}
-                                    className="w-full px-2 py-1 bg-zinc-950 border border-zinc-800 rounded text-[11px] text-white focus:border-purple-500 focus:outline-none"
-                                  >
-                                    <option value="gemini_homography">✨ KI Homographie (Empfohlen / Gemini Grounding)</option>
-                                    <option value="ai_matting">🪄 KI Alpha Matting (RMBG-1.4 / Despill)</option>
-                                    <option value="tcg_cutout">📐 TCG Geometrie-Zuschnitt (Druckfarben-Anker)</option>
-                                  </select>
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 bg-zinc-900/60 p-2.5 rounded-lg border border-zinc-800/80">
-                                  <div>
-                                    <div className="flex justify-between text-[10px] text-zinc-400 mb-1">
-                                      <span>Vertikaler Versatz</span>
-                                      <span className="font-mono text-purple-300">
-                                        {streamVerticalOffset > 0 ? `+${streamVerticalOffset}` : streamVerticalOffset} px
-                                      </span>
-                                    </div>
-                                    <input
-                                      type="range"
-                                      min="-30"
-                                      max="30"
-                                      step="2"
-                                      value={streamVerticalOffset}
-                                      onChange={(e) => setStreamVerticalOffset(parseInt(e.target.value, 10))}
-                                      className="w-full accent-purple-500 cursor-pointer h-1 bg-zinc-800 rounded-lg"
-                                    />
-                                    <div className="flex justify-between text-[8px] text-zinc-500 mt-0.5">
-                                      <span>-30px (oben)</span>
-                                      <button type="button" onClick={() => setStreamVerticalOffset(0)} className="text-purple-400 hover:underline">0px</button>
-                                      <span>+30px (unten)</span>
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <div className="flex justify-between text-[10px] text-zinc-400 mb-1">
-                                      <span>Hüllen-Schnitt (Boden)</span>
-                                      <span className="font-mono text-purple-300">
-                                        -{streamBottomTrim} px
-                                      </span>
-                                    </div>
-                                    <input
-                                      type="range"
-                                      min="0"
-                                      max="40"
-                                      step="2"
-                                      value={streamBottomTrim}
-                                      onChange={(e) => setStreamBottomTrim(parseInt(e.target.value, 10))}
-                                      className="w-full accent-purple-500 cursor-pointer h-1 bg-zinc-800 rounded-lg"
-                                    />
-                                    <div className="flex justify-between text-[8px] text-zinc-500 mt-0.5">
-                                      <span>0px</span>
-                                      <button type="button" onClick={() => setStreamBottomTrim(0)} className="text-purple-400 hover:underline">Reset</button>
-                                      <span>-40px (Sleeve)</span>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-
                               <button
                                 type="button"
                                 disabled={isRecompositing || !streamBgImageUrl}
                                 onClick={handleRecompositeStreamPreview}
-                                className="w-full py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-purple-500/30 text-purple-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                                className="w-full py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-purple-500/30 text-purple-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 mt-1"
                               >
                                 {isRecompositing ? (
                                   <>
@@ -8495,7 +8194,7 @@ export default function Home() {
                                 ) : (
                                   <>
                                     <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                                    <span>Vorschau & Zuschnitt aktualisieren</span>
+                                    <span>Vorschau aktualisieren</span>
                                   </>
                                 )}
                               </button>
