@@ -112,7 +112,17 @@ class TCGStreamEngine:
         from google.genai import types
 
         # BGR -> JPEG Bytes
-        success, buffer = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # Optimiere Bildgröße für ultraschnelle Vision-Inferenz (max 1600px)
+        h, w = image_bgr.shape[:2]
+        max_dim = max(h, w)
+        if max_dim > 1600:
+            scale = 1600.0 / max_dim
+            analysis_img = cv2.resize(image_bgr, (int(round(w * scale)), int(round(h * scale))), interpolation=cv2.INTER_AREA)
+        else:
+            analysis_img = image_bgr
+
+        # BGR -> JPEG Bytes
+        success, buffer = cv2.imencode(".jpg", analysis_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
         if not success:
             raise RuntimeError("Konnte Bild nicht als JPEG für Gemini enkodieren.")
         image_bytes = buffer.tobytes()
@@ -121,16 +131,22 @@ class TCGStreamEngine:
             "Du bist ein ultra-präziser Computer-Vision-Experte für Trading Card Games (Pokémon, One Piece, Magic etc.).\n"
             "Deine Aufgabe ist es, die Sammelkarte im Bild pixelgenau zu lokalisieren und zu analysieren:\n\n"
             "1. OCR & METADATEN:\n"
-            "   - card_name: Offizieller englischer Kartenname (Japanisch übersetzen, z.B. 'ワンパチ' -> 'Yamper', 'ヌイコグマ' -> 'Stufful', 'ユキカブリ' -> 'Snover', 'エリキテル' -> 'Helioptile').\n"
-            "   - collector_number: Exakte Sammlernummer (z.B. '086/080', '075/063', '070/063', '067/063', '083/080', '195/193'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
-            "   - set_code: Set-Kürzel unten links (z.B. 'M1S', 'M1', 'M2', 'M4', 'SV5a', 'SV4K', 'OP05'). Falls ein Regulationszeichen in einer Box steht (z.B. [I], [H], [G]), ignoriere diesen einzelnen Buchstaben und lies das eigentliche Set-Kürzel direkt daneben (z.B. 'M1S', 'M2'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
-            "   - set_name: Offizieller englischer Set-Name (z.B. 'Mega Brave', 'Inferno X', 'Ninja Spinner', 'Crimson Haze', 'Ancient Roar', '151'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - card_name: Offizieller englischer Kartenname (z.B. 'ミルホッグ' -> 'Watchog', 'ワンパチ' -> 'Yamper', 'ヌイコグマ' -> 'Stufful', 'ユキカブリ' -> 'Snover', 'エリキテル' -> 'Helioptile', 'ピカチュウ' -> 'Pikachu').\n"
+            "     WICHTIG BEI JAPANISCHEN KARTEN:\n"
+            "     Der eigentliche Kartenname steht ganz oben im Header in großer Schrift rechts neben dem Entwicklungsstufen-Symbol (z.B. '1進化 ミルホッグ' -> der Kartenname ist 'ミルホッグ' = 'Watchog').\n"
+            "     Verwechsle den Namen NIEMALS mit dem kleinen Vorentwicklungs-Text darunter (z.B. 'ミネズミから進化' -> 'ミネズミ' ist Patrat und NICHT der Name dieser Karte)!\n"
+            "     Übersetze den japanischen Pokémon-Namen immer in den offiziellen englischen TCG-Namen (z.B. 'ミルホッグ' -> 'Watchog').\n"
+            "   - collector_number: Exakte Sammlernummer (z.B. '095/083', '086/080', '075/063', '070/063', '067/063', '083/080', '195/193'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - set_code: Set-Kürzel unten links (z.B. 'M4', 'M1S', 'M1', 'M2', 'SV5a', 'SV4K', 'OP05').\n"
+            "     WICHTIG: Falls ein einzelner Buchstabe als Regulationszeichen in einer Box/Klammer steht (z.B. [J], [I], [H], [G]), ignoriere diesen Buchstaben in der Box VOLLSTÄNDIG und lies das eigentliche Set-Kürzel direkt daneben (z.B. bei '[J] M4 095/083 AR' ist das Set-Kürzel 'M4', die Sammlernummer '095/083' und die Seltenheit 'AR')! Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
+            "   - set_name: Offizieller englischer Set-Name (z.B. 'Ninja Spinner', 'Mega Brave', 'Inferno X', 'Crimson Haze', 'Ancient Roar', '151'). Niemals 'N/A' eintragen, wenn nicht vorhanden leer lassen ('').\n"
             "   - WICHTIG BEI KARTENRÜCKSEITEN:\n"
             "     Falls das Bild die RÜCKSEITE einer Sammelkarte zeigt (z.B. klassische Pokémon-Rückseite mit blauem Wirbel/Pokéball, One Piece Rücken, Magic-Rückseite):\n"
             "     Setze is_card_back=True, card_name='Card Back', collector_number='', set_code='', set_name=''! Niemals 'N/A' eintragen!\n\n"
-            "2. SCENE PROMPT (STRIKT CHARAKTER- UND POKÉMON-FREI!):\n"
-            "   - scene_prompt: Detaillierte, bildhafte Beschreibung AUSSCHLIESSLICH der Umgebung, Kulisse, Natur, Raum, Beleuchtung, Farbpalette und des Kunststils (z.B. digital anime painting, soft warm ambient lighting, immaculate 4k clean sharp detail).\n"
-            "   - STRIKT VERBOTEN: Erwähne NIEMALS das Pokémon, Charaktere, Lebewesen, Figuren, Menschen, Gesichter, Bälle oder Pokémon-Gegenstände! Die beschriebene Szene muss 100% menschen- und pokémonleer sein (z.B. statt 'Yamper liegt auf dem Bett mit einem Pokéball' beschreibe NUR 'gemütliches, sonnendurchflutetes Zimmer im Anime-Stil mit Holzregalen, Vorhängen und einem weichen Bett').\n\n"
+            "2. SCENE PROMPT (STRIKT CHARAKTER- UND POKÉMON-FREI! ARTWORK PERFEKT FORTSETZEN!):\n"
+            "   - scene_prompt: Eine detailreiche, bildhafte Beschreibung AUSSCHLIESSLICH der Umgebung, Kulisse, Natur, Raum, Atmosphäre, Beleuchtung, Farbpalette und des Kunststils, die das Karten-Artwork nahtlos nach außen in 360 Grad fortsetzt.\n"
+            "   - Halte den exakten Malstil (z.B. digital anime painting, vibrant neon glow, painterly brush textures, watercolor wash, dark cinematic moody atmosphere) und die genauen Farbtöne fest (z.B. deep midnight indigo sky, glowing hot pink neon radio tower lattice, luminous cyan accents, silhouette city rooftops).\n"
+            "   - STRIKT VERBOTEN: Erwähne NIEMALS das Pokémon, Charaktere, Lebewesen, Figuren, Menschen, Gesichter, Bälle oder Pokémon-Gegenstände! Die beschriebene Szene muss 100% menschen- und pokémonleer sein.\n\n"
             "3. ARTWORK-BEREICH (illustration_box & is_full_art):\n"
             "   - is_full_art: Setze auf True, falls das Artwork die gesamte Karte einnimmt (Full Art, Art Rare / AR, SAR, SIR, Character Rare). Bei Vintage- oder normalen Karten mit separatem Bildrahmen setze auf False.\n"
             "   - illustration_box: Bounding Box [ymin, xmin, ymax, xmax] im Bereich 0-1000 des Artwork-Bereichs. Bei Full Art fast die gesamte Karte (z.B. [40, 40, 960, 960]), bei Standardkarten nur das obere Bildfenster.\n\n"
@@ -145,7 +161,13 @@ class TCGStreamEngine:
             "     - bottom_left: [y, x] (untere linke Ecke der Pappe, direkt an der Unterkante des gedruckten Silberrandes)"
         )
 
-        models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"]
+        models = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.5-pro",
+            "gemini-1.5-pro"
+        ]
         last_err = None
 
         def _clean_tcg_field(val: Optional[str]) -> str:
@@ -436,7 +458,9 @@ class TCGStreamEngine:
             try:
                 analysis = self.analyze_card_with_gemini(image_bgr)
                 analysis.corners = corners
-            except Exception:
+            except Exception as e:
+                import sys
+                print(f"[card_engine] Gemini Analyse bei manuellem CropBox fehlgeschlagen: {e}", file=sys.stderr)
                 analysis = CardAnalysisResult(
                     card_name="Sammelkarte",
                     collector_number="",
@@ -456,7 +480,9 @@ class TCGStreamEngine:
             try:
                 analysis = self.analyze_card_with_gemini(image_bgr)
                 analysis.corners = corners
-            except Exception:
+            except Exception as e:
+                import sys
+                print(f"[card_engine] Gemini Analyse bei ADF-Scan fehlgeschlagen: {e}", file=sys.stderr)
                 analysis = CardAnalysisResult(
                     card_name="Sammelkarte",
                     collector_number="",
@@ -468,6 +494,8 @@ class TCGStreamEngine:
             try:
                 analysis = self.analyze_card_with_gemini(image_bgr)
             except Exception as e:
+                import sys
+                print(f"[card_engine] Gemini Analyse fehlgeschlagen, nutze CV Fallback: {e}", file=sys.stderr)
                 # Fallback auf CV falls API fehlschlägt
                 corners = self.detect_corners_cv_fallback(image_bgr)
                 analysis = CardAnalysisResult(

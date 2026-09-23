@@ -1566,6 +1566,29 @@ export default function Home() {
   // Lightbox larger view state
   const [lightboxImage, setLightboxImage] = useState<{ url: string; title: string } | null>(null);
 
+  // Bulk Card Preview Modal state
+  const [bulkPreviewData, setBulkPreviewData] = useState<{
+    cardIndex?: number;
+    title: string;
+    cardNumber?: string;
+    setCode?: string;
+    setName?: string;
+    front: {
+      resultImageUrl?: string;
+      backgroundImageUrl?: string;
+      cutoutImageUrl?: string;
+      originalPreviewUrl?: string;
+    };
+    back?: {
+      resultImageUrl?: string;
+      backgroundImageUrl?: string;
+      cutoutImageUrl?: string;
+      originalPreviewUrl?: string;
+    };
+  } | null>(null);
+  const [bulkPreviewTab, setBulkPreviewTab] = useState<"result" | "background" | "cutout" | "original">("result");
+  const [bulkPreviewSide, setBulkPreviewSide] = useState<"front" | "back">("front");
+
   // Display Studio states
   const [displayFile, setDisplayFile] = useState<File | null>(null);
   const [displayPreviewUrl, setDisplayPreviewUrl] = useState<string | null>(null);
@@ -1642,11 +1665,12 @@ export default function Home() {
     return publicUrl;
   };
 
-  // Handle ESC key to close lightbox
+  // Handle ESC key to close lightbox and bulk preview
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setLightboxImage(null);
+        setBulkPreviewData(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -4009,6 +4033,54 @@ export default function Home() {
   // Stream Cards Navigation & Stanzvisier Steuerung
   // =========================================================================
 
+  // Öffnet das interaktive Detail-Popup für eine fertig generierte Stream-Karte
+  const openStreamCardPreview = useCallback((idx: number, side: "front" | "back" = "front") => {
+    if (idx < 0 || idx >= streamCards.length) return;
+    const card = streamCards[idx];
+    if (!card) return;
+
+    const activeSideMeta = side === "front" ? card.front.metadata : (card.back?.metadata || card.front.metadata);
+    setBulkPreviewData({
+      cardIndex: idx,
+      title: card.cardName || activeSideMeta?.cardName || `Karte #${card.cardNumberIndex}`,
+      cardNumber: activeSideMeta?.cardNumber || "",
+      setCode: activeSideMeta?.setCode || "",
+      setName: activeSideMeta?.setName || "",
+      front: {
+        resultImageUrl: card.front.resultImageUrl,
+        backgroundImageUrl: card.front.backgroundImageUrl,
+        cutoutImageUrl: card.front.cutoutImageUrl,
+        originalPreviewUrl: card.front.previewUrl
+      },
+      back: card.back ? {
+        resultImageUrl: card.back.resultImageUrl,
+        backgroundImageUrl: card.back.backgroundImageUrl,
+        cutoutImageUrl: card.back.cutoutImageUrl,
+        originalPreviewUrl: card.back.previewUrl
+      } : undefined
+    });
+    setBulkPreviewSide(side);
+    setBulkPreviewTab("result");
+  }, [streamCards]);
+
+  // Öffnet das interaktive Detail-Popup für ein fertiges Batch-Item
+  const openBatchItemPreview = useCallback((item: BatchItem) => {
+    setBulkPreviewData({
+      title: item.metadata?.cardName || item.name,
+      cardNumber: item.metadata?.cardNumber || "",
+      setCode: item.metadata?.setCode || "",
+      setName: item.metadata?.setName || "",
+      front: {
+        resultImageUrl: item.resultImageUrl,
+        backgroundImageUrl: item.backgroundImageUrl,
+        cutoutImageUrl: item.cutoutImageUrl,
+        originalPreviewUrl: item.previewUrl
+      }
+    });
+    setBulkPreviewSide("front");
+    setBulkPreviewTab("result");
+  }, []);
+
   // Wählt eine Karte und Seite für das Stanzvisier aus und synchronisiert die Vorschau
   const selectStreamCard = (cardIdx: number, side: "front" | "back" = "front") => {
     if (cardIdx < 0 || cardIdx >= streamCards.length) return;
@@ -5406,7 +5478,9 @@ export default function Home() {
               <div 
                 key={item.id}
                 onClick={() => {
-                  if (studioType === "stream") {
+                  if (isCompleted) {
+                    openBatchItemPreview(item);
+                  } else if (studioType === "stream") {
                     setStreamFile(item.file);
                     setStreamPreviewUrl(item.previewUrl);
                     setStreamResultUrl(item.resultImageUrl || null);
@@ -5427,13 +5501,13 @@ export default function Home() {
                   isProcessingItem 
                     ? "border-purple-500 bg-purple-500/5 shadow-[0_0_15px_rgba(168,85,247,0.1)]" 
                     : isCompleted 
-                    ? "border-emerald-500/20 bg-emerald-500/5" 
+                    ? "border-emerald-500/20 bg-emerald-500/5 hover:border-purple-500/40" 
                     : isFailed 
                     ? "border-red-500/20 bg-red-500/5" 
                     : "border-zinc-800"
                 }`}
               >
-                <div className="w-14 h-20 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0 relative">
+                <div className="w-14 h-20 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0 relative group">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={item.previewUrl}
@@ -5443,6 +5517,11 @@ export default function Home() {
                   {isProcessingItem && (
                     <div className="absolute inset-0 bg-purple-955/40 flex items-center justify-center backdrop-blur-[1px]">
                       <RefreshCw className="w-5 h-5 text-purple-400 animate-spin" />
+                    </div>
+                  )}
+                  {isCompleted && (
+                    <div className="absolute inset-0 bg-purple-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity backdrop-blur-[1px]">
+                      <Eye className="w-4 h-4 text-purple-200" />
                     </div>
                   )}
                 </div>
@@ -5460,7 +5539,7 @@ export default function Home() {
                     </p>
                   )}
                   
-                  <div className="mt-1 flex items-center gap-1.5">
+                  <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                     {isPending && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-zinc-900 border border-zinc-805 text-zinc-400">
                         Ausstehend
@@ -5472,9 +5551,9 @@ export default function Home() {
                       </span>
                     )}
                     {isCompleted && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-955/50 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-955/50 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
                         <Check className="w-3.5 h-3.5" />
-                        Erfolgreich
+                        Erfolgreich • Vorschau
                       </span>
                     )}
                     {isFailed && (
@@ -5510,8 +5589,12 @@ export default function Home() {
                 {isCompleted && item.resultImageUrl && (
                   <div className="flex items-center gap-2">
                     <div 
-                      className="w-10 h-14 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0 cursor-pointer hover:border-purple-500 transition-colors"
-                      onClick={() => setLightboxImage({ url: item.resultImageUrl!, title: item.name })}
+                      className="w-10 h-14 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-900 shrink-0 cursor-pointer hover:border-purple-500 transition-colors relative group"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openBatchItemPreview(item);
+                      }}
+                      title="Vorschau & Hintergrund anzeigen"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -5519,6 +5602,9 @@ export default function Home() {
                         alt="Result"
                         className="w-full h-full object-cover"
                       />
+                      <div className="absolute inset-0 bg-purple-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity backdrop-blur-[1px]">
+                        <Eye className="w-3.5 h-3.5 text-purple-200" />
+                      </div>
                     </div>
                     
                     <div className="flex flex-col gap-1">
@@ -5866,16 +5952,22 @@ export default function Home() {
                   {/* FRONT SIDE */}
                   <div 
                     onClick={() => {
-                      selectStreamCard(idx, "front");
-                      streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      if (card.front.status === "completed") {
+                        openStreamCardPreview(idx, "front");
+                      } else {
+                        selectStreamCard(idx, "front");
+                        streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
                     }}
                     className={`p-2.5 rounded-xl border flex items-center gap-3 transition-all cursor-pointer ${
-                      isCardActive && activeStreamSide === "front"
+                      card.front.status === "completed"
+                        ? "border-emerald-500/25 bg-emerald-500/5 hover:border-purple-500/50"
+                        : isCardActive && activeStreamSide === "front"
                         ? "border-purple-500 bg-purple-500/10"
                         : "border-zinc-800/80 bg-zinc-900/60 hover:border-zinc-700"
                     }`}
                   >
-                    <div className="w-12 h-16 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative">
+                    <div className="w-12 h-16 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative group">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={card.front.resultImageUrl || card.front.previewUrl}
@@ -5887,22 +5979,45 @@ export default function Home() {
                           <RefreshCw className="w-4 h-4 text-purple-300 animate-spin" />
                         </div>
                       )}
+                      {card.front.status === "completed" && (
+                        <div className="absolute inset-0 bg-purple-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity backdrop-blur-[1px]">
+                          <Eye className="w-4 h-4 text-purple-200" />
+                        </div>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-bold text-white flex items-center gap-1">
                           🎴 Vorderseite
                         </span>
-                        {card.front.isVisorCustomized && (
+                        {card.front.status === "completed" ? (
+                          <span className="text-[9px] text-purple-300 font-semibold flex items-center gap-0.5 bg-purple-950/60 border border-purple-500/30 px-1.5 py-0.5 rounded">
+                            <Eye className="w-2.5 h-2.5" /> Vorschau
+                          </span>
+                        ) : card.front.isVisorCustomized ? (
                           <span className="text-[9px] text-emerald-400 font-medium">Visier ✓</span>
-                        )}
+                        ) : null}
                       </div>
                       <p className="text-[10px] text-zinc-400 truncate mt-0.5" title={card.front.file.name}>
                         {card.front.file.name}
                       </p>
-                      <p className="text-[9px] text-zinc-500 mt-0.5">
-                        {(card.front.file.size / 1024).toFixed(0)} KB
-                      </p>
+                      <div className="flex items-center justify-between mt-0.5">
+                        <p className="text-[9px] text-zinc-500">
+                          {(card.front.file.size / 1024).toFixed(0)} KB
+                        </p>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectStreamCard(idx, "front");
+                            streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }}
+                          className="text-[9px] text-zinc-400 hover:text-purple-300 underline cursor-pointer"
+                          title="Im Stanzvisier öffnen"
+                        >
+                          Visier
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -5910,16 +6025,22 @@ export default function Home() {
                   {card.back ? (
                     <div 
                       onClick={() => {
-                        selectStreamCard(idx, "back");
-                        streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        if (card.back?.status === "completed") {
+                          openStreamCardPreview(idx, "back");
+                        } else {
+                          selectStreamCard(idx, "back");
+                          streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
                       }}
                       className={`p-2.5 rounded-xl border flex items-center gap-3 transition-all cursor-pointer ${
-                        isCardActive && activeStreamSide === "back"
+                        card.back.status === "completed"
+                          ? "border-emerald-500/25 bg-emerald-500/5 hover:border-purple-500/50"
+                          : isCardActive && activeStreamSide === "back"
                           ? "border-purple-500 bg-purple-500/10"
                           : "border-zinc-800/80 bg-zinc-900/60 hover:border-zinc-700"
                       }`}
                     >
-                      <div className="w-12 h-16 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative">
+                      <div className="w-12 h-16 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950 shrink-0 relative group">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={card.back.resultImageUrl || card.back.previewUrl}
@@ -5931,13 +6052,22 @@ export default function Home() {
                             <RefreshCw className="w-4 h-4 text-purple-300 animate-spin" />
                           </div>
                         )}
+                        {card.back.status === "completed" && (
+                          <div className="absolute inset-0 bg-purple-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity backdrop-blur-[1px]">
+                            <Eye className="w-4 h-4 text-purple-200" />
+                          </div>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <span className="text-[11px] font-bold text-zinc-300 flex items-center gap-1">
                             🔄 Rückseite
                           </span>
-                          {card.back.isVisorCustomized ? (
+                          {card.back.status === "completed" ? (
+                            <span className="text-[9px] text-purple-300 font-semibold flex items-center gap-0.5 bg-purple-950/60 border border-purple-500/30 px-1.5 py-0.5 rounded">
+                              <Eye className="w-2.5 h-2.5" /> Vorschau
+                            </span>
+                          ) : card.back.isVisorCustomized ? (
                             <span className="text-[9px] text-emerald-400 font-medium" title="Eigenes manuelles Visier">Manuell ✓</span>
                           ) : (
                             <span className="text-[9px] text-blue-400 font-medium flex items-center gap-0.5" title="Übernimmt automatisch die Visierposition der Vorderseite (gleiche Scannerbett-Position)">
@@ -5948,9 +6078,23 @@ export default function Home() {
                         <p className="text-[10px] text-zinc-400 truncate mt-0.5" title={card.back.file.name}>
                           {card.back.file.name}
                         </p>
-                        <p className="text-[9px] text-zinc-500 mt-0.5">
-                          {(card.back.file.size / 1024).toFixed(0)} KB
-                        </p>
+                        <div className="flex items-center justify-between mt-0.5">
+                          <p className="text-[9px] text-zinc-500">
+                            {(card.back.file.size / 1024).toFixed(0)} KB
+                          </p>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              selectStreamCard(idx, "back");
+                              streamVisorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }}
+                            className="text-[9px] text-zinc-400 hover:text-purple-300 underline cursor-pointer"
+                            title="Im Stanzvisier öffnen"
+                          >
+                            Visier
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -9850,6 +9994,294 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* Bulk Card Detail Preview Modal */}
+        {bulkPreviewData && (() => {
+          const currentSideData = (bulkPreviewSide === "back" && bulkPreviewData.back)
+            ? bulkPreviewData.back
+            : bulkPreviewData.front;
+
+          let currentImageUrl: string | undefined = undefined;
+          if (bulkPreviewTab === "result") {
+            currentImageUrl = currentSideData.resultImageUrl || currentSideData.backgroundImageUrl || currentSideData.originalPreviewUrl;
+          } else if (bulkPreviewTab === "background") {
+            currentImageUrl = currentSideData.backgroundImageUrl || currentSideData.resultImageUrl;
+          } else if (bulkPreviewTab === "cutout") {
+            currentImageUrl = currentSideData.cutoutImageUrl || currentSideData.originalPreviewUrl;
+          } else if (bulkPreviewTab === "original") {
+            currentImageUrl = currentSideData.originalPreviewUrl;
+          }
+
+          // Completed stream cards navigation
+          const completedStreamIndices = streamCards
+            .map((c, i) => (c.front.status === "completed" ? i : -1))
+            .filter((i) => i !== -1);
+          const currentStreamPos = bulkPreviewData.cardIndex !== undefined
+            ? completedStreamIndices.indexOf(bulkPreviewData.cardIndex)
+            : -1;
+          const hasPrevCard = currentStreamPos > 0;
+          const hasNextCard = currentStreamPos >= 0 && currentStreamPos < completedStreamIndices.length - 1;
+
+          return (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-xl animate-in fade-in duration-200"
+              onClick={() => setBulkPreviewData(null)}
+            >
+              <div
+                className="relative w-full max-w-4xl max-h-[92vh] flex flex-col bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-zinc-850 bg-zinc-900/60 backdrop-blur-md">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400 shrink-0">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-base sm:text-lg font-bold text-white truncate max-w-[280px] sm:max-w-md">
+                          {bulkPreviewData.title || "Unbenannte Karte"}
+                        </h3>
+                        {bulkPreviewData.cardNumber && (
+                          <span className="px-2 py-0.5 rounded-md bg-purple-950/60 border border-purple-800/40 text-purple-300 font-mono text-xs font-semibold">
+                            #{bulkPreviewData.cardNumber}
+                          </span>
+                        )}
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Generiert
+                        </span>
+                      </div>
+                      {(bulkPreviewData.setName || bulkPreviewData.setCode) && (
+                        <p className="text-xs text-zinc-400 truncate mt-0.5">
+                          {bulkPreviewData.setName}{bulkPreviewData.setCode ? ` (${bulkPreviewData.setCode})` : ""}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    {/* Navigation buttons for Stream Studio */}
+                    {currentStreamPos !== -1 && completedStreamIndices.length > 1 && (
+                      <div className="flex items-center gap-1 mr-2 px-2 py-1 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-400">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (hasPrevCard) {
+                              const prevIdx = completedStreamIndices[currentStreamPos - 1];
+                              const prevCard = streamCards[prevIdx];
+                              const safeSide = (bulkPreviewSide === "back" && prevCard.back) ? "back" : "front";
+                              openStreamCardPreview(prevIdx, safeSide);
+                            }
+                          }}
+                          disabled={!hasPrevCard}
+                          className="p-1 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-transparent text-zinc-300 transition-colors"
+                          title="Vorherige Karte"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <span className="px-1 text-[11px] font-mono">
+                          {currentStreamPos + 1}/{completedStreamIndices.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (hasNextCard) {
+                              const nextIdx = completedStreamIndices[currentStreamPos + 1];
+                              const nextCard = streamCards[nextIdx];
+                              const safeSide = (bulkPreviewSide === "back" && nextCard.back) ? "back" : "front";
+                              openStreamCardPreview(nextIdx, safeSide);
+                            }
+                          }}
+                          disabled={!hasNextCard}
+                          className="p-1 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-transparent text-zinc-300 transition-colors"
+                          title="Nächste Karte"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewData(null)}
+                      className="p-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                      title="Schließen (ESC)"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Subheader / Tabs & Side Selection */}
+                <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 py-2.5 bg-zinc-900/40 border-b border-zinc-850">
+                  {/* View Tabs */}
+                  <div className="flex items-center gap-1.5 p-1 rounded-xl bg-zinc-950/80 border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewTab("result")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        bulkPreviewTab === "result"
+                          ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
+                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Gesamtbild
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewTab("background")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        bulkPreviewTab === "background"
+                          ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
+                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      KI-Hintergrund
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewTab("cutout")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        bulkPreviewTab === "cutout"
+                          ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
+                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                      }`}
+                    >
+                      <Crop className="w-3.5 h-3.5" />
+                      Freigestellt
+                    </button>
+                    {currentSideData.originalPreviewUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setBulkPreviewTab("original")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                          bulkPreviewTab === "original"
+                            ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
+                            : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                        }`}
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        Original-Scan
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Side Switcher (Front vs Back) */}
+                  {bulkPreviewData.back && (
+                    <div className="flex items-center gap-1 p-1 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setBulkPreviewSide("front")}
+                        className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${
+                          bulkPreviewSide === "front"
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        🎴 Vorderseite
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBulkPreviewSide("back")}
+                        className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${
+                          bulkPreviewSide === "back"
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        🔄 Rückseite
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Main Image Viewport */}
+                <div className="relative flex-1 min-h-[300px] sm:min-h-[460px] max-h-[64vh] bg-zinc-950/90 flex items-center justify-center p-4 sm:p-6 overflow-hidden">
+                  {/* Subtle checkerboard background for cutouts */}
+                  <div
+                    className="absolute inset-0 opacity-15 pointer-events-none"
+                    style={{
+                      backgroundImage: `radial-gradient(circle, #3f3f46 1px, transparent 1px)`,
+                      backgroundSize: "16px 16px",
+                    }}
+                  />
+
+                  {currentImageUrl ? (
+                    <div className="relative group max-h-full max-w-full flex items-center justify-center">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={currentImageUrl}
+                        alt={`${bulkPreviewData.title} (${bulkPreviewTab})`}
+                        className="max-h-[58vh] max-w-full object-contain rounded-xl shadow-2xl transition-transform duration-200 select-none"
+                      />
+                      {/* Quick Fullscreen Button */}
+                      <button
+                        type="button"
+                        onClick={() => setLightboxImage({ url: currentImageUrl!, title: `${bulkPreviewData.title} (${bulkPreviewTab === "result" ? "Gesamtbild" : bulkPreviewTab === "background" ? "Hintergrund" : bulkPreviewTab === "cutout" ? "Freigestellt" : "Original"})` })}
+                        className="absolute bottom-3 right-3 p-2.5 rounded-xl bg-black/75 hover:bg-black/95 text-white/80 hover:text-white border border-white/20 backdrop-blur-md opacity-0 group-hover:opacity-100 transition-all shadow-xl cursor-pointer"
+                        title="Im Vollbild öffnen"
+                      >
+                        <Maximize2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-center p-8 max-w-sm">
+                      <div className="p-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-500 mb-3">
+                        <ImageIcon className="w-8 h-8" />
+                      </div>
+                      <p className="text-sm font-medium text-zinc-300">Kein Bild für diese Ansicht verfügbar</p>
+                      <p className="text-xs text-zinc-500 mt-1">
+                        Wähle oben einen anderen Reiter wie &quot;Gesamtbild&quot; oder &quot;KI-Hintergrund&quot;.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer Controls */}
+                <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 py-3.5 bg-zinc-900/60 border-t border-zinc-850">
+                  <div>
+                    {bulkPreviewData.cardIndex !== undefined && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectStreamCard(bulkPreviewData.cardIndex!, bulkPreviewSide);
+                          setBulkPreviewData(null);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-750 hover:border-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                      >
+                        <Crop className="w-3.5 h-3.5 text-purple-400" />
+                        Im Stanzvisier öffnen
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2.5 ml-auto">
+                    {currentImageUrl && (
+                      <a
+                        href={currentImageUrl}
+                        download={`TCG_${bulkPreviewData.title.replace(/[^a-zA-Z0-9_-]/g, "_")}_${bulkPreviewSide}_${bulkPreviewTab}.png`}
+                        className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-purple-600/20 hover:shadow-purple-600/40 transition-all cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Bild herunterladen
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewData(null)}
+                      className="px-4 py-2 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950 text-zinc-350 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      Schließen
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Lightbox Modal */}
         {lightboxImage && (

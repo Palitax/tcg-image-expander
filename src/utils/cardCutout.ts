@@ -427,17 +427,23 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
      - General fallback bounding box [ymin, xmin, ymax, xmax] of the physical card itself.
 
 3. METADATA:
-   - "cardName": Extract official English name (translate Japanese e.g. 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile').
-   - "cardNumber": Card sequence number (e.g. '086/080', '151/165', '070/063', 'OP05-119').
-   - "setCode": Set registration code (e.g. 'SV8', 'M2', 'M1S', 'SV1L', 'OP05').
-   - "setName": Official English set name (e.g. 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
-   - "sceneryDescription": Vivid description of the environmental scenery, art style, lighting, and colors of the card illustration. Exclude characters/pokemon/text.
+   - "cardName": Extract official English name (translate Japanese e.g. 'ミルホッグ' -> 'Watchog', 'ワンパチ' -> 'Yamper', 'シルシュルー' -> 'Shroodle', 'エリキテル' -> 'Helioptile', 'ピカチュウ' -> 'Pikachu'). For Japanese cards, read the large name in the top header (e.g. '1進化 ミルホッグ' -> 'Watchog'), NOT the small pre-evolution text ('ミネズミから進化').
+   - "cardNumber": Card sequence number (e.g. '095/083', '086/080', '151/165', '070/063', 'OP05-119').
+   - "setCode": Set registration code (e.g. 'M4', 'SV8', 'M2', 'M1S', 'SV1L', 'OP05'). Ignore regulation mark in brackets like [J] or [H]; set code is 'M4'.
+   - "setName": Official English set name (e.g. 'Ninja Spinner', 'Mega Symphonia', 'Supercharged Breaker', 'Violet ex').
+   - "sceneryDescription": Vivid, highly detailed description of the environmental scenery, art style (e.g. digital anime art, neon lighting, watercolor), lighting sources, and color palette of the card illustration to extend it in 360 degrees. Exclude characters/pokemon/text.
    - "hasSampleWatermark": True if a diagonal semi-transparent 'SAMPLE' watermark exists.
 
 4. COORDINATE FORMAT:
    - Return all coordinates normalized to the [0, 1000] integer scale.`;
 
-      const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
+      const models = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-pro"
+      ];
       let layoutText = "";
 
       for (const model of models) {
@@ -456,46 +462,46 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
             generationConfig: {
               responseMimeType: "application/json",
               responseSchema: {
-                type: "OBJECT",
+                type: "object",
                 properties: {
                   outer_horizontal_card_edges: {
-                    type: "ARRAY",
-                    items: { type: "INTEGER" },
+                    type: "array",
+                    items: { type: "integer" },
                     description: "Exact [left_x, right_x] normalized 0-1000 where the printed cardboard ends horizontally, ignoring sleeve seams."
                   },
                   header_top_edge_y: {
-                    type: "INTEGER",
+                    type: "integer",
                     description: "Normalized 0-1000 Y-coordinate of the uppermost printed text/icon in the header (top pixel of stage symbol 'たね'/'Basic' or Name/HP). Exclude card border above."
                   },
                   copyright_bottom_edge_y: {
-                    type: "INTEGER",
+                    type: "integer",
                     description: "Normalized 0-1000 Y-coordinate of the bottom baseline of the single-line copyright text at the bottom ('©202X Pokémon...'). Exclude card border or clear plastic below."
                   },
                   footer_left_marker: {
-                    type: "ARRAY",
-                    items: { type: "INTEGER" },
+                    type: "array",
+                    items: { type: "integer" },
                     description: "Bounding box [ymin, xmin, ymax, xmax] of bottom-left set identifier strip (Set-Code, Rarity, Card-Number)."
                   },
                   box_2d: {
-                    type: "ARRAY",
-                    items: { type: "INTEGER" },
+                    type: "array",
+                    items: { type: "integer" },
                     description: "Fallback bounding box [ymin, xmin, ymax, xmax] normalized 0 to 1000 of the physical card."
                   },
                   illustration_box: {
-                    type: "ARRAY",
-                    items: { type: "INTEGER" },
+                    type: "array",
+                    items: { type: "integer" },
                     description: "Bounding box of the inner illustration area as [ymin, xmin, ymax, xmax] integers normalized 0 to 1000."
                   },
                   is_full_art: {
-                    type: "BOOLEAN",
+                    type: "boolean",
                     description: "True if Full Art / AR / SAR / SIR card, False for standard half-art."
                   },
-                  cardName: { type: "STRING" },
-                  cardNumber: { type: "STRING" },
-                  setCode: { type: "STRING" },
-                  setName: { type: "STRING" },
-                  sceneryDescription: { type: "STRING" },
-                  hasSampleWatermark: { type: "BOOLEAN" }
+                  cardName: { type: "string" },
+                  cardNumber: { type: "string" },
+                  setCode: { type: "string" },
+                  setName: { type: "string" },
+                  sceneryDescription: { type: "string" },
+                  hasSampleWatermark: { type: "boolean" }
                 },
                 required: ["cardName", "cardNumber"]
               }
@@ -506,7 +512,7 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(15000)
+            signal: AbortSignal.timeout(25000)
           });
 
           if (res.ok) {

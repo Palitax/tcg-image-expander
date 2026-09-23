@@ -339,19 +339,7 @@ export async function POST(request: Request) {
     let cardCutoutResult: CardCutoutResult;
     let usedFallback = false;
 
-    if (cropBox) {
-      console.log(`[Stream Preview API] Visier-Stanzrahmen aktiv: x=${cropBox.x}, y=${cropBox.y}, w=${cropBox.width}, h=${cropBox.height}`);
-      cardCutoutResult = await extractCardCutout(originalCardBuffer, {
-        apiKey,
-        cornerRadiusPercent: 0.038,
-        edgePaddingPx,
-        verticalOffsetPx,
-        bottomTrimPx,
-        topPaddingPx,
-        cropBox
-      });
-      roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
-    } else if (mattingEngine === "gemini_homography") {
+    if (mattingEngine === "gemini_homography") {
       console.log("[Stream Preview API] Starte Gemini 4-Punkt Grounding & Homographie-Entzerrung...");
       try {
         const homographyResult = await extractCardHomography(originalCardBuffer, {
@@ -583,30 +571,58 @@ export async function POST(request: Request) {
         // If vision in Step 1 didn't produce sceneryDescription, run quick fallback describer
         if (!description) {
           try {
-            const describePrompt = `Analyze this trading card illustration. Write a concise, vivid description of ONLY the empty background environment, scenery, room/nature setting, color palette, and lighting for an ultra-clean 4K digital anime illustration.
-CRITICAL MANDATORY RULE: Completely ignore, omit, and exclude any Pokémon, characters, figures, humans, animals, faces, Pokéballs, toys, text, or card borders. Focus 100% on the empty environment. Return only the descriptive prompt for the background scenery.`;
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
-            const payload = {
-              contents: [
-                {
-                  parts: [
-                    { inlineData: { mimeType: "image/jpeg", data: rawIllustrationBase64 } },
-                    { text: describePrompt }
+            // Pre-downscale illustration to ~512px for instant transfer (<1s)
+            const descIllustrationBuffer = await sharp(croppedIllustrationBuffer)
+              .resize(512, 512, { fit: "inside" })
+              .jpeg({ quality: 80 })
+              .toBuffer();
+            const descIllustrationBase64 = descIllustrationBuffer.toString("base64");
+
+            const describePrompt = `You are an expert art director and environment concept artist.
+Analyze this trading card artwork illustration in deep visual detail.
+Your mission is to generate a scenery prompt that will be used to OUTPAINT and expand this exact scene in 360 degrees around the card.
+The expanded scenery must MIMIC AND MATCH the artwork as closely as humanly possible:
+1. ENVIRONMENT & SETTING: Describe the exact location (e.g. night cityscape with distant illuminated skyscraper radio tower, or moonlit rooftop under indigo starry sky, or misty bioluminescent forest).
+2. ARTISTIC STYLE & MEDIUM: Describe the exact visual technique (e.g. high-end digital anime concept art, vibrant neon rim lighting, painterly textured brushstrokes, soft glowing volumetric light rays, clean gradients).
+3. COLOR PALETTE: Specify the exact dominant and accent colors (e.g. deep midnight indigo, electric magenta/hot pink neon glow, glowing turquoise, muted charcoal rooftops).
+4. ATMOSPHERE & LIGHTING: Describe the lighting sources and mood (e.g. nocturnal neon lights casting soft ambient glow into the dark night sky).
+
+CRITICAL RULE: STRICTLY EXCLUDE any Pokémon, creatures, characters, figures, humans, animals, faces, Pokéballs, toys, text, symbols, or card borders. Focus 100% on the surrounding scenery and atmosphere. Return only the descriptive prompt for the background scenery.`;
+
+            const describerModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+            for (const dModel of describerModels) {
+              try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${dModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+                const payload = {
+                  contents: [
+                    {
+                      parts: [
+                        { inlineData: { mimeType: "image/jpeg", data: descIllustrationBase64 } },
+                        { text: describePrompt }
+                      ]
+                    }
                   ]
+                };
+
+                const res = await fetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                  signal: AbortSignal.timeout(15000)
+                });
+
+                if (res.ok) {
+                  const json = await res.json();
+                  const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+                  if (text && text.trim().length > 10) {
+                    description = text.trim();
+                    console.log(`[Stream Preview API] Scenery description derived with ${dModel}: "${description.slice(0, 100)}..."`);
+                    break;
+                  }
                 }
-              ]
-            };
-
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(4500)
-            });
-
-            if (res.ok) {
-              const json = await res.json();
-              description = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+              } catch (subErr: any) {
+                console.warn(`[Stream Preview API] Describer with ${dModel} failed:`, subErr?.message || subErr);
+              }
             }
           } catch (e: any) {
             console.warn("[Stream Preview API] Fallback describer timed out or failed:", e?.message || e);
@@ -614,15 +630,19 @@ CRITICAL MANDATORY RULE: Completely ignore, omit, and exclude any Pokémon, char
         }
 
         // Deeply sanitize description to eliminate ALL character, Pokémon, and animal references
-        let cleanDesc = (description || "cozy room interior in vibrant colorful anime aesthetic with warm natural ambient lighting")
-          .replace(/^(here is a prompt|prompt:|description:|sure, here is|an anime)/gi, "")
-          .replace(/\b(pokemon|pokémon|pokeball|pokéball|yamper|pikachu|charizard|corgi|dog|cat|puppy|creature|monster|character|figure|human|person|face|toy)\b/gi, "")
-          .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy motif")
-          .replace(/\s+/g, " ")
-          .trim();
+        let cleanDesc = description
+          ? description
+              .replace(/^(here is a prompt|prompt:|description:|sure, here is|an anime)/gi, "")
+              .replace(/\b(pokemon|pokémon|pokeball|pokéball|yamper|pikachu|charizard|corgi|dog|cat|puppy|creature|monster|character|figure|human|person|face|toy)\b/gi, "")
+              .replace(/\b(kill|blood|dead|die|sword|weapon|fight|attack|monster|devil|demon|gun|stab|wound|hurt|gore|blade|combat)\b/gi, "fantasy motif")
+              .replace(/\s+/g, " ")
+              .trim()
+          : (finalCardName && finalCardName !== "Sammelkarte" && !/^\d+$/.test(finalCardName)
+              ? `thematic environment and scenery landscape matching the art style and atmosphere of ${finalCardName}`
+              : "atmospheric digital anime scenery landscape with cinematic lighting, immaculate clean details, and rich color gradients");
 
-        // 4K Crystal-Clean Prompt with explicit zero-noise and zero-character mandate
-        const sceneryPrompt = `An ultra-clean, pristine, immaculate 4K resolution digital anime scenery background illustration of: ${cleanDesc}. Masterpiece quality, crystal clear sharp focus, clean precise lines, smooth gradients, vibrant colors, cinematic lighting, completely free of noise, zero grain, no film grain, perfectly clean digital art surfaces. STRICT REQUIREMENT: Absolutely NO characters, NO Pokémon, NO animals, NO figures, NO people, NO faces, NO Pokéballs, NO toys, NO text, NO card borders. Pure scenery and background art only.`;
+        // 4K Crystal-Clean Prompt with explicit zero-noise and zero-character mandate matching card art
+        const sceneryPrompt = `An ultra-clean, pristine, immaculate 4K resolution seamless scenery background outpainting: ${cleanDesc}. Masterpiece digital anime concept art, seamless 360-degree environment expansion matching the artwork colors, mood and lighting. Crystal clear sharp focus, smooth gradients, vibrant cinematic lighting, completely free of noise, zero grain. STRICT REQUIREMENT: Pure empty scenery, landscape, and environment art only. Absolutely NO characters, NO Pokémon, NO animals, NO figures, NO people, NO faces, NO Pokéballs, NO toys, NO text, NO card borders.`;
 
         console.log(`[Stream Preview API] Starting 1:1 clean 4K scenery generation...`);
 

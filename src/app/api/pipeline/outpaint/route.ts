@@ -102,13 +102,20 @@ export async function POST(request: Request) {
       let description = "";
       let lastError;
 
+      // Pre-downscale cropped image for ultra-fast vision describer (<1s)
+      const descBuffer = await sharp(croppedBuffer)
+        .resize(512, 512, { fit: "inside" })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      const descBase64 = descBuffer.toString("base64");
+
       const describePrompt = isDisplay
         ? "Analyze this collectible display box packaging. Describe the visual theme, franchise setting, color scheme, artistic style, and artwork motifs visible on the box. Write a detailed prompt to generate a matching background scenery/backdrop that feels like a natural environment or thematic setting for this display box. Focus ONLY on the background scenery/backdrop, style, and colors. You MUST completely ignore and exclude the display box itself, any text, and branding logos from the background description. Return only the descriptive prompt for the background scenery."
         : (mode === "backdrop"
-          ? "Analyze this trading card illustration. Write a detailed prompt to generate a matching background scenery/backdrop. Your description MUST focus ONLY on the environment, scenery, backdrop elements, artistic style (e.g. anime sketch, watercolor, oil painting), color palette, lighting, brushstrokes, and general aesthetic. You MUST completely ignore and exclude any characters, figures, or humans in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery."
-          : "Analyze this trading card illustration. Describe the environmental scenery, artistic style (e.g. anime, oil painting, watercolor), key color palette, lighting, and general aesthetic. You MUST completely ignore and exclude any character figures, card text, card borders, play cost symbols, and power attributes from your description. Return only the description.");
+          ? "You are an expert art director. Analyze this trading card illustration. Write a detailed, vivid prompt to OUTPAINT and expand this exact scene in 360 degrees around the card. Your prompt must MIMIC AND MATCH the artwork as closely as possible: capture the exact environmental setting, the precise artistic style and medium (e.g. digital anime painting, watercolor wash, neon rim lighting, painterly textured brushstrokes), the exact dominant and accent color palette, and the atmospheric lighting sources. CRITICAL: Focus strictly on the empty environment, backdrop elements, and aesthetic. You MUST completely ignore and exclude any characters, figures, humans, or Pokémon in the illustration—do NOT describe them at all. Return only the descriptive prompt for the background scenery."
+          : "You are an expert art director. Analyze this trading card illustration. Describe the environmental scenery, exact artistic style (e.g. digital anime concept art, oil painting, watercolor), key color palette, lighting sources, and atmospheric aesthetic to seamlessly continue the artwork outward. You MUST completely ignore and exclude any character figures, card text, card borders, play cost symbols, and power attributes from your description. Return only the description.");
 
-      const styleModels = ["gemini-2.5-flash", "gemini-1.5-flash"];
+      const styleModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
       for (const model of styleModels) {
         try {
           console.log(`[Outpaint API] Describing style with model ${model} (mode: ${mode}, isDisplay: ${isDisplay})`);
@@ -117,7 +124,7 @@ export async function POST(request: Request) {
             contents: [
               {
                 parts: [
-                  { inlineData: { mimeType: "image/png", data: base64Data } },
+                  { inlineData: { mimeType: "image/jpeg", data: descBase64 } },
                   { text: describePrompt }
                 ]
               }
@@ -128,14 +135,14 @@ export async function POST(request: Request) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(4000)
+            signal: AbortSignal.timeout(15000)
           });
 
           if (res.ok) {
             const json = await res.json();
             const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (text) {
-              description = text;
+            if (text && text.trim().length > 10) {
+              description = text.trim();
               break;
             }
           }
@@ -146,7 +153,7 @@ export async function POST(request: Request) {
       }
 
       if (!description) {
-        description = "Fantasy scenery background in vibrant colorful aesthetic";
+        description = "Atmospheric landscape scenery in vibrant digital anime aesthetic with cinematic lighting and rich smooth color gradients";
       }
 
       // Filter and sanitize description to prevent character injection and safety triggers
