@@ -13,6 +13,8 @@ export interface StreamCardSide {
   backgroundImageUrl?: string;
   error?: string;
   isSaved?: boolean;
+  fileHash?: string;
+  fallbackKey?: string;
   metadata?: {
     cardName: string;
     cardNumber: string;

@@ -60,6 +60,7 @@ import {
   type StreamCardSide,
   type DuplexScanOrder
 } from "@/utils/streamBatchPairing";
+import { calculateFileHash, getFileFallbackKey } from "@/utils/fileHash";
 
 const isLocalMode = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -1359,6 +1360,89 @@ export default function Home() {
           return [...prev, ...newItems];
         });
 
+        // 3. Dauerhaft gespeicherte Visier-Kalibrierungen vom Server abgleichen & wiederherstellen
+        (async () => {
+          try {
+            const queryList: Array<{ hash: string; fallbackKey: string; fileName: string; fileSize: number }> = [];
+            for (const file of imageFiles) {
+              const hash = await calculateFileHash(file);
+              const fbKey = getFileFallbackKey(file);
+              queryList.push({ hash, fallbackKey: fbKey, fileName: file.name, fileSize: file.size });
+            }
+
+            if (queryList.length === 0) return;
+
+            const matchRes = await fetch("/api/calibrations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "match", items: queryList })
+            });
+
+            if (matchRes.ok) {
+              const matchData = await matchRes.json();
+              const matched = matchData.matched as Record<string, any>;
+              if (matched && Object.keys(matched).length > 0) {
+                let restoredCount = 0;
+                setStreamCards(prev => prev.map((card, idx) => {
+                  let updatedFront = card.front;
+                  let updatedBack = card.back;
+
+                  const fHash = card.front.fileHash || queryList.find(q => q.fileName === card.front.file.name && q.fileSize === card.front.file.size)?.hash;
+                  const fKey = fHash || card.front.fallbackKey || `${card.front.file.name}_${card.front.file.size}`;
+                  if (matched[fKey]) {
+                    const cal = matched[fKey];
+                    updatedFront = {
+                      ...card.front,
+                      fileHash: fHash,
+                      fallbackKey: card.front.fallbackKey || getFileFallbackKey(card.front.file),
+                      cropBox: cal.cropBox,
+                      isVisorCustomized: true,
+                      metadata: cal.metadata || card.front.metadata
+                    };
+                    restoredCount++;
+                  }
+
+                  if (card.back) {
+                    const backSide = card.back;
+                    const bHash = backSide.fileHash || queryList.find(q => q.fileName === backSide.file.name && q.fileSize === backSide.file.size)?.hash;
+                    const bKey = bHash || backSide.fallbackKey || `${backSide.file.name}_${backSide.file.size}`;
+                    if (matched[bKey]) {
+                      const cal = matched[bKey];
+                      updatedBack = {
+                        ...backSide,
+                        fileHash: bHash,
+                        fallbackKey: backSide.fallbackKey || getFileFallbackKey(backSide.file),
+                        cropBox: cal.cropBox,
+                        isVisorCustomized: true,
+                        metadata: cal.metadata || backSide.metadata
+                      };
+                      restoredCount++;
+                    }
+                  }
+
+                  if (idx === 0) {
+                    const firstBox = updatedFront.cropBox;
+                    if (firstBox) setStreamCropBox(firstBox);
+                  }
+
+                  return {
+                    ...card,
+                    front: updatedFront,
+                    back: updatedBack
+                  };
+                }));
+
+                if (restoredCount > 0) {
+                  setCalibrationToast(`🎯 ${restoredCount} ${restoredCount === 1 ? "gespeichertes Visier" : "gespeicherte Visiere"} automatisch wiederhergestellt!`);
+                  setTimeout(() => setCalibrationToast(null), 4500);
+                }
+              }
+            }
+          } catch (calErr) {
+            console.warn("Fehler beim Abgleich gespeicherter Visiere:", calErr);
+          }
+        })();
+
         if (addedCount > 0) {
           setImportStatusMsg(`✅ ${addedCount} ${addedCount === 1 ? "Scan" : "Scans"} erfolgreich in die Pipeline importiert!`);
           setUploadOptimizationMsg(`✅ ${addedCount} ${addedCount === 1 ? "Scan" : "Scans"} importiert!`);
@@ -1544,6 +1628,11 @@ export default function Home() {
   const [lastExtractedEngine, setLastExtractedEngine] = useState<"gemini_homography" | "ai_matting" | "tcg_cutout">("gemini_homography");
   const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
   const streamVisorRef = useRef<HTMLDivElement | null>(null);
+
+  // Visier-Kalibrierungsspeicher & Auto-Save Zustände
+  const [isCalibrationSaved, setIsCalibrationSaved] = useState<boolean>(false);
+  const [calibrationToast, setCalibrationToast] = useState<string | null>(null);
+  const saveCalibrationTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Case Maker states
   const [selectedArtworkId, setSelectedArtworkId] = useState<string | null>(null);
@@ -4139,6 +4228,50 @@ export default function Home() {
     }
   };
 
+  // Speichert eine Visier-Kalibrierung dauerhaft auf dem Server (cache-unabhängig)
+  const saveCalibrationToServer = useCallback(async (
+    cardSideData: StreamCardSide,
+    box: CropBox,
+    side: "front" | "back",
+    metadata?: StreamCardSide["metadata"]
+  ) => {
+    try {
+      const file = cardSideData.file;
+      if (!file) return;
+
+      const fileHash = cardSideData.fileHash || await calculateFileHash(file);
+      const fallbackKey = cardSideData.fallbackKey || getFileFallbackKey(file);
+
+      await fetch("/api/calibrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save",
+          calibration: {
+            id: fileHash,
+            fileHash,
+            fallbackKey,
+            fileName: file.name,
+            fileSize: file.size,
+            cropBox: box,
+            isUserManual: true,
+            metadata: metadata || cardSideData.metadata,
+            cardSide: side,
+            updatedAt: Date.now()
+          }
+        })
+      });
+
+      setIsCalibrationSaved(true);
+      if (saveCalibrationTimerRef.current) clearTimeout(saveCalibrationTimerRef.current);
+      saveCalibrationTimerRef.current = setTimeout(() => {
+        setIsCalibrationSaved(false);
+      }, 2500);
+    } catch (err) {
+      console.warn("Fehler beim Speichern der Visier-Kalibrierung:", err);
+    }
+  }, []);
+
   // Speichert die Stanzvisier-Position exakt für die aktuell ausgewählte Karte & Seite
   const handleStreamCropBoxChange = (newBox: CropBox, isUserManual = false) => {
     setStreamCropBox(newBox);
@@ -4180,6 +4313,16 @@ export default function Home() {
         };
       }
     }));
+
+    // Dauerhafte serverseitige Speicherung bei manueller Justierung (debounced)
+    if (isUserManual && streamCards[activeStreamCardIndex]) {
+      const activeCard = streamCards[activeStreamCardIndex];
+      const activeSideData = activeStreamSide === "front" ? activeCard.front : (activeCard.back || activeCard.front);
+      if (saveCalibrationTimerRef.current) clearTimeout(saveCalibrationTimerRef.current);
+      saveCalibrationTimerRef.current = setTimeout(() => {
+        saveCalibrationToServer(activeSideData, newBox, activeStreamSide, activeSideData.metadata);
+      }, 400);
+    }
   };
 
   // Setzt das Stanzvisier der Rückseite zurück auf das Stanzvisier der Vorderseite
@@ -4237,6 +4380,128 @@ export default function Home() {
           isVisorCustomized: true
         } : null
       })));
+    }
+
+    // Speichere die Kalibrierung für alle Karten im Stapel auf dem Server
+    if (streamCropBox && streamCards.length > 0) {
+      (async () => {
+        try {
+          const records = await Promise.all(
+            streamCards.map(async (c) => {
+              const targetSide = activeStreamSide === "front" ? c.front : (c.back || c.front);
+              const hash = targetSide.fileHash || await calculateFileHash(targetSide.file);
+              const fbKey = targetSide.fallbackKey || getFileFallbackKey(targetSide.file);
+              return {
+                id: hash,
+                fileHash: hash,
+                fallbackKey: fbKey,
+                fileName: targetSide.file.name,
+                fileSize: targetSide.file.size,
+                cropBox: streamCropBox,
+                isUserManual: true,
+                metadata: targetSide.metadata,
+                cardSide: activeStreamSide,
+                updatedAt: Date.now()
+              };
+            })
+          );
+          await fetch("/api/calibrations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "import", calibrations: records })
+          });
+          setIsCalibrationSaved(true);
+          setTimeout(() => setIsCalibrationSaved(false), 2500);
+        } catch (e) {
+          console.warn("Fehler beim Batch-Speichern der Kalibrierungen:", e);
+        }
+      })();
+    }
+  };
+
+  // Exportiert alle auf dem Server gespeicherten Visier-Kalibrierungen als JSON-Datei
+  const handleExportCalibrations = async () => {
+    try {
+      const res = await fetch("/api/calibrations");
+      if (!res.ok) throw new Error("Export fehlgeschlagen");
+      const data = await res.json();
+      const list = data.calibrations || [];
+      if (list.length === 0) {
+        alert("Es sind aktuell noch keine Visier-Kalibrierungen auf dem Server hinterlegt.");
+        return;
+      }
+      const jsonStr = JSON.stringify(list, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `tcg_visier_kalibrierungen_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setCalibrationToast("✓ Alle Visiere erfolgreich als JSON-Datei exportiert!");
+      setTimeout(() => setCalibrationToast(null), 3000);
+    } catch (e) {
+      console.error("Export-Fehler:", e);
+      alert("Fehler beim Exportieren der Kalibrierungs-Datei.");
+    }
+  };
+
+  // Importiert Visier-Kalibrierungen aus einer JSON-Datei
+  const handleImportCalibrations = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const calibrations = JSON.parse(text);
+      if (!Array.isArray(calibrations)) {
+        alert("Ungültiges JSON-Format. Erwartet wird eine Liste von Visier-Einträgen.");
+        return;
+      }
+      const res = await fetch("/api/calibrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "import", calibrations })
+      });
+      if (res.ok) {
+        const result = await res.json();
+        setCalibrationToast(`🎯 ${result.importedCount || calibrations.length} Visiere erfolgreich importiert!`);
+        setTimeout(() => setCalibrationToast(null), 4000);
+
+        // Falls bereits Karten geladen sind, Visiere direkt abgleichen & anwenden
+        if (streamCards.length > 0) {
+          const calMap = new Map<string, any>();
+          for (const c of calibrations) {
+            if (c.fileHash) calMap.set(c.fileHash, c);
+            if (c.fallbackKey) calMap.set(c.fallbackKey, c);
+          }
+          setStreamCards(prev => prev.map((card, idx) => {
+            let updatedFront = card.front;
+            let updatedBack = card.back;
+            const fKey = card.front.fileHash || card.front.fallbackKey || `${card.front.file.name}_${card.front.file.size}`;
+            if (calMap.has(fKey)) {
+              updatedFront = { ...card.front, cropBox: calMap.get(fKey).cropBox, isVisorCustomized: true };
+            }
+            if (card.back) {
+              const bKey = card.back.fileHash || card.back.fallbackKey || `${card.back.file.name}_${card.back.file.size}`;
+              if (calMap.has(bKey)) {
+                updatedBack = { ...card.back, cropBox: calMap.get(bKey).cropBox, isVisorCustomized: true };
+              }
+            }
+            if (idx === activeStreamCardIndex) {
+              const activeBox = activeStreamSide === "front" ? updatedFront.cropBox : (updatedBack?.cropBox || updatedFront.cropBox);
+              if (activeBox) setStreamCropBox(activeBox);
+            }
+            return { ...card, front: updatedFront, back: updatedBack };
+          }));
+        }
+      }
+    } catch (err) {
+      console.error("Import-Fehler:", err);
+      alert("Fehler beim Einlesen der JSON-Datei.");
+    } finally {
+      e.target.value = "";
     }
   };
 
@@ -8293,7 +8558,29 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className="flex items-center gap-2 px-3 py-1">
+              <div className="flex items-center gap-2 flex-wrap px-2 py-1">
+                <button
+                  type="button"
+                  onClick={handleExportCalibrations}
+                  className="px-3 py-1.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/80 text-zinc-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                  title="Gespeicherte Visier-Positionen als JSON-Datei sichern"
+                >
+                  <Download className="w-3.5 h-3.5 text-purple-400" />
+                  Visiere sichern
+                </button>
+                <label
+                  className="px-3 py-1.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/80 text-zinc-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                  title="Visier-Positionen aus JSON-Datei laden"
+                >
+                  <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                  Visiere laden
+                  <input
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleImportCalibrations}
+                  />
+                </label>
                 <span className="text-[11px] font-medium text-purple-300 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   Whatnot / Live-Stream Studio (bis zu 400 Bilder)
@@ -8758,6 +9045,13 @@ export default function Home() {
                             <CheckCheck className="w-3.5 h-3.5 text-purple-400" />
                             {activeStreamSide === "back" ? "Auf alle Rückseiten anwenden" : "Auf alle Karten anwenden"}
                           </button>
+
+                          {isCalibrationSaved && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg animate-in fade-in duration-150">
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              Auf Server gemerkt
+                            </span>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -10478,6 +10772,14 @@ export default function Home() {
                 </span>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Schwebender Toast für automatisch wiederhergestellte Visier-Kalibrierungen */}
+        {calibrationToast && (
+          <div className="fixed bottom-6 left-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl bg-zinc-950/95 border border-purple-500/50 shadow-[0_0_30px_rgba(168,85,247,0.35)] backdrop-blur-xl animate-in slide-in-from-bottom-5 duration-300">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            <span className="text-sm font-semibold text-white">{calibrationToast}</span>
           </div>
         )}
 
