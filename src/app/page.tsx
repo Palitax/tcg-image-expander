@@ -57,7 +57,8 @@ import {
   analyzeAndPairCardImages, 
   sanitizeCardFileName,
   type StreamBatchCard, 
-  type StreamCardSide 
+  type StreamCardSide,
+  type DuplexScanOrder
 } from "@/utils/streamBatchPairing";
 
 const isLocalMode = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -966,6 +967,7 @@ export default function Home() {
   const [importStatusMsg, setImportStatusMsg] = useState<string>("");
   const [importProgressCount, setImportProgressCount] = useState<{ current: number; total: number } | null>(null);
   const [autoGroupDuplex, setAutoGroupDuplex] = useState<boolean>(true);
+  const [duplexScanOrder, setDuplexScanOrder] = useState<DuplexScanOrder>("alternating");
 
   const cancelBatchRef = useRef<boolean>(false);
 
@@ -1313,7 +1315,7 @@ export default function Home() {
           addedCount = filesToAdd.length;
 
           const allFiles = [...existingFiles, ...filesToAdd];
-          const newCards = analyzeAndPairCardImages(allFiles, autoGroupDuplex);
+          const newCards = analyzeAndPairCardImages(allFiles, autoGroupDuplex, duplexScanOrder);
 
           if (prev.length === 0 && newCards.length > 0) {
             const firstCard = newCards[0];
@@ -1370,7 +1372,7 @@ export default function Home() {
         setImportProgressCount(null);
       }
     }
-  }, [autoGroupDuplex]);
+  }, [autoGroupDuplex, duplexScanOrder]);
 
   const handleCsvImport = useCallback(async (csvFile: File, studioType: 'card' | 'display' | 'booster' | 'stream') => {
     setIsCsvLoading(true);
@@ -4219,7 +4221,26 @@ export default function Home() {
         if (card.back) allFiles.push(card.back.file);
       });
       if (allFiles.length === 0) return prev;
-      const reanalyzed = analyzeAndPairCardImages(allFiles, nextVal);
+      const reanalyzed = analyzeAndPairCardImages(allFiles, nextVal, duplexScanOrder);
+      if (activeStreamCardIndex >= reanalyzed.length) {
+        setActiveStreamCardIndex(0);
+      }
+      return reanalyzed;
+    });
+  };
+
+  // Schaltet zwischen alternierendem Scan (1,2 / 3,4) und Flachbett-Stapel-Scan (1..N / N+1..2N) um
+  const toggleDuplexScanOrder = () => {
+    const nextOrder: DuplexScanOrder = duplexScanOrder === "alternating" ? "stack" : "alternating";
+    setDuplexScanOrder(nextOrder);
+    setStreamCards(prev => {
+      const allFiles: File[] = [];
+      prev.forEach(card => {
+        allFiles.push(card.front.file);
+        if (card.back) allFiles.push(card.back.file);
+      });
+      if (allFiles.length === 0) return prev;
+      const reanalyzed = analyzeAndPairCardImages(allFiles, autoGroupDuplex, nextOrder);
       if (activeStreamCardIndex >= reanalyzed.length) {
         setActiveStreamCardIndex(0);
       }
@@ -4244,7 +4265,8 @@ export default function Home() {
     customCropBox?: CropBox | null,
     existingBgImage?: string,
     inheritedMetadata?: any,
-    isBackSide?: boolean
+    isBackSide?: boolean,
+    targetCardIndex?: number
   ) => {
     const rawFile = (customFile instanceof File) ? customFile : streamFile;
     if (!rawFile) return;
@@ -4255,6 +4277,8 @@ export default function Home() {
     setStreamCutoutUrl(null);
     setStreamBgImageUrl(null);
     setStreamElapsedTime(0);
+
+    const cardIdxToUse = typeof targetCardIndex === "number" ? targetCardIndex : activeStreamCardIndex;
 
     const activeSteps = streamMode === "extended" ? STREAM_EXTENDED_STEPS : STREAM_STEPS;
     setStreamSteps(activeSteps.map(s => ({ ...s, status: "idle" })));
@@ -4286,8 +4310,8 @@ export default function Home() {
         formData.append("isBackSide", "true");
         if (inheritedMetadata) {
           formData.append("inheritedMetadata", JSON.stringify(inheritedMetadata));
-        } else if (streamCards[activeStreamCardIndex]?.front?.metadata) {
-          formData.append("inheritedMetadata", JSON.stringify(streamCards[activeStreamCardIndex].front.metadata));
+        } else if (streamCards[cardIdxToUse]?.front?.metadata) {
+          formData.append("inheritedMetadata", JSON.stringify(streamCards[cardIdxToUse].front.metadata));
         }
       }
 
@@ -4350,7 +4374,7 @@ export default function Home() {
 
         if (streamCards.length > 0) {
           setStreamCards(prev => prev.map((c, idx) => {
-            if (idx !== activeStreamCardIndex) return c;
+            if (idx !== cardIdxToUse) return c;
             const updatedFront: StreamCardSide = !isProcessingBack ? {
               ...c.front,
               status: "completed",
@@ -4420,15 +4444,15 @@ export default function Home() {
 
         if (streamCards.length > 0) {
           setStreamCards(prev => prev.map((c, idx) => {
-            if (idx !== activeStreamCardIndex) return c;
-            const updatedFront: StreamCardSide = activeStreamSide === "front" ? {
+            if (idx !== cardIdxToUse) return c;
+            const updatedFront: StreamCardSide = !isProcessingBack ? {
               ...c.front,
               status: "completed",
               resultImageUrl: data.resultImageUrl,
               cutoutImageUrl: data.cutoutImageUrl,
               error: undefined
             } : c.front;
-            const updatedBack: StreamCardSide | null = (activeStreamSide === "back" && c.back) ? {
+            const updatedBack: StreamCardSide | null = (isProcessingBack && c.back) ? {
               ...c.back,
               status: "completed",
               resultImageUrl: data.resultImageUrl,
@@ -4511,7 +4535,8 @@ export default function Home() {
             frontCropToUse,
             undefined,
             undefined,
-            false
+            false,
+            i
           );
 
           if (frontResult && frontResult.success) {
@@ -4571,7 +4596,8 @@ export default function Home() {
               backCrop,
               frontBgUrl,
               frontMetadata,
-              true
+              true,
+              i
             );
 
             if (backResult && backResult.success) {
@@ -5662,6 +5688,23 @@ export default function Home() {
               >
                 <ArrowLeftRight className="w-3.5 h-3.5 text-purple-400" />
                 Duplex-Modus ({autoGroupDuplex ? "Ein" : "Aus"})
+              </button>
+            )}
+
+            {/* Duplex Reihenfolge Toggle (Alternierend vs. Stapel) */}
+            {!isStreamBatchProcessing && autoGroupDuplex && streamCards.length > 0 && (
+              <button
+                type="button"
+                onClick={toggleDuplexScanOrder}
+                className="px-3 py-2 rounded-xl border border-zinc-800 hover:border-purple-500/40 bg-zinc-950/40 hover:bg-purple-950/20 text-zinc-300 hover:text-purple-200 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                title={
+                  duplexScanOrder === "alternating"
+                    ? "Aktuell: Abwechselnder Scan (Bild 1 = VS, Bild 2 = RS, Bild 3 = VS, Bild 4 = RS... Klicken für Flachbett-Stapelmodus)"
+                    : "Aktuell: Stapel-Scan (Bilder 1..N = Vorderseiten, Bilder N+1..2N = Rückseiten... Klicken für abwechselnden Modus)"
+                }
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                Reihenfolge: {duplexScanOrder === "alternating" ? "Abwechselnd (1, 2 | 3, 4)" : "Stapel (1..N | N+1..2N)"}
               </button>
             )}
 

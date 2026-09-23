@@ -49,6 +49,8 @@ export function sanitizeCardFileName(name: string, fallback = "Karte"): string {
     .replace(/^_+|_+$/g, "") || fallback;
 }
 
+export type DuplexScanOrder = "alternating" | "stack";
+
 interface FileClassification {
   file: File;
   baseName: string;
@@ -62,10 +64,7 @@ const FRONT_PATTERNS = [
   /([_\-\s]|^)vorne([_\-\s]|\d|$)/i,
   /([_\-\s]|^)recto([_\-\s]|\d|$)/i,
   /([_\-\s]|^)vs([_\-\s]|\d|$)/i,
-  /([_\-\s])f([_\-\s]|\d|$)/i,
-  /([_\-\s])a([_\-\s]|\d|$)/i,
-  /([_\-\s])1([_\-\s]|$)/,
-  /\(1\)$/
+  /[_\-\s](f|a)$/i
 ];
 
 const BACK_PATTERNS = [
@@ -75,9 +74,7 @@ const BACK_PATTERNS = [
   /([_\-\s]|^)hinten([_\-\s]|\d|$)/i,
   /([_\-\s]|^)verso([_\-\s]|\d|$)/i,
   /([_\-\s]|^)rs([_\-\s]|\d|$)/i,
-  /([_\-\s])b([_\-\s]|\d|$)/i,
-  /([_\-\s])2([_\-\s]|$)/,
-  /\(2\)$/
+  /[_\-\s]b$/i
 ];
 
 /**
@@ -87,19 +84,19 @@ const BACK_PATTERNS = [
 function classifyFile(file: File): FileClassification {
   const base = getBaseFileName(file.name);
 
-  // 1. Prüfe auf Rückseite-Muster
-  for (const pattern of BACK_PATTERNS) {
-    if (pattern.test(base)) {
-      const core = base.replace(pattern, " ").replace(/\s+/g, " ").trim();
-      return { file, baseName: base, side: "back", coreKey: core.toLowerCase() || base.toLowerCase() };
-    }
-  }
-
-  // 2. Prüfe auf Vorderseite-Muster
+  // 1. Prüfe auf Vorderseite-Muster
   for (const pattern of FRONT_PATTERNS) {
     if (pattern.test(base)) {
       const core = base.replace(pattern, " ").replace(/\s+/g, " ").trim();
       return { file, baseName: base, side: "front", coreKey: core.toLowerCase() || base.toLowerCase() };
+    }
+  }
+
+  // 2. Prüfe auf Rückseite-Muster
+  for (const pattern of BACK_PATTERNS) {
+    if (pattern.test(base)) {
+      const core = base.replace(pattern, " ").replace(/\s+/g, " ").trim();
+      return { file, baseName: base, side: "back", coreKey: core.toLowerCase() || base.toLowerCase() };
     }
   }
 
@@ -143,11 +140,13 @@ function formatCardIndex(idx: number): string {
  * 
  * @param acceptedFiles Liste der hochgeladenen Bilddateien
  * @param autoGroupDuplex Ob sequentiell nummerierte Scans als Duplex-Paare interpretiert werden sollen
+ * @param duplexScanOrder "alternating" (1=VS, 2=RS, 3=VS...) oder "stack" (1..N=VS, N+1..2N=RS)
  * @returns Geordnete Liste von StreamBatchCard Objekten
  */
 export function analyzeAndPairCardImages(
   acceptedFiles: File[],
-  autoGroupDuplex = true
+  autoGroupDuplex = true,
+  duplexScanOrder: DuplexScanOrder = "alternating"
 ): StreamBatchCard[] {
   if (!acceptedFiles || acceptedFiles.length === 0) return [];
 
@@ -172,9 +171,18 @@ export function analyzeAndPairCardImages(
     // Für jede erkannte Vorderseite suchen wir die passende Rückseite mit gleichem coreKey
     for (const f of fronts) {
       cardCount++;
-      const matchBackIdx = backs.findIndex(
+      let matchBackIdx = backs.findIndex(
         (b, i) => !usedBackIndexes.has(i) && b.coreKey === f.coreKey
       );
+
+      // Fallback: Falls Anzahl Vorderseiten === Rückseiten und coreKey nicht exakt übereinstimmt,
+      // ordne die Rückseite am gleichen Listenindex zu
+      if (matchBackIdx === -1 && fronts.length === backs.length) {
+        const potentialIdx = cardCount - 1;
+        if (!usedBackIndexes.has(potentialIdx) && backs[potentialIdx]) {
+          matchBackIdx = potentialIdx;
+        }
+      }
 
       let matchedBack: FileClassification | undefined;
       if (matchBackIdx !== -1) {
@@ -211,48 +219,107 @@ export function analyzeAndPairCardImages(
       }
     });
 
-    // Unbekannte Dateien einzeln anfügen
-    unknowns.forEach((u) => {
-      cardCount++;
-      cards.push({
-        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-        cardNumberIndex: cardCount,
-        cardName: u.baseName || `Karte ${formatCardIndex(cardCount)}`,
-        front: createCardSide(u.file),
-        back: null,
-        isSaved: false
+    // Unbekannte Dateien: Falls Duplex aktiv, paarweise bündeln
+    if (autoGroupDuplex && unknowns.length >= 2) {
+      if (duplexScanOrder === "stack") {
+        const half = Math.ceil(unknowns.length / 2);
+        for (let i = 0; i < half; i++) {
+          cardCount++;
+          const frontFile = unknowns[i].file;
+          const backFile = (half + i < unknowns.length) ? unknowns[half + i].file : null;
+          const name = unknowns[i].baseName || `Karte ${formatCardIndex(cardCount)}`;
+          cards.push({
+            id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+            cardNumberIndex: cardCount,
+            cardName: name,
+            front: createCardSide(frontFile),
+            back: backFile ? createCardSide(backFile) : null,
+            isSaved: false
+          });
+        }
+      } else {
+        for (let i = 0; i < unknowns.length; i += 2) {
+          cardCount++;
+          const frontFile = unknowns[i].file;
+          const backFile = (i + 1 < unknowns.length) ? unknowns[i + 1].file : null;
+          const name = unknowns[i].baseName || `Karte ${formatCardIndex(cardCount)}`;
+          cards.push({
+            id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+            cardNumberIndex: cardCount,
+            cardName: name,
+            front: createCardSide(frontFile),
+            back: backFile ? createCardSide(backFile) : null,
+            isSaved: false
+          });
+        }
+      }
+    } else {
+      unknowns.forEach((u) => {
+        cardCount++;
+        cards.push({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          cardNumberIndex: cardCount,
+          cardName: u.baseName || `Karte ${formatCardIndex(cardCount)}`,
+          front: createCardSide(u.file),
+          back: null,
+          isSaved: false
+        });
       });
-    });
+    }
 
     return cards;
   }
 
   // -------------------------------------------------------------
-  // STRATEGIE B: Duplex-Scanner Reihenfolge (z.B. Epson DS-530 ADF)
-  // Bei gerader Gesamtanzahl an Bildern (z.B. 2, 4, 10, 50, 100) werden jeweils
-  // 2 aufeinanderfolgende Bilder als (Vorderseite, Rückseite) gepaart.
+  // STRATEGIE B: Duplex-Scanner Reihenfolge (z.B. Epson DS-530 ADF oder Flatbed-Stapel)
+  // Bei aktivierter Duplex-Gruppierung werden jeweils Paare gebildet
   // -------------------------------------------------------------
-  if (autoGroupDuplex && sortedFiles.length >= 2 && sortedFiles.length % 2 === 0) {
+  if (autoGroupDuplex && sortedFiles.length >= 2) {
     let cardCount = 0;
-    for (let i = 0; i < sortedFiles.length; i += 2) {
-      cardCount++;
-      const frontFile = sortedFiles[i];
-      const backFile = sortedFiles[i + 1];
+    const n = sortedFiles.length;
 
-      const frontBase = getBaseFileName(frontFile.name);
-      // Extrahiere einen sinnvollen Kartennamen
-      const name = frontBase || `Karte ${formatCardIndex(cardCount)}`;
+    if (duplexScanOrder === "stack") {
+      // Stapelweise: Erst alle Vorderseiten (1..N), dann alle Rückseiten (N+1..2N)
+      const half = Math.ceil(n / 2);
+      for (let i = 0; i < half; i++) {
+        cardCount++;
+        const frontFile = sortedFiles[i];
+        const backFile = (half + i < n) ? sortedFiles[half + i] : null;
 
-      cards.push({
-        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-        cardNumberIndex: cardCount,
-        cardName: name,
-        front: createCardSide(frontFile),
-        back: createCardSide(backFile),
-        isSaved: false
-      });
+        const frontBase = getBaseFileName(frontFile.name);
+        const name = frontBase || `Karte ${formatCardIndex(cardCount)}`;
+
+        cards.push({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          cardNumberIndex: cardCount,
+          cardName: name,
+          front: createCardSide(frontFile),
+          back: backFile ? createCardSide(backFile) : null,
+          isSaved: false
+        });
+      }
+      return cards;
+    } else {
+      // Alternierend: 1=VS, 2=RS, 3=VS, 4=RS...
+      for (let i = 0; i < n; i += 2) {
+        cardCount++;
+        const frontFile = sortedFiles[i];
+        const backFile = (i + 1 < n) ? sortedFiles[i + 1] : null;
+
+        const frontBase = getBaseFileName(frontFile.name);
+        const name = frontBase || `Karte ${formatCardIndex(cardCount)}`;
+
+        cards.push({
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          cardNumberIndex: cardCount,
+          cardName: name,
+          front: createCardSide(frontFile),
+          back: backFile ? createCardSide(backFile) : null,
+          isSaved: false
+        });
+      }
+      return cards;
     }
-    return cards;
   }
 
   // -------------------------------------------------------------
