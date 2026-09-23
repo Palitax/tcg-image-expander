@@ -452,34 +452,43 @@ const ensureSafeUploadedFiles = async (
   files: File[],
   onProgress?: (current: number, total: number, fileName: string) => void
 ): Promise<File[]> => {
-  const oversizedFiles = files.filter(f => f.size > MAX_SAFE_FILE_SIZE);
-  if (oversizedFiles.length === 0) {
+  const oversizedIndices = files
+    .map((f, i) => (f.size > MAX_SAFE_FILE_SIZE ? i : -1))
+    .filter(i => i !== -1);
+
+  if (oversizedIndices.length === 0) {
     return files;
   }
 
-  console.log(`[Pre-Upload Optimizer] ${oversizedFiles.length} von ${files.length} Dateien überschreiten ${(MAX_SAFE_FILE_SIZE / 1024 / 1024).toFixed(1)}MB. Starte Vorab-Optimierung...`);
+  console.log(`[Pre-Upload Optimizer] ${oversizedIndices.length} von ${files.length} Dateien überschreiten ${(MAX_SAFE_FILE_SIZE / 1024 / 1024).toFixed(1)}MB. Starte Vorab-Optimierung...`);
 
-  let completedOversized = 0;
-  const processedFiles = await Promise.all(
-    files.map(async (file) => {
-      if (file.size <= MAX_SAFE_FILE_SIZE) {
-        return file;
-      }
-      try {
-        const res = await optimizeImageFile(file);
-        completedOversized++;
-        if (onProgress) {
-          onProgress(completedOversized, oversizedFiles.length, file.name);
+  const resultFiles = [...files];
+  const totalOversized = oversizedIndices.length;
+  let completed = 0;
+
+  // Begrenzte Gleichzeitigkeit (3 Dateien parallel), um Speicher- und Canvas-Überlastung bei bis zu 400 Bildern zu vermeiden
+  const CHUNK_SIZE = 3;
+  for (let i = 0; i < oversizedIndices.length; i += CHUNK_SIZE) {
+    const chunk = oversizedIndices.slice(i, i + CHUNK_SIZE);
+    await Promise.all(
+      chunk.map(async (idx) => {
+        const file = files[idx];
+        try {
+          const res = await optimizeImageFile(file);
+          resultFiles[idx] = res.file;
+        } catch (err) {
+          console.error(`[Pre-Upload Optimizer] Fehler beim Optimieren von ${file.name}:`, err);
+        } finally {
+          completed++;
+          if (onProgress) {
+            onProgress(completed, totalOversized, file.name);
+          }
         }
-        return res.file;
-      } catch (err) {
-        console.error(`[Pre-Upload Optimizer] Fehler beim Optimieren von ${file.name}:`, err);
-        return file;
-      }
-    })
-  );
+      })
+    );
+  }
 
-  return processedFiles;
+  return resultFiles;
 };
 
 const ensureSafeBase64 = async (base64Str: string | null | undefined, maxDim = 900): Promise<string> => {
@@ -952,6 +961,9 @@ export default function Home() {
   const [csvStatusMsg, setCsvStatusMsg] = useState<string>("");
   const [isOptimizingUploads, setIsOptimizingUploads] = useState<boolean>(false);
   const [uploadOptimizationMsg, setUploadOptimizationMsg] = useState<string>("");
+  const [isImportingCards, setIsImportingCards] = useState<boolean>(false);
+  const [importStatusMsg, setImportStatusMsg] = useState<string>("");
+  const [importProgressCount, setImportProgressCount] = useState<{ current: number; total: number } | null>(null);
   const [autoGroupDuplex, setAutoGroupDuplex] = useState<boolean>(true);
 
   const cancelBatchRef = useRef<boolean>(false);
@@ -962,65 +974,92 @@ export default function Home() {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
         if (csvFile) {
           handleCsvImport(csvFile, "card");
+          return;
         }
       }
 
       let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
 
-      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
-      if (oversized.length > 0) {
-        setIsOptimizingUploads(true);
-        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`);
-        try {
+      setIsImportingCards(true);
+      setIsOptimizingUploads(true);
+      setImportProgressCount(null);
+      setImportStatusMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Karte wird" : "Karten werden"} in die Pipeline importiert...`);
+      setUploadOptimizationMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Karte wird" : "Karten werden"} vorbereitet...`);
+
+      await new Promise(r => setTimeout(r, 20));
+
+      try {
+        const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+        if (oversized.length > 0) {
+          const optMsg = `${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`;
+          setImportStatusMsg(optMsg);
+          setUploadOptimizationMsg(optMsg);
           imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
-            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+            setImportProgressCount({ current: curr, total });
+            const msg = `Bild ${curr} von ${total} wird optimiert (${name})...`;
+            setImportStatusMsg(msg);
+            setUploadOptimizationMsg(msg);
           });
-        } finally {
-          setIsOptimizingUploads(false);
-          setUploadOptimizationMsg("");
         }
+
+        setImportStatusMsg(`Erstelle Vorschauen für die Pipeline...`);
+        await new Promise(r => setTimeout(r, 20));
+
+        let addedCount = 0;
+        setCardBatchItems(prev => {
+          const currentCount = prev.length;
+          if (currentCount >= 400) {
+            alert("Maximal 400 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+            return prev;
+          }
+
+          let filesToAdd = imageFiles;
+          if (currentCount + imageFiles.length > 400) {
+            alert(`Es können nur noch ${400 - currentCount} Bilder hinzugefügt werden (Maximal 400 insgesamt).`);
+            filesToAdd = imageFiles.slice(0, 400 - currentCount);
+          }
+          addedCount = filesToAdd.length;
+
+          const newItems = filesToAdd.map(file => ({
+            id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+            file,
+            previewUrl: URL.createObjectURL(file),
+            name: file.name.replace(/\.[^/.]+$/, ""),
+            status: "pending" as const,
+            isSaved: false
+          }));
+
+          if (prev.length === 0 && filesToAdd.length > 0) {
+            const selectedFile = filesToAdd[0];
+            setFile(selectedFile);
+            setPreviewUrl(URL.createObjectURL(selectedFile));
+            setResultImageUrl(null);
+            setErrorMessage(null);
+            setUsedAmbientFallback(false);
+            setUsedCropFallback(false);
+            setTrimmedCard(null);
+            setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
+            setElapsedTime(0);
+            setActiveStepMessage("");
+            setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+          }
+
+          return [...prev, ...newItems];
+        });
+
+        if (addedCount > 0) {
+          setImportStatusMsg(`✅ ${addedCount} ${addedCount === 1 ? "Karte" : "Karten"} erfolgreich in die Pipeline importiert!`);
+          setUploadOptimizationMsg(`✅ ${addedCount} ${addedCount === 1 ? "Karte" : "Karten"} importiert!`);
+          await new Promise(r => setTimeout(r, 1200));
+        }
+      } finally {
+        setIsImportingCards(false);
+        setIsOptimizingUploads(false);
+        setImportStatusMsg("");
+        setUploadOptimizationMsg("");
+        setImportProgressCount(null);
       }
-
-      setCardBatchItems(prev => {
-        const currentCount = prev.length;
-        if (currentCount >= 50) {
-          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
-          return prev;
-        }
-
-        let filesToAdd = imageFiles;
-        if (currentCount + imageFiles.length > 50) {
-          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
-          filesToAdd = imageFiles.slice(0, 50 - currentCount);
-        }
-
-        const newItems = filesToAdd.map(file => ({
-          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-          file,
-          previewUrl: URL.createObjectURL(file),
-          name: file.name.replace(/\.[^/.]+$/, ""),
-          status: "pending" as const,
-          isSaved: false
-        }));
-
-        if (prev.length === 0) {
-          const selectedFile = filesToAdd[0];
-          setFile(selectedFile);
-          setPreviewUrl(URL.createObjectURL(selectedFile));
-          setResultImageUrl(null);
-          setErrorMessage(null);
-          setUsedAmbientFallback(false);
-          setUsedCropFallback(false);
-          setTrimmedCard(null);
-          setSteps(INITIAL_STEPS.map(s => ({ ...s, status: "idle" })));
-          setElapsedTime(0);
-          setActiveStepMessage("");
-          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-        }
-
-        return [...prev, ...newItems];
-      });
     }
   }, []);
 
@@ -1030,64 +1069,91 @@ export default function Home() {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
         if (csvFile) {
           handleCsvImport(csvFile, "display");
+          return;
         }
       }
 
       let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
 
-      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
-      if (oversized.length > 0) {
-        setIsOptimizingUploads(true);
-        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`);
-        try {
+      setIsImportingCards(true);
+      setIsOptimizingUploads(true);
+      setImportProgressCount(null);
+      setImportStatusMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Display-Bild wird" : "Display-Bilder werden"} für die Pipeline geladen...`);
+      setUploadOptimizationMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Bild wird" : "Bilder werden"} vorbereitet...`);
+
+      await new Promise(r => setTimeout(r, 20));
+
+      try {
+        const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+        if (oversized.length > 0) {
+          const optMsg = `${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`;
+          setImportStatusMsg(optMsg);
+          setUploadOptimizationMsg(optMsg);
           imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
-            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+            setImportProgressCount({ current: curr, total });
+            const msg = `Bild ${curr} von ${total} wird optimiert (${name})...`;
+            setImportStatusMsg(msg);
+            setUploadOptimizationMsg(msg);
           });
-        } finally {
-          setIsOptimizingUploads(false);
-          setUploadOptimizationMsg("");
         }
+
+        setImportStatusMsg(`Erstelle Vorschauen für die Pipeline...`);
+        await new Promise(r => setTimeout(r, 20));
+
+        let addedCount = 0;
+        setDisplayBatchItems(prev => {
+          const currentCount = prev.length;
+          if (currentCount >= 400) {
+            alert("Maximal 400 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+            return prev;
+          }
+
+          let filesToAdd = imageFiles;
+          if (currentCount + imageFiles.length > 400) {
+            alert(`Es können nur noch ${400 - currentCount} Bilder hinzugefügt werden (Maximal 400 insgesamt).`);
+            filesToAdd = imageFiles.slice(0, 400 - currentCount);
+          }
+          addedCount = filesToAdd.length;
+
+          const newItems = filesToAdd.map(file => ({
+            id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+            file,
+            previewUrl: URL.createObjectURL(file),
+            name: file.name.replace(/\.[^/.]+$/, ""),
+            status: "pending" as const,
+            isSaved: false
+          }));
+
+          if (prev.length === 0 && filesToAdd.length > 0) {
+            const selectedFile = filesToAdd[0];
+            setDisplayFile(selectedFile);
+            setDisplayPreviewUrl(URL.createObjectURL(selectedFile));
+            setDisplayResultUrl(null);
+            setDisplayCutoutUrl(null);
+            setDisplayBgUrl(null);
+            setDisplayErrorMessage(null);
+            setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
+            setDisplayElapsedTime(0);
+            setDisplayActiveStepMessage("");
+            setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+          }
+
+          return [...prev, ...newItems];
+        });
+
+        if (addedCount > 0) {
+          setImportStatusMsg(`✅ ${addedCount} ${addedCount === 1 ? "Bild" : "Bilder"} erfolgreich in die Pipeline importiert!`);
+          setUploadOptimizationMsg(`✅ ${addedCount} ${addedCount === 1 ? "Bild" : "Bilder"} importiert!`);
+          await new Promise(r => setTimeout(r, 1200));
+        }
+      } finally {
+        setIsImportingCards(false);
+        setIsOptimizingUploads(false);
+        setImportStatusMsg("");
+        setUploadOptimizationMsg("");
+        setImportProgressCount(null);
       }
-
-      setDisplayBatchItems(prev => {
-        const currentCount = prev.length;
-        if (currentCount >= 50) {
-          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
-          return prev;
-        }
-
-        let filesToAdd = imageFiles;
-        if (currentCount + imageFiles.length > 50) {
-          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
-          filesToAdd = imageFiles.slice(0, 50 - currentCount);
-        }
-
-        const newItems = filesToAdd.map(file => ({
-          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-          file,
-          previewUrl: URL.createObjectURL(file),
-          name: file.name.replace(/\.[^/.]+$/, ""),
-          status: "pending" as const,
-          isSaved: false
-        }));
-
-        if (prev.length === 0) {
-          const selectedFile = filesToAdd[0];
-          setDisplayFile(selectedFile);
-          setDisplayPreviewUrl(URL.createObjectURL(selectedFile));
-          setDisplayResultUrl(null);
-          setDisplayCutoutUrl(null);
-          setDisplayBgUrl(null);
-          setDisplayErrorMessage(null);
-          setDisplaySteps(DISPLAY_STEPS.map(s => ({ ...s, status: "idle" })));
-          setDisplayElapsedTime(0);
-          setDisplayActiveStepMessage("");
-          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-        }
-
-        return [...prev, ...newItems];
-      });
     }
   }, []);
 
@@ -1097,65 +1163,91 @@ export default function Home() {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
         if (csvFile) {
           handleCsvImport(csvFile, "booster");
+          return;
         }
       }
 
       let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
 
-      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
-      if (oversized.length > 0) {
-        setIsOptimizingUploads(true);
-        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`);
-        try {
+      setIsImportingCards(true);
+      setIsOptimizingUploads(true);
+      setImportProgressCount(null);
+      setImportStatusMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Booster-Bild wird" : "Booster-Bilder werden"} für die Pipeline geladen...`);
+      setUploadOptimizationMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Bild wird" : "Bilder werden"} vorbereitet...`);
+
+      await new Promise(r => setTimeout(r, 20));
+
+      try {
+        const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+        if (oversized.length > 0) {
+          const optMsg = `${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vorab optimiert...`;
+          setImportStatusMsg(optMsg);
+          setUploadOptimizationMsg(optMsg);
           imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
-            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+            setImportProgressCount({ current: curr, total });
+            const msg = `Bild ${curr} von ${total} wird optimiert (${name})...`;
+            setImportStatusMsg(msg);
+            setUploadOptimizationMsg(msg);
           });
-        } finally {
-          setIsOptimizingUploads(false);
-          setUploadOptimizationMsg("");
         }
+
+        setImportStatusMsg(`Erstelle Vorschauen für die Pipeline...`);
+        await new Promise(r => setTimeout(r, 20));
+
+        let addedCount = 0;
+        setBoosterBatchItems(prev => {
+          const currentCount = prev.length;
+          if (currentCount >= 400) {
+            alert("Maximal 400 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+            return prev;
+          }
+
+          let filesToAdd = imageFiles;
+          if (currentCount + imageFiles.length > 400) {
+            alert(`Es können nur noch ${400 - currentCount} Bilder hinzugefügt werden (Maximal 400 insgesamt).`);
+            filesToAdd = imageFiles.slice(0, 400 - currentCount);
+          }
+          addedCount = filesToAdd.length;
+
+          const newItems = filesToAdd.map(file => ({
+            id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+            file,
+            previewUrl: URL.createObjectURL(file),
+            name: file.name.replace(/\.[^/.]+$/, ""),
+            status: "pending" as const,
+            isSaved: false
+          }));
+
+          if (prev.length === 0 && filesToAdd.length > 0) {
+            const selectedFile = filesToAdd[0];
+            setBoosterFile(selectedFile);
+            setBoosterPreviewUrl(URL.createObjectURL(selectedFile));
+            setResultImageUrl(null);
+            setBoosterCutoutUrl(null);
+            setBoosterBgUrl(null);
+            setBoosterErrorMessage(null);
+            setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
+            setBoosterElapsedTime(0);
+            setBoosterActiveStepMessage("");
+            setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
+          }
+
+          return [...prev, ...newItems];
+        });
+
+        if (addedCount > 0) {
+          setImportStatusMsg(`✅ ${addedCount} ${addedCount === 1 ? "Bild" : "Bilder"} erfolgreich in die Pipeline importiert!`);
+          setUploadOptimizationMsg(`✅ ${addedCount} ${addedCount === 1 ? "Bild" : "Bilder"} importiert!`);
+          await new Promise(r => setTimeout(r, 1200));
+        }
+      } finally {
+        setIsImportingCards(false);
+        setIsOptimizingUploads(false);
+        setImportStatusMsg("");
+        setUploadOptimizationMsg("");
+        setImportProgressCount(null);
       }
-
-      setBoosterBatchItems(prev => {
-        const currentCount = prev.length;
-        if (currentCount >= 50) {
-          alert("Maximal 50 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
-          return prev;
-        }
-
-        let filesToAdd = imageFiles;
-        if (currentCount + imageFiles.length > 50) {
-          alert(`Es können nur noch ${50 - currentCount} Bilder hinzugefügt werden (Maximal 50 insgesamt).`);
-          filesToAdd = imageFiles.slice(0, 50 - currentCount);
-        }
-
-
-        const newItems = filesToAdd.map(file => ({
-          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-          file,
-          previewUrl: URL.createObjectURL(file),
-          name: file.name.replace(/\.[^/.]+$/, ""),
-          status: "pending" as const,
-          isSaved: false
-        }));
-
-        if (prev.length === 0) {
-          const selectedFile = filesToAdd[0];
-          setBoosterFile(selectedFile);
-          setBoosterPreviewUrl(URL.createObjectURL(selectedFile));
-          setBoosterResultUrl(null);
-          setBoosterCutoutUrl(null);
-          setBoosterBgUrl(null);
-          setBoosterErrorMessage(null);
-          setBoosterSteps(BOOSTER_STEPS.map(s => ({ ...s, status: "idle" })));
-          setBoosterElapsedTime(0);
-          setBoosterActiveStepMessage("");
-          setNewArtworkName(selectedFile.name.replace(/\.[^/.]+$/, ""));
-        }
-
-        return [...prev, ...newItems];
-      });
     }
   }, []);
 
@@ -1165,96 +1257,126 @@ export default function Home() {
         const csvFile = acceptedFiles.find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
         if (csvFile) {
           handleCsvImport(csvFile, "stream");
+          return;
         }
       }
 
       let imageFiles = acceptedFiles.filter(f => !f.name.toLowerCase().endsWith(".csv") && f.type !== "text/csv");
       if (imageFiles.length === 0) return;
 
-      const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
-      if (oversized.length > 0) {
-        setIsOptimizingUploads(true);
-        setUploadOptimizationMsg(`${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vor dem Stanzvisier-Zuschnitt optimiert...`);
-        try {
-          imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
-            setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
-          });
-        } finally {
-          setIsOptimizingUploads(false);
-          setUploadOptimizationMsg("");
-        }
-      }
+      setIsImportingCards(true);
+      setIsOptimizingUploads(true);
+      setImportProgressCount(null);
+      setImportStatusMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Scan wird" : "Scans werden"} für die Stream-Pipeline vorbereitet...`);
+      setUploadOptimizationMsg(`${imageFiles.length} ${imageFiles.length === 1 ? "Scan wird" : "Scans werden"} vorbereitet...`);
 
-      // 1. Intelligente Vorder- & Rückseiten-Analyse für Stream-Cards
-      setStreamCards(prev => {
-        const existingFiles: File[] = [];
-        prev.forEach(card => {
-          existingFiles.push(card.front.file);
-          if (card.back) existingFiles.push(card.back.file);
+      await new Promise(r => setTimeout(r, 20));
+
+      try {
+        const oversized = imageFiles.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+        if (oversized.length > 0) {
+          const optMsg = `${oversized.length} ${oversized.length === 1 ? "großes Bild wird" : "große Bilder werden"} vor dem Stanzvisier-Zuschnitt optimiert...`;
+          setImportStatusMsg(optMsg);
+          setUploadOptimizationMsg(optMsg);
+          imageFiles = await ensureSafeUploadedFiles(imageFiles, (curr, total, name) => {
+            setImportProgressCount({ current: curr, total });
+            const msg = `Bild ${curr} von ${total} wird optimiert (${name})...`;
+            setImportStatusMsg(msg);
+            setUploadOptimizationMsg(msg);
+          });
+        }
+
+        setImportStatusMsg("Analysiere Kartenscans und erstelle Vorschauen...");
+        await new Promise(r => setTimeout(r, 20));
+
+        let addedCount = 0;
+        // 1. Intelligente Vorder- & Rückseiten-Analyse für Stream-Cards
+        setStreamCards(prev => {
+          const existingFiles: File[] = [];
+          prev.forEach(card => {
+            existingFiles.push(card.front.file);
+            if (card.back) existingFiles.push(card.back.file);
+          });
+
+          const currentCount = existingFiles.length;
+          if (currentCount >= 400) {
+            alert("Maximal 400 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
+            return prev;
+          }
+
+          let filesToAdd = imageFiles;
+          if (currentCount + imageFiles.length > 400) {
+            alert(`Es können nur noch ${400 - currentCount} Bilder hinzugefügt werden (Maximal 400 insgesamt).`);
+            filesToAdd = imageFiles.slice(0, 400 - currentCount);
+          }
+          addedCount = filesToAdd.length;
+
+          const allFiles = [...existingFiles, ...filesToAdd];
+          const newCards = analyzeAndPairCardImages(allFiles, autoGroupDuplex);
+
+          if (prev.length === 0 && newCards.length > 0) {
+            const firstCard = newCards[0];
+            setActiveStreamCardIndex(0);
+            setActiveStreamSide("front");
+            setStreamFile(firstCard.front.file);
+            setStreamPreviewUrl(firstCard.front.previewUrl);
+            setStreamCropBox(firstCard.front.cropBox);
+            setStreamResultUrl(null);
+            setStreamCutoutUrl(null);
+            setStreamBgImageUrl(null);
+            setStreamErrorMessage(null);
+            setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
+            setStreamElapsedTime(0);
+            setStreamActiveStepMessage("");
+            setNewArtworkName(firstCard.cardName ? `${firstCard.cardName} - Vorderseite` : firstCard.front.file.name.replace(/\.[^/.]+$/, ""));
+          }
+
+          return newCards;
         });
 
-        const currentCount = existingFiles.length;
-        if (currentCount >= 100) {
-          alert("Maximal 100 Bilder erlaubt. Es können keine weiteren Bilder hinzugefügt werden.");
-          return prev;
+        // 2. Synchronisation mit streamBatchItems für Abwärtskompatibilität
+        setStreamBatchItems(prev => {
+          const currentCount = prev.length;
+          if (currentCount >= 400) return prev;
+
+          let filesToAdd = imageFiles;
+          if (currentCount + imageFiles.length > 400) {
+            filesToAdd = imageFiles.slice(0, 400 - currentCount);
+          }
+
+          const newItems = filesToAdd.map(file => ({
+            id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+            file,
+            previewUrl: URL.createObjectURL(file),
+            name: file.name.replace(/\.[^/.]+$/, ""),
+            status: "pending" as const,
+            isSaved: false
+          }));
+
+          return [...prev, ...newItems];
+        });
+
+        if (addedCount > 0) {
+          setImportStatusMsg(`✅ ${addedCount} ${addedCount === 1 ? "Scan" : "Scans"} erfolgreich in die Pipeline importiert!`);
+          setUploadOptimizationMsg(`✅ ${addedCount} ${addedCount === 1 ? "Scan" : "Scans"} importiert!`);
+          await new Promise(r => setTimeout(r, 1200));
         }
-
-        let filesToAdd = imageFiles;
-        if (currentCount + imageFiles.length > 100) {
-          alert(`Es können nur noch ${100 - currentCount} Bilder hinzugefügt werden (Maximal 100 insgesamt).`);
-          filesToAdd = imageFiles.slice(0, 100 - currentCount);
-        }
-
-        const allFiles = [...existingFiles, ...filesToAdd];
-        const newCards = analyzeAndPairCardImages(allFiles, autoGroupDuplex);
-
-        if (prev.length === 0 && newCards.length > 0) {
-          const firstCard = newCards[0];
-          setActiveStreamCardIndex(0);
-          setActiveStreamSide("front");
-          setStreamFile(firstCard.front.file);
-          setStreamPreviewUrl(firstCard.front.previewUrl);
-          setStreamCropBox(firstCard.front.cropBox);
-          setStreamResultUrl(null);
-          setStreamCutoutUrl(null);
-          setStreamBgImageUrl(null);
-          setStreamErrorMessage(null);
-          setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
-          setStreamElapsedTime(0);
-          setStreamActiveStepMessage("");
-          setNewArtworkName(firstCard.cardName ? `${firstCard.cardName} - Vorderseite` : firstCard.front.file.name.replace(/\.[^/.]+$/, ""));
-        }
-
-        return newCards;
-      });
-
-      // 2. Synchronisation mit streamBatchItems für Abwärtskompatibilität
-      setStreamBatchItems(prev => {
-        const currentCount = prev.length;
-        if (currentCount >= 100) return prev;
-
-        let filesToAdd = imageFiles;
-        if (currentCount + imageFiles.length > 100) {
-          filesToAdd = imageFiles.slice(0, 100 - currentCount);
-        }
-
-        const newItems = filesToAdd.map(file => ({
-          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
-          file,
-          previewUrl: URL.createObjectURL(file),
-          name: file.name.replace(/\.[^/.]+$/, ""),
-          status: "pending" as const,
-          isSaved: false
-        }));
-
-        return [...prev, ...newItems];
-      });
+      } finally {
+        setIsImportingCards(false);
+        setIsOptimizingUploads(false);
+        setImportStatusMsg("");
+        setUploadOptimizationMsg("");
+        setImportProgressCount(null);
+      }
     }
   }, [autoGroupDuplex]);
 
   const handleCsvImport = useCallback(async (csvFile: File, studioType: 'card' | 'display' | 'booster' | 'stream') => {
     setIsCsvLoading(true);
+    setIsImportingCards(true);
     setCsvStatusMsg("CSV-Datei wird analysiert...");
+    setImportStatusMsg("CSV-Datei wird analysiert...");
+    setImportProgressCount(null);
 
     try {
       const csvRows = await parseCsvFile(csvFile);
@@ -1265,7 +1387,9 @@ export default function Home() {
           "Klicke auf 'Muster-CSV', um eine passende Beispiel-Vorlage herunterzuladen."
         );
         setIsCsvLoading(false);
+        setIsImportingCards(false);
         setCsvStatusMsg("");
+        setImportStatusMsg("");
         return;
       }
 
@@ -1275,7 +1399,10 @@ export default function Home() {
 
       for (let i = 0; i < csvRows.length; i++) {
         const row = csvRows[i];
-        setCsvStatusMsg(`Lade Bild ${i + 1} von ${csvRows.length} aus CSV... (${row.name || 'Kartenausschnitt'})`);
+        const statusMsg = `Lade Bild ${i + 1} von ${csvRows.length} aus CSV... (${row.name || 'Kartenausschnitt'})`;
+        setCsvStatusMsg(statusMsg);
+        setImportStatusMsg(statusMsg);
+        setImportProgressCount({ current: i + 1, total: csvRows.length });
         try {
           const defaultName = row.name || `csv_bild_${i + 1}`;
           const file = await fetchImageAsFile(row.url, defaultName);
@@ -1297,14 +1424,21 @@ export default function Home() {
       if (failCount > 0) {
         alert(`${successCount} Bilder erfolgreich geladen. ${failCount} Bild-URLs konnten nicht abgerufen werden.`);
       } else {
-        setCsvStatusMsg(`✅ ${successCount} Bilder erfolgreich aus CSV geladen!`);
+        const okMsg = `✅ ${successCount} Bilder erfolgreich aus CSV geladen!`;
+        setCsvStatusMsg(okMsg);
+        setImportStatusMsg(okMsg);
       }
     } catch (err) {
       const msg = getErrorMessage(err);
       alert(`Fehler beim Verarbeiten der CSV-Datei: ${msg}`);
     } finally {
       setIsCsvLoading(false);
-      setTimeout(() => setCsvStatusMsg(""), 4000);
+      setIsImportingCards(false);
+      setImportProgressCount(null);
+      setTimeout(() => {
+        setCsvStatusMsg("");
+        setImportStatusMsg("");
+      }, 4000);
     }
   }, [appendCardBatchFiles, appendDisplayBatchFiles, appendBoosterBatchFiles, appendStreamBatchFiles]);
 
@@ -2541,8 +2675,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
-    disabled: isProcessing || isCardBatchProcessing
+    maxFiles: 400,
+    disabled: isProcessing || isCardBatchProcessing || isImportingCards
   });
 
   const onDisplayDrop = appendDisplayBatchFiles;
@@ -2558,8 +2692,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
-    disabled: isDisplayProcessing || isDisplayBatchProcessing
+    maxFiles: 400,
+    disabled: isDisplayProcessing || isDisplayBatchProcessing || isImportingCards
   });
 
   const onBoosterDrop = appendBoosterBatchFiles;
@@ -2575,8 +2709,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
-    disabled: isBoosterProcessing || isBoosterBatchProcessing
+    maxFiles: 400,
+    disabled: isBoosterProcessing || isBoosterBatchProcessing || isImportingCards
   });
 
   const onLibraryDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -2649,8 +2783,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
-    disabled: isProcessing || isCardBatchProcessing,
+    maxFiles: 400,
+    disabled: isProcessing || isCardBatchProcessing || isImportingCards,
     noClick: true
   });
 
@@ -2665,8 +2799,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
-    disabled: isDisplayProcessing || isDisplayBatchProcessing,
+    maxFiles: 400,
+    disabled: isDisplayProcessing || isDisplayBatchProcessing || isImportingCards,
     noClick: true
   });
 
@@ -2681,8 +2815,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 50,
-    disabled: isBoosterProcessing || isBoosterBatchProcessing,
+    maxFiles: 400,
+    disabled: isBoosterProcessing || isBoosterBatchProcessing || isImportingCards,
     noClick: true
   });
 
@@ -2699,8 +2833,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 100,
-    disabled: isStreamProcessing || isStreamBatchProcessing
+    maxFiles: 400,
+    disabled: isStreamProcessing || isStreamBatchProcessing || isImportingCards
   });
 
   const { 
@@ -2714,8 +2848,8 @@ export default function Home() {
       "text/csv": [".csv"],
       "text/plain": [".csv"]
     },
-    maxFiles: 100,
-    disabled: isStreamProcessing || isStreamBatchProcessing,
+    maxFiles: 400,
+    disabled: isStreamProcessing || isStreamBatchProcessing || isImportingCards,
     noClick: true
   });
 
@@ -2765,20 +2899,20 @@ export default function Home() {
             e.preventDefault();
             if (activeTab === "generate") {
               if (activeStudioSubTab === "card") {
-                if (!isProcessing) {
+                if (!isProcessing && !isImportingCards) {
                   onDrop([pastedFile]);
                 }
               } else if (activeStudioSubTab === "display") {
-                if (!isDisplayProcessing) {
+                if (!isDisplayProcessing && !isImportingCards) {
                   onDisplayDrop([pastedFile]);
                 }
               } else if (activeStudioSubTab === "booster") {
-                if (!isBoosterProcessing) {
+                if (!isBoosterProcessing && !isImportingCards) {
                   onBoosterDrop([pastedFile]);
                 }
               }
             } else if (activeTab === "stream") {
-              if (!isStreamProcessing && !isStreamBatchProcessing) {
+              if (!isStreamProcessing && !isStreamBatchProcessing && !isImportingCards) {
                 onStreamDrop([pastedFile]);
               }
             } else if (activeTab === "library") {
@@ -2794,7 +2928,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-  }, [activeTab, activeStudioSubTab, isProcessing, isDisplayProcessing, isBoosterProcessing, isStreamProcessing, isStreamBatchProcessing, onDrop, onDisplayDrop, onBoosterDrop, onStreamDrop, onLibraryDrop]);
+  }, [activeTab, activeStudioSubTab, isProcessing, isDisplayProcessing, isBoosterProcessing, isStreamProcessing, isStreamBatchProcessing, isImportingCards, onDrop, onDisplayDrop, onBoosterDrop, onStreamDrop, onLibraryDrop]);
 
   const updateStepStatus = (stepId: string, status: "running" | "success" | "error") => {
     setSteps(prev => 
@@ -5042,7 +5176,7 @@ export default function Home() {
               Stapelverarbeitung ({items.length} {items.length === 1 ? "Bild" : "Bilder"})
             </h2>
             <p className="text-xs text-zinc-500 mt-1">
-              Verarbeite bis zu 50 Bilder nacheinander. Status: {completedCount} abgeschlossen, {failedCount} fehlgeschlagen, {pendingCount} wartend.
+              Verarbeite bis zu 400 Bilder nacheinander. Status: {completedCount} abgeschlossen, {failedCount} fehlgeschlagen, {pendingCount} wartend.
               {studioType === "stream" && " (Original-Dateinamen bleiben beim Download exakt erhalten)"}
             </p>
           </div>
@@ -5147,6 +5281,20 @@ export default function Home() {
             )}
           </div>
         </div>
+
+        {(isImportingCards || isOptimizingUploads) && (
+          <div className="mb-4 p-3.5 rounded-xl border border-purple-500/40 bg-purple-950/40 text-purple-200 text-xs font-medium flex items-center justify-between gap-3 animate-in fade-in">
+            <div className="flex items-center gap-3">
+              <RefreshCw className="w-4 h-4 text-purple-400 animate-spin flex-shrink-0" />
+              <span>{importStatusMsg || uploadOptimizationMsg || "Karten werden in die Pipeline importiert..."}</span>
+            </div>
+            {importProgressCount && (
+              <span className="font-mono text-purple-300 text-[11px] bg-purple-900/60 px-2 py-0.5 rounded-md border border-purple-500/30 shrink-0">
+                {importProgressCount.current} / {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+              </span>
+            )}
+          </div>
+        )}
 
         {(isCsvLoading || csvStatusMsg) && (
           <div className="mb-4 p-3.5 rounded-xl border border-purple-500/30 bg-purple-950/30 text-purple-200 text-xs font-medium flex items-center gap-3 animate-in fade-in">
@@ -5507,6 +5655,31 @@ export default function Home() {
             )}
           </div>
         </div>
+
+        {(isImportingCards || isOptimizingUploads) && (
+          <div className="mb-4 p-3.5 rounded-xl border border-purple-500/40 bg-purple-950/40 text-purple-200 text-xs font-medium flex items-center justify-between gap-3 animate-in fade-in">
+            <div className="flex items-center gap-3">
+              <RefreshCw className="w-4 h-4 text-purple-400 animate-spin flex-shrink-0" />
+              <span>{importStatusMsg || uploadOptimizationMsg || "Karten werden in die Pipeline importiert..."}</span>
+            </div>
+            {importProgressCount && (
+              <span className="font-mono text-purple-300 text-[11px] bg-purple-900/60 px-2 py-0.5 rounded-md border border-purple-500/30 shrink-0">
+                {importProgressCount.current} / {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+              </span>
+            )}
+          </div>
+        )}
+
+        {(isCsvLoading || csvStatusMsg) && (
+          <div className="mb-4 p-3.5 rounded-xl border border-purple-500/30 bg-purple-950/30 text-purple-200 text-xs font-medium flex items-center gap-3 animate-in fade-in">
+            {isCsvLoading ? (
+              <Loader2 className="w-4 h-4 text-purple-400 animate-spin flex-shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            )}
+            <span>{csvStatusMsg}</span>
+          </div>
+        )}
 
         {/* Cards Grid */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 max-h-[560px] overflow-y-auto pr-1">
@@ -6258,10 +6431,17 @@ export default function Home() {
                 </div>
               )}
 
-              {isOptimizingUploads && (
-                <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
-                  <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
-                  <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden vorab optimiert..."}</span>
+              {(isImportingCards || isOptimizingUploads) && (
+                <div className="mt-4 flex items-center justify-between gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                    <span className="text-sm font-semibold">{importStatusMsg || uploadOptimizationMsg || "Karten werden in die Pipeline importiert..."}</span>
+                  </div>
+                  {importProgressCount && (
+                    <span className="font-mono text-purple-300 text-xs bg-purple-900/60 px-2.5 py-1 rounded-lg border border-purple-500/40 shrink-0">
+                      {importProgressCount.current} / {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -6997,10 +7177,17 @@ export default function Home() {
                   </div>
                 )}
 
-                {isOptimizingUploads && (
-                  <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
-                    <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
-                    <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden vorab optimiert..."}</span>
+                {(isImportingCards || isOptimizingUploads) && (
+                  <div className="mt-4 flex items-center justify-between gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                    <div className="flex items-center gap-3">
+                      <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                      <span className="text-sm font-semibold">{importStatusMsg || uploadOptimizationMsg || "Karten werden in die Pipeline importiert..."}</span>
+                    </div>
+                    {importProgressCount && (
+                      <span className="font-mono text-purple-300 text-xs bg-purple-900/60 px-2.5 py-1 rounded-lg border border-purple-500/40 shrink-0">
+                        {importProgressCount.current} / {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -7465,10 +7652,17 @@ export default function Home() {
                       </div>
                     )}
 
-                    {isOptimizingUploads && (
-                      <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
-                        <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
-                        <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden vorab optimiert..."}</span>
+                    {(isImportingCards || isOptimizingUploads) && (
+                      <div className="mt-4 flex items-center justify-between gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                        <div className="flex items-center gap-3">
+                          <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                          <span className="text-sm font-semibold">{importStatusMsg || uploadOptimizationMsg || "Karten werden in die Pipeline importiert..."}</span>
+                        </div>
+                        {importProgressCount && (
+                          <span className="font-mono text-purple-300 text-xs bg-purple-900/60 px-2.5 py-1 rounded-lg border border-purple-500/40 shrink-0">
+                            {importProgressCount.current} / {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -7849,7 +8043,7 @@ export default function Home() {
               <div className="flex items-center gap-2 px-3 py-1">
                 <span className="text-[11px] font-medium text-purple-300 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  Whatnot / Live-Stream Studio (bis zu 100 Bilder)
+                  Whatnot / Live-Stream Studio (bis zu 400 Bilder)
                 </span>
               </div>
             </div>
@@ -8118,7 +8312,7 @@ export default function Home() {
                       Unterstützt Pokémon, One Piece, Yu-Gi-Oh, Lorcana und alle TCGs (Scans, Sleeves, Rohkarten).
                     </p>
                     <p className="text-[11px] text-zinc-500 mt-1">
-                      Massen-Upload von bis zu 100 Bildern gleichzeitig (JPG, PNG, WEBP) oder CSV-Import.
+                      Massen-Upload von bis zu 400 Bildern gleichzeitig (JPG, PNG, WEBP) oder CSV-Import.
                     </p>
                   </div>
                   
@@ -8155,10 +8349,17 @@ export default function Home() {
                 </div>
               </div>
 
-              {isOptimizingUploads && (
-                <div className="mt-4 flex items-center justify-center gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
-                  <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
-                  <span className="text-sm font-semibold">{uploadOptimizationMsg || "Große Bilddateien werden für das Stanzvisier optimiert..."}</span>
+              {(isImportingCards || isOptimizingUploads) && (
+                <div className="mt-4 flex items-center justify-between gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 text-purple-200 animate-pulse">
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+                    <span className="text-sm font-semibold">{importStatusMsg || uploadOptimizationMsg || "Große Bilddateien werden für das Stanzvisier optimiert..."}</span>
+                  </div>
+                  {importProgressCount && (
+                    <span className="font-mono text-purple-300 text-xs bg-purple-900/60 px-2.5 py-1 rounded-lg border border-purple-500/40 shrink-0">
+                      {importProgressCount.current} / {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -9701,6 +9902,23 @@ export default function Home() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Schwebender globaler Lade- und Fortschrittsstatus für Karten-Import */}
+        {(isImportingCards || (isOptimizingUploads && uploadOptimizationMsg)) && (
+          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3.5 px-5 py-3.5 rounded-2xl bg-zinc-950/90 border border-purple-500/50 shadow-[0_0_30px_rgba(168,85,247,0.35)] backdrop-blur-xl animate-in slide-in-from-bottom-5 duration-300">
+            <RefreshCw className="w-5 h-5 text-purple-400 animate-spin flex-shrink-0" />
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-white">
+                {importStatusMsg || uploadOptimizationMsg || "Karten werden in die Pipeline importiert..."}
+              </span>
+              {importProgressCount && (
+                <span className="text-xs text-purple-300 font-mono">
+                  Fortschritt: {importProgressCount.current} von {importProgressCount.total} ({Math.round((importProgressCount.current / importProgressCount.total) * 100)}%)
+                </span>
+              )}
             </div>
           </div>
         )}
