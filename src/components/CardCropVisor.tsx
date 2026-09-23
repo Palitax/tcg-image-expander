@@ -26,7 +26,7 @@ export interface CropBox {
 
 export interface CardCropVisorProps {
   imageUrl: string;
-  onChange: (box: CropBox) => void;
+  onChange: (box: CropBox, isUserManual?: boolean) => void;
   initialBox?: CropBox | null;
   className?: string;
 }
@@ -159,7 +159,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
       imageHeight: nh
     };
     setBox(newBox);
-    onChange(newBox);
+    onChange(newBox, false);
   };
 
   // Synchronisiere Zustand wenn sich das Bild ändert
@@ -221,7 +221,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
         imageWidth: naturalSize.width,
         imageHeight: naturalSize.height
       };
-      onChange(finalBox);
+      onChange(finalBox, true);
       return finalBox;
     });
   }, [naturalSize, onChange]);

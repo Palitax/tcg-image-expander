@@ -41,7 +41,8 @@ import {
   Eye,
   EyeOff,
   Key,
-  KeyRound
+  KeyRound,
+  RotateCcw
 } from "lucide-react";
 import { 
   getSavedArtworks, 
@@ -4018,7 +4019,21 @@ export default function Home() {
     const sideData = side === "back" && card.back ? card.back : card.front;
     setStreamFile(sideData.file);
     setStreamPreviewUrl(sideData.previewUrl);
-    setStreamCropBox(sideData.cropBox || null);
+
+    // Visier-Box ermitteln:
+    // Wenn Rückseite und nicht manuell arretiert -> Visier der Vorderseite spiegeln
+    let targetCropBox: CropBox | null = null;
+    if (side === "back" && card.back) {
+      if (card.back.isVisorCustomized && card.back.cropBox) {
+        targetCropBox = card.back.cropBox;
+      } else {
+        targetCropBox = card.front.cropBox || card.back.cropBox || streamCropBox || null;
+      }
+    } else {
+      targetCropBox = card.front.cropBox || streamCropBox || null;
+    }
+    setStreamCropBox(targetCropBox);
+
     setStreamResultUrl(sideData.resultImageUrl || null);
     setStreamCutoutUrl(sideData.cutoutImageUrl || null);
     setStreamBgImageUrl(sideData.backgroundImageUrl || null);
@@ -4051,7 +4066,7 @@ export default function Home() {
   };
 
   // Speichert die Stanzvisier-Position exakt für die aktuell ausgewählte Karte & Seite
-  const handleStreamCropBoxChange = (newBox: CropBox) => {
+  const handleStreamCropBoxChange = (newBox: CropBox, isUserManual = false) => {
     setStreamCropBox(newBox);
     setStreamCards(prev => prev.map((card, idx) => {
       if (idx !== activeStreamCardIndex) return card;
@@ -4060,9 +4075,10 @@ export default function Home() {
         const updatedFront: StreamCardSide = {
           ...card.front,
           cropBox: newBox,
-          isVisorCustomized: true
+          isVisorCustomized: isUserManual ? true : card.front.isVisorCustomized
         };
-        // Bei Duplex: Falls Rückseite existiert und noch kein individuelles Visier hat, synchronisieren
+        // Bei Duplex: Falls Rückseite existiert und noch kein individuelles manuelles Visier hat,
+        // exakt mit der Vorderseite synchronisieren (gleiche Scannerbett-Position)
         let updatedBack = card.back;
         if (card.back && !card.back.isVisorCustomized) {
           updatedBack = {
@@ -4076,34 +4092,78 @@ export default function Home() {
           back: updatedBack
         };
       } else {
+        // activeStreamSide === "back"
+        if (!card.back) return card;
         return {
           ...card,
-          back: card.back ? {
+          back: {
             ...card.back,
             cropBox: newBox,
-            isVisorCustomized: true
-          } : null
+            // Wichtig: Nur wenn der Nutzer das Visier auf der Rückseite manuell verschoben/angepasst hat,
+            // wird es als customized markiert. Die Vorderseite bleibt hiervon vollkommen unberührt!
+            isVisorCustomized: isUserManual ? true : card.back.isVisorCustomized
+          }
         };
       }
     }));
   };
 
+  // Setzt das Stanzvisier der Rückseite zurück auf das Stanzvisier der Vorderseite
+  const resetBackVisorToFront = (cardIdx: number) => {
+    setStreamCards(prev => prev.map((card, idx) => {
+      if (idx !== cardIdx || !card.back) return card;
+      const frontBox = card.front.cropBox || streamCropBox;
+      return {
+        ...card,
+        back: {
+          ...card.back,
+          cropBox: frontBox ? { ...frontBox } : null,
+          isVisorCustomized: false
+        }
+      };
+    }));
+
+    if (activeStreamCardIndex === cardIdx && activeStreamSide === "back") {
+      const card = streamCards[cardIdx];
+      const frontBox = card?.front.cropBox || streamCropBox;
+      if (frontBox) {
+        setStreamCropBox({ ...frontBox });
+      }
+    }
+  };
+
   // Überträgt die aktuelle Visierposition auf alle Karten im Stapel
   const applyCropBoxToAllCards = () => {
     if (!streamCropBox) return;
-    setStreamCards(prev => prev.map(card => ({
-      ...card,
-      front: {
-        ...card.front,
-        cropBox: { ...streamCropBox },
-        isVisorCustomized: true
-      },
-      back: card.back ? {
-        ...card.back,
-        cropBox: { ...streamCropBox },
-        isVisorCustomized: true
-      } : null
-    })));
+    if (activeStreamSide === "front") {
+      setStreamCards(prev => prev.map(card => {
+        const newCropBox = { ...streamCropBox };
+        return {
+          ...card,
+          front: {
+            ...card.front,
+            cropBox: newCropBox,
+            isVisorCustomized: true
+          },
+          // Bei Duplex: Rückseite spiegelt Vorderseite, sofern sie nicht manuell arretiert wurde
+          back: card.back ? {
+            ...card.back,
+            cropBox: card.back.isVisorCustomized && card.back.cropBox ? card.back.cropBox : newCropBox,
+            isVisorCustomized: card.back.isVisorCustomized
+          } : null
+        };
+      }));
+    } else {
+      // Wenn man sich auf der Rückseite befindet: nur auf alle Rückseiten anwenden, Vorderseiten unberührt lassen
+      setStreamCards(prev => prev.map(card => ({
+        ...card,
+        back: card.back ? {
+          ...card.back,
+          cropBox: { ...streamCropBox },
+          isVisorCustomized: true
+        } : null
+      })));
+    }
   };
 
   // Tauscht Vorder- und Rückseite einer spezifischen Karte
@@ -4494,7 +4554,9 @@ export default function Home() {
           setActiveStreamSide("back");
           setStreamFile(card.back.file);
           setStreamPreviewUrl(card.back.previewUrl);
-          const backCrop = card.back.cropBox || card.front.cropBox || frontCropToUse || streamCropBox;
+          const backCrop = (card.back.isVisorCustomized && card.back.cropBox)
+            ? card.back.cropBox
+            : (card.front.cropBox || frontCropToUse || streamCropBox);
           setStreamCropBox(backCrop);
           setNewArtworkName(`${card.cardName} - Rückseite`);
 
@@ -5832,8 +5894,12 @@ export default function Home() {
                           <span className="text-[11px] font-bold text-zinc-300 flex items-center gap-1">
                             🔄 Rückseite
                           </span>
-                          {card.back.isVisorCustomized && (
-                            <span className="text-[9px] text-emerald-400 font-medium">Visier ✓</span>
+                          {card.back.isVisorCustomized ? (
+                            <span className="text-[9px] text-emerald-400 font-medium" title="Eigenes manuelles Visier">Manuell ✓</span>
+                          ) : (
+                            <span className="text-[9px] text-blue-400 font-medium flex items-center gap-0.5" title="Übernimmt automatisch die Visierposition der Vorderseite (gleiche Scannerbett-Position)">
+                              Spiegelt VS 🔗
+                            </span>
                           )}
                         </div>
                         <p className="text-[10px] text-zinc-400 truncate mt-0.5" title={card.back.file.name}>
@@ -8402,12 +8468,29 @@ export default function Home() {
                             {/* Status badge */}
                             {(activeStreamSide === "front" ? streamCards[activeStreamCardIndex].front.isVisorCustomized : streamCards[activeStreamCardIndex].back?.isVisorCustomized) ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
-                                <Check className="w-3 h-3" /> Visier arretiert
+                                <Check className="w-3 h-3" /> Visier manuell arretiert
+                              </span>
+                            ) : activeStreamSide === "back" ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/10 border border-blue-500/30 text-blue-400 flex items-center gap-1" title="Übernimmt automatisch die Position der Vorderseite (gleiche Scannerbett-Position)">
+                                Spiegelt Vorderseite 🔗
                               </span>
                             ) : (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-zinc-800/80 border border-zinc-700/60 text-zinc-400">
                                 Auto-Visier
                               </span>
+                            )}
+
+                            {/* Wenn Rückseite manuell arretiert ist: Button zum Zurücksetzen auf Vorderseiten-Visier */}
+                            {activeStreamSide === "back" && streamCards[activeStreamCardIndex].back?.isVisorCustomized && (
+                              <button
+                                type="button"
+                                onClick={() => resetBackVisorToFront(activeStreamCardIndex)}
+                                className="px-2 py-0.5 rounded-lg border border-blue-500/30 bg-blue-950/30 hover:bg-blue-900/40 text-blue-300 text-[10px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                                title="Manuelle Anpassung verwerfen und Stanzvisier wieder mit Vorderseite synchronisieren"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" />
+                                VS-Visier spiegeln
+                              </button>
                             )}
 
                             <button
@@ -8483,10 +8566,10 @@ export default function Home() {
                             type="button"
                             onClick={applyCropBoxToAllCards}
                             className="px-2.5 py-1 rounded-lg border border-purple-500/30 hover:border-purple-500/50 bg-purple-950/20 hover:bg-purple-950/40 text-purple-300 text-[11px] font-medium flex items-center gap-1.5 transition-all cursor-pointer"
-                            title="Dieses Stanzvisier auf alle anderen Karten anwenden"
+                            title={activeStreamSide === "back" ? "Dieses Stanzvisier auf alle Rückseiten im Stapel anwenden" : "Dieses Stanzvisier auf alle Vorderseiten (und synchrone Rückseiten) anwenden"}
                           >
                             <CheckCheck className="w-3.5 h-3.5 text-purple-400" />
-                            Auf alle Karten anwenden
+                            {activeStreamSide === "back" ? "Auf alle Rückseiten anwenden" : "Auf alle Karten anwenden"}
                           </button>
                         </div>
                       </div>
