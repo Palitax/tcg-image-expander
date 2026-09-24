@@ -94,10 +94,7 @@ export function buildStreamPreviewVectorSvg(
 
   const line1 = line1Parts.join(" - ");
 
-  let line2 = cleanField(metadata.setName) || "";
-  if (line2 === "Collection" || line2 === "TCG") {
-    line2 = "";
-  }
+  // Set-Name wird auf dem Stream-Overlay nicht mehr angezeigt
   const line3 = cleanField(metadata.slogan) || "MANACARDS – Unpack the magic";
 
   // Dynamic font sizing for long card titles
@@ -105,10 +102,6 @@ export function buildStreamPreviewVectorSvg(
   if (line1.length > 28) line1FontSize = 34;
   if (line1.length > 38) line1FontSize = 28;
   if (line1.length > 48) line1FontSize = 24;
-
-  let line2FontSize = 32;
-  if (line2.length > 25) line2FontSize = 28;
-  if (line2.length > 35) line2FontSize = 24;
 
   // Calculate dynamic spacing for Line 3 slogan and flanking lines
   const line3Width = getTextWidth(regularFont, line3, 22);
@@ -123,9 +116,8 @@ export function buildStreamPreviewVectorSvg(
   const topLineStart = Math.max(285, Math.round(42 + badgeWidth + 22));
 
   // Convert all text to pure vector SVG path shapes (matching reference typography & vertical rhythm)
-  const line1Y = line2 ? 896 : 918;
+  const line1Y = 918;
   const line1Path = renderTextToSvgPath(boldFont, line1, 512, line1Y, line1FontSize, "center", "#ffffff");
-  const line2Path = line2 ? renderTextToSvgPath(boldFont, line2, 512, 938, line2FontSize, "center", "#ffffff") : "";
   const line3Path = renderTextToSvgPath(regularFont, line3, 512, 980, 22, "center", "#ffffff");
 
   const svgContent = `
@@ -184,9 +176,6 @@ export function buildStreamPreviewVectorSvg(
 
   <!-- Line 1: Card Name - Number - Set Code (Pure Vector Path) -->
   ${line1Path}
-
-  <!-- Line 2: Set Name (Pure Vector Path) -->
-  ${line2Path}
 
   <!-- Line 3: Bottom Slogan (Pure Vector Path) -->
   ${line3Path}

@@ -575,7 +575,7 @@ const convertBlobToPng = async (blob: Blob): Promise<Blob> => {
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d");
       if (!ctx) {
-        reject(new Error("Failed to get 2d context for PNG conversion"));
+        resolve(blob);
         return;
       }
       ctx.drawImage(img, 0, 0);
@@ -583,28 +583,62 @@ const convertBlobToPng = async (blob: Blob): Promise<Blob> => {
         if (pngBlob) {
           resolve(pngBlob);
         } else {
-          reject(new Error("Failed to generate PNG blob"));
+          resolve(blob);
         }
       }, "image/png");
     };
-    img.onerror = (e) => {
+    img.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error("Failed to load image for PNG conversion"));
+      resolve(blob);
+    };
+    img.src = url;
+  });
+};
+
+const convertBlobToFormat = (blob: Blob, targetMimeType: string, quality = 0.95): Promise<Blob> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(blob);
+        return;
+      }
+      if (targetMimeType === "image/jpeg") {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((resBlob) => {
+        if (resBlob) {
+          resolve(resBlob);
+        } else {
+          resolve(blob);
+        }
+      }, targetMimeType, quality);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(blob);
     };
     img.src = url;
   });
 };
 
 const getAdjustedFilename = (filename: string, mimeType: string): string => {
-  let ext = "";
-  if (mimeType === "image/webp") ext = "webp";
-  else if (mimeType === "image/png") ext = "png";
-  else if (mimeType === "image/jpeg" || mimeType === "image/jpg") ext = "jpg";
-  
-  if (ext) {
-    return filename.replace(/\.[^/.]+$/, "") + "." + ext;
+  // Wenn der Dateiname bereits eine Endung hat (z.B. .jpg, .png), MUSS er exakt unverändert bleiben!
+  if (/\.[a-zA-Z0-9]+$/.test(filename)) {
+    return filename;
   }
-  return filename;
+  let ext = "png";
+  if (mimeType === "image/webp") ext = "webp";
+  else if (mimeType === "image/jpeg" || mimeType === "image/jpg") ext = "jpg";
+  return `${filename}.${ext}`;
 };
 
 interface CsvRowItem {
@@ -836,13 +870,25 @@ const fetchAndProcessImage = async (
     mimeType = fetched.mimeType;
   }
 
-  // If the user requested a .png file but we got webp (or another format), convert it to png.
-  if (filename.toLowerCase().endsWith(".png") && mimeType !== "image/png") {
+  const lower = filename.toLowerCase();
+
+  // Falls das Originalbild .jpg oder .jpeg hiess, konvertieren wir es zu JPEG
+  if ((lower.endsWith(".jpg") || lower.endsWith(".jpeg")) && mimeType !== "image/jpeg") {
     try {
-      const pngBlob = await convertBlobToPng(blob);
+      const jpgBlob = await convertBlobToFormat(blob, "image/jpeg", 0.95);
+      return { blob: jpgBlob, mimeType: "image/jpeg" };
+    } catch (err) {
+      console.error("Fehler bei JPEG-Konvertierung auf Client-Seite:", err);
+    }
+  }
+
+  // Falls das Originalbild .png hiess, konvertieren wir es zu PNG
+  if (lower.endsWith(".png") && mimeType !== "image/png") {
+    try {
+      const pngBlob = await convertBlobToFormat(blob, "image/png");
       return { blob: pngBlob, mimeType: "image/png" };
     } catch (err) {
-      console.error("Failed to convert image to PNG on client side:", err);
+      console.error("Fehler bei PNG-Konvertierung auf Client-Seite:", err);
     }
   }
 
@@ -862,20 +908,20 @@ const sanitizeNameForFile = (name?: string | null, fallback = "Artwork"): string
 
 const triggerDownload = async (url: string, filename: string, fallbackUrl?: string): Promise<void> => {
   try {
+    const lower = filename.toLowerCase();
+    const isJpegRequested = lower.endsWith(".jpg") || lower.endsWith(".jpeg");
+    const isPngRequested = lower.endsWith(".png");
+
     if (url.startsWith("data:")) {
       const mimeMatch = url.match(/^data:([^;]+);/);
-      const isPngRequested = filename.toLowerCase().endsWith(".png");
-      const isSourcePng = mimeMatch && mimeMatch[1] === "image/png";
+      const srcMime = mimeMatch ? mimeMatch[1] : "";
+      const matchesFormat = (isJpegRequested && srcMime === "image/jpeg") || (isPngRequested && srcMime === "image/png") || (!isJpegRequested && !isPngRequested);
 
-      // If we don't need PNG conversion, use direct data URI download for speed
-      if (!isPngRequested || isSourcePng) {
-        let adjustedFilename = filename;
-        if (mimeMatch) {
-          adjustedFilename = getAdjustedFilename(filename, mimeMatch[1]);
-        }
+      // Wenn das Format bereits mit der Zieldatei übereinstimmt, direkter Download
+      if (matchesFormat) {
         const link = document.createElement("a");
         link.href = url;
-        link.download = adjustedFilename;
+        link.download = getAdjustedFilename(filename, srcMime);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -1663,12 +1709,14 @@ export default function Home() {
     setCode?: string;
     setName?: string;
     front: {
+      fileName?: string;
       resultImageUrl?: string;
       backgroundImageUrl?: string;
       cutoutImageUrl?: string;
       originalPreviewUrl?: string;
     };
     back?: {
+      fileName?: string;
       resultImageUrl?: string;
       backgroundImageUrl?: string;
       cutoutImageUrl?: string;
@@ -4136,12 +4184,14 @@ export default function Home() {
       setCode: activeSideMeta?.setCode || "",
       setName: activeSideMeta?.setName || "",
       front: {
+        fileName: card.front.file.name,
         resultImageUrl: card.front.resultImageUrl,
         backgroundImageUrl: card.front.backgroundImageUrl,
         cutoutImageUrl: card.front.cutoutImageUrl,
         originalPreviewUrl: card.front.previewUrl
       },
       back: card.back ? {
+        fileName: card.back.file.name,
         resultImageUrl: card.back.resultImageUrl,
         backgroundImageUrl: card.back.backgroundImageUrl,
         cutoutImageUrl: card.back.cutoutImageUrl,
@@ -4160,6 +4210,7 @@ export default function Home() {
       setCode: item.metadata?.setCode || "",
       setName: item.metadata?.setName || "",
       front: {
+        fileName: item.file.name,
         resultImageUrl: item.resultImageUrl,
         backgroundImageUrl: item.backgroundImageUrl,
         cutoutImageUrl: item.cutoutImageUrl,
@@ -5056,21 +5107,20 @@ export default function Home() {
       const filesToDownload: { url: string; filename: string }[] = [];
 
       streamCards.forEach((card) => {
-        const safeBase = sanitizeCardFileName(card.cardName, `Karte_${card.cardNumberIndex}`);
-        const hasBoth = Boolean(card.front.resultImageUrl && card.back?.resultImageUrl);
-
         if (card.front.resultImageUrl) {
-          const suffix = (hasBoth || card.back) ? "_Vorderseite" : "";
           filesToDownload.push({
             url: card.front.resultImageUrl,
-            filename: `${safeBase}${suffix}.png`
+            filename: card.front.file.name
           });
         }
 
         if (card.back && card.back.resultImageUrl) {
+          const backFilename = (card.back.file.name === card.front.file.name)
+            ? card.back.file.name.replace(/(\.[^/.]+)$/, "_Rueckseite$1")
+            : card.back.file.name;
           filesToDownload.push({
             url: card.back.resultImageUrl,
-            filename: `${safeBase}_Rueckseite.png`
+            filename: backFilename
           });
         }
       });
@@ -5092,17 +5142,15 @@ export default function Home() {
 
     if (completedItems.length === 1) {
       const item = completedItems[0];
-      const baseName = item.file.name.replace(/\.[^/.]+$/, "");
-      triggerDownload(item.resultImageUrl!, `${baseName}.png`);
+      triggerDownload(item.resultImageUrl!, item.file.name);
       return;
     }
 
     const filesToDownload: { url: string; filename: string }[] = [];
     completedItems.forEach((item) => {
-      const baseName = item.file.name.replace(/\.[^/.]+$/, "");
       filesToDownload.push({
         url: item.resultImageUrl!,
-        filename: `${baseName}.png`
+        filename: item.file.name
       });
     });
 
@@ -5110,28 +5158,28 @@ export default function Home() {
   };
 
   const triggerStreamCardDownload = (card: StreamBatchCard) => {
-    const safeBase = sanitizeCardFileName(card.cardName, `Karte_${card.cardNumberIndex}`);
     const files: { url: string; filename: string }[] = [];
-    const hasBoth = Boolean(card.front.resultImageUrl && card.back?.resultImageUrl);
 
     if (card.front.resultImageUrl) {
-      const suffix = (hasBoth || card.back) ? "_Vorderseite" : "";
-      files.push({ url: card.front.resultImageUrl, filename: `${safeBase}${suffix}.png` });
+      files.push({ url: card.front.resultImageUrl, filename: card.front.file.name });
     }
     if (card.back?.resultImageUrl) {
-      files.push({ url: card.back.resultImageUrl, filename: `${safeBase}_Rueckseite.png` });
+      const backFilename = (card.back.file.name === card.front.file.name)
+        ? card.back.file.name.replace(/(\.[^/.]+)$/, "_Rueckseite$1")
+        : card.back.file.name;
+      files.push({ url: card.back.resultImageUrl, filename: backFilename });
     }
 
     if (files.length === 1) {
       triggerDownload(files[0].url, files[0].filename);
     } else if (files.length > 1) {
-      triggerZipDownload(files, `${safeBase}_Export.zip`);
+      const zipName = card.cardName ? `${sanitizeCardFileName(card.cardName, "Karten")}_Export.zip` : `Export_${Date.now()}.zip`;
+      triggerZipDownload(files, zipName);
     }
   };
 
   const triggerStreamSingleDownload = (url: string, originalFilename: string) => {
-    const baseName = originalFilename.replace(/\.[^/.]+$/, "");
-    triggerDownload(url, `${baseName}.png`);
+    triggerDownload(url, originalFilename);
   };
 
   const handleSaveBatchItem = async (item: BatchItem, studioType: 'card' | 'display' | 'booster' | 'stream') => {
@@ -5478,33 +5526,33 @@ export default function Home() {
     if (completedItems.length === 1 && !completedItems[0].verticalResultImageUrl) {
       const item = completedItems[0];
       if (item.resultImageUrl) {
-        const cleanName = sanitizeNameForFile(item.name, "Artwork");
-        triggerDownload(item.resultImageUrl, `${prefix}_${cleanName}.png`);
+        triggerDownload(item.resultImageUrl, item.file.name);
       }
       return;
     }
 
     const filesToDownload: { url: string; filename: string }[] = [];
-    completedItems.forEach((item, idx) => {
-      const cleanName = sanitizeNameForFile(item.name, `bild_${idx + 1}`);
+    completedItems.forEach((item) => {
       if (item.verticalResultImageUrl) {
+        const desktopFilename = item.file.name.replace(/(\.[^/.]+)$/, "_Desktop$1");
+        const mobileFilename = item.file.name.replace(/(\.[^/.]+)$/, "_Mobile$1");
         filesToDownload.push({
           url: item.resultImageUrl!,
-          filename: `${prefix}_${cleanName}_Desktop.png`
+          filename: desktopFilename
         });
         filesToDownload.push({
           url: item.verticalResultImageUrl,
-          filename: `${prefix}_${cleanName}_Mobile.png`
+          filename: mobileFilename
         });
       } else {
         filesToDownload.push({
           url: item.resultImageUrl!,
-          filename: `${prefix}_${cleanName}.png`
+          filename: item.file.name
         });
       }
     });
 
-    await triggerZipDownload(filesToDownload, `${prefix}_Batch_Export_${Date.now()}.zip`);
+    await triggerZipDownload(filesToDownload, `Batch_Export_${Date.now()}.zip`);
   };
 
   const renderBatchUI = (studioType: 'card' | 'display' | 'booster' | 'stream') => {
@@ -5879,15 +5927,16 @@ export default function Home() {
                           if (studioType === "stream") {
                             triggerStreamSingleDownload(item.resultImageUrl!, item.file.name);
                           } else {
-                            const prefix = studioType === "card" ? "TCG" : studioType === "display" ? "Display" : "Booster";
-                            const cleanName = sanitizeNameForFile(item.name, "Artwork");
                             if (item.verticalResultImageUrl) {
+                              const desktopFilename = item.file.name.replace(/(\.[^/.]+)$/, "_Desktop$1");
+                              const mobileFilename = item.file.name.replace(/(\.[^/.]+)$/, "_Mobile$1");
+                              const zipFilename = item.file.name.replace(/(\.[^/.]+)$/, "_Desktop_Mobile.zip");
                               triggerZipDownload([
-                                { url: item.resultImageUrl!, filename: `${prefix}_${cleanName}_Desktop.png` },
-                                { url: item.verticalResultImageUrl, filename: `${prefix}_${cleanName}_Mobile.png` }
-                              ], `${prefix}_${cleanName}_Desktop_Mobile.zip`);
+                                { url: item.resultImageUrl!, filename: desktopFilename },
+                                { url: item.verticalResultImageUrl, filename: mobileFilename }
+                              ], zipFilename);
                             } else {
-                              triggerDownload(item.resultImageUrl!, `${prefix}_${cleanName}.png`);
+                              triggerDownload(item.resultImageUrl!, item.file.name);
                             }
                           }
                         }}
@@ -7220,15 +7269,17 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() => {
-                                const cardName = sanitizeNameForFile(newArtworkName || (file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Karte"), "Karte");
                                 const currentImg = (activeCardPreviewFormat === "9:16" && verticalResultImageUrl) 
                                   ? verticalResultImageUrl 
                                   : resultImageUrl;
                                 const suffix = (activeCardPreviewFormat === "9:16" && verticalResultImageUrl) ? "_Mobile" : (verticalResultImageUrl ? "_Desktop" : "");
+                                const downloadFilename = newArtworkName 
+                                  ? `TCG_${sanitizeNameForFile(newArtworkName, "Karte")}${suffix}.png`
+                                  : (file?.name ? (suffix ? file.name.replace(/(\.[^/.]+)$/, `${suffix}$1`) : file.name) : `TCG_Karte${suffix}.png`);
                                 if (currentImg) {
                                   triggerDownload(
                                     currentImg,
-                                    `TCG_${cardName}${suffix}.png`
+                                    downloadFilename
                                   );
                                 }
                               }}
@@ -7262,11 +7313,14 @@ export default function Home() {
                                       onClick={() => {
                                         setIsGenDownloadOpen(false);
                                         const cardName = sanitizeNameForFile(newArtworkName || (file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Karte"), "Karte");
+                                        const desktopName = newArtworkName ? `TCG_${cardName}_Desktop.png` : (file?.name ? file.name.replace(/(\.[^/.]+)$/, "_Desktop$1") : `TCG_${cardName}_Desktop.png`);
+                                        const mobileName = newArtworkName ? `TCG_${cardName}_Mobile.png` : (file?.name ? file.name.replace(/(\.[^/.]+)$/, "_Mobile$1") : `TCG_${cardName}_Mobile.png`);
                                         const filesToDownload = [
-                                          { url: resultImageUrl, filename: `TCG_${cardName}_Desktop.png` },
-                                          { url: verticalResultImageUrl, filename: `TCG_${cardName}_Mobile.png` }
+                                          { url: resultImageUrl, filename: desktopName },
+                                          { url: verticalResultImageUrl, filename: mobileName }
                                         ];
-                                        triggerZipDownload(filesToDownload, `TCG_${cardName}_Desktop_Mobile.zip`);
+                                        const zipName = newArtworkName ? `TCG_${cardName}_Desktop_Mobile.zip` : (file?.name ? file.name.replace(/(\.[^/.]+)$/, "_Desktop_Mobile.zip") : `TCG_${cardName}_Desktop_Mobile.zip`);
+                                        triggerZipDownload(filesToDownload, zipName);
                                       }}
                                       className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-purple-300 font-semibold flex items-center gap-2 transition-colors cursor-pointer"
                                     >
@@ -7280,7 +7334,8 @@ export default function Home() {
                                       onClick={() => {
                                         setIsGenDownloadOpen(false);
                                         const cardName = sanitizeNameForFile(newArtworkName || (file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Karte"), "Karte");
-                                        triggerDownload(resultImageUrl, `TCG_${cardName}_Desktop.png`);
+                                        const desktopName = newArtworkName ? `TCG_${cardName}_Desktop.png` : (file?.name ? file.name.replace(/(\.[^/.]+)$/, "_Desktop$1") : `TCG_${cardName}_Desktop.png`);
+                                        triggerDownload(resultImageUrl, desktopName);
                                       }}
                                       className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer border-t border-zinc-800"
                                     >
@@ -7292,7 +7347,8 @@ export default function Home() {
                                       onClick={() => {
                                         setIsGenDownloadOpen(false);
                                         const cardName = sanitizeNameForFile(newArtworkName || (file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Karte"), "Karte");
-                                        triggerDownload(verticalResultImageUrl, `TCG_${cardName}_Mobile.png`);
+                                        const mobileName = newArtworkName ? `TCG_${cardName}_Mobile.png` : (file?.name ? file.name.replace(/(\.[^/.]+)$/, "_Mobile$1") : `TCG_${cardName}_Mobile.png`);
+                                        triggerDownload(verticalResultImageUrl, mobileName);
                                       }}
                                       className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800/80 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
                                     >
@@ -7307,9 +7363,10 @@ export default function Home() {
                                       setIsGenDownloadOpen(false);
                                       if (resultImageUrl) {
                                         const cardName = sanitizeNameForFile(newArtworkName || (file?.name ? file.name.replace(/\.[^/.]+$/, "") : "Karte"), "Karte");
+                                        const downloadName = newArtworkName ? `TCG_${cardName}.png` : (file?.name || `TCG_${cardName}.png`);
                                         triggerDownload(
                                           resultImageUrl,
-                                          `TCG_${cardName}.png`
+                                          downloadName
                                         );
                                       }
                                     }}
@@ -7756,13 +7813,15 @@ export default function Home() {
                         <button
                           type="button"
                           onClick={() => {
-                            const displayBaseName = sanitizeNameForFile(newArtworkName || (displayFile?.name ? displayFile.name.replace(/\.[^/.]+$/, "") : "Display"), "Display");
                             const currentImg = (activeDisplayPreviewFormat === "9:16" && displayVerticalResultUrl) 
                               ? displayVerticalResultUrl 
                               : displayResultUrl;
                             const suffix = (activeDisplayPreviewFormat === "9:16" && displayVerticalResultUrl) ? "_Mobile" : (displayVerticalResultUrl ? "_Desktop" : "");
+                            const downloadFilename = newArtworkName 
+                              ? `Display_${sanitizeNameForFile(newArtworkName, "Display")}${suffix}.png`
+                              : (displayFile?.name ? (suffix ? displayFile.name.replace(/(\.[^/.]+)$/, `${suffix}$1`) : displayFile.name) : `Display_Artwork${suffix}.png`);
                             if (currentImg) {
-                              triggerDownload(currentImg, `Display_${displayBaseName}${suffix}.png`);
+                              triggerDownload(currentImg, downloadFilename);
                             }
                           }}
                           className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -7792,11 +7851,14 @@ export default function Home() {
                                     onClick={() => {
                                       setIsDisplayDownloadOpen(false);
                                       const displayBaseName = sanitizeNameForFile(newArtworkName || (displayFile?.name ? displayFile.name.replace(/\.[^/.]+$/, "") : "Display"), "Display");
+                                      const desktopName = newArtworkName ? `Display_${displayBaseName}_Desktop.png` : (displayFile?.name ? displayFile.name.replace(/(\.[^/.]+)$/, "_Desktop$1") : `Display_${displayBaseName}_Desktop.png`);
+                                      const mobileName = newArtworkName ? `Display_${displayBaseName}_Mobile.png` : (displayFile?.name ? displayFile.name.replace(/(\.[^/.]+)$/, "_Mobile$1") : `Display_${displayBaseName}_Mobile.png`);
                                       const filesToDownload = [
-                                        { url: displayResultUrl, filename: `Display_${displayBaseName}_Desktop.png` },
-                                        { url: displayVerticalResultUrl, filename: `Display_${displayBaseName}_Mobile.png` }
+                                        { url: displayResultUrl, filename: desktopName },
+                                        { url: displayVerticalResultUrl, filename: mobileName }
                                       ];
-                                      triggerZipDownload(filesToDownload, `Display_${displayBaseName}_Desktop_Mobile.zip`);
+                                      const zipName = newArtworkName ? `Display_${displayBaseName}_Desktop_Mobile.zip` : (displayFile?.name ? displayFile.name.replace(/(\.[^/.]+)$/, "_Desktop_Mobile.zip") : `Display_${displayBaseName}_Desktop_Mobile.zip`);
+                                      triggerZipDownload(filesToDownload, zipName);
                                     }}
                                     className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-purple-300 font-semibold flex items-center gap-2 transition-colors cursor-pointer"
                                   >
@@ -7810,7 +7872,8 @@ export default function Home() {
                                     onClick={() => {
                                       setIsDisplayDownloadOpen(false);
                                       const displayBaseName = sanitizeNameForFile(newArtworkName || (displayFile?.name ? displayFile.name.replace(/\.[^/.]+$/, "") : "Display"), "Display");
-                                      triggerDownload(displayResultUrl, `Display_${displayBaseName}_Desktop.png`);
+                                      const desktopName = newArtworkName ? `Display_${displayBaseName}_Desktop.png` : (displayFile?.name ? displayFile.name.replace(/(\.[^/.]+)$/, "_Desktop$1") : `Display_${displayBaseName}_Desktop.png`);
+                                      triggerDownload(displayResultUrl, desktopName);
                                     }}
                                     className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer border-t border-zinc-800"
                                   >
@@ -7822,7 +7885,8 @@ export default function Home() {
                                     onClick={() => {
                                       setIsDisplayDownloadOpen(false);
                                       const displayBaseName = sanitizeNameForFile(newArtworkName || (displayFile?.name ? displayFile.name.replace(/\.[^/.]+$/, "") : "Display"), "Display");
-                                      triggerDownload(displayVerticalResultUrl, `Display_${displayBaseName}_Mobile.png`);
+                                      const mobileName = newArtworkName ? `Display_${displayBaseName}_Mobile.png` : (displayFile?.name ? displayFile.name.replace(/(\.[^/.]+)$/, "_Mobile$1") : `Display_${displayBaseName}_Mobile.png`);
+                                      triggerDownload(displayVerticalResultUrl, mobileName);
                                     }}
                                     className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
                                   >
@@ -7836,7 +7900,8 @@ export default function Home() {
                                   onClick={() => {
                                     setIsDisplayDownloadOpen(false);
                                     const displayBaseName = sanitizeNameForFile(newArtworkName || (displayFile?.name ? displayFile.name.replace(/\.[^/.]+$/, "") : "Display"), "Display");
-                                    triggerDownload(displayResultUrl, `Display_${displayBaseName}.png`);
+                                    const downloadName = newArtworkName ? `Display_${displayBaseName}.png` : (displayFile?.name || `Display_${displayBaseName}.png`);
+                                    triggerDownload(displayResultUrl, downloadName);
                                   }}
                                   className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
                                 >
@@ -8231,13 +8296,15 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() => {
-                                const boosterBaseName = sanitizeNameForFile(newArtworkName || (boosterFile?.name ? boosterFile.name.replace(/\.[^/.]+$/, "") : "Booster"), "Booster");
                                 const currentImg = (activeBoosterPreviewFormat === "9:16" && boosterVerticalResultUrl) 
                                   ? boosterVerticalResultUrl 
                                   : boosterResultUrl;
                                 const suffix = (activeBoosterPreviewFormat === "9:16" && boosterVerticalResultUrl) ? "_Mobile" : (boosterVerticalResultUrl ? "_Desktop" : "");
+                                const downloadFilename = newArtworkName 
+                                  ? `Booster_${sanitizeNameForFile(newArtworkName, "Booster")}${suffix}.png`
+                                  : (boosterFile?.name ? (suffix ? boosterFile.name.replace(/(\.[^/.]+)$/, `${suffix}$1`) : boosterFile.name) : `Booster_Artwork${suffix}.png`);
                                 if (currentImg) {
-                                  triggerDownload(currentImg, `Booster_${boosterBaseName}${suffix}.png`);
+                                  triggerDownload(currentImg, downloadFilename);
                                 }
                               }}
                               className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -8267,11 +8334,14 @@ export default function Home() {
                                         onClick={() => {
                                           setIsBoosterDownloadOpen(false);
                                           const boosterBaseName = sanitizeNameForFile(newArtworkName || (boosterFile?.name ? boosterFile.name.replace(/\.[^/.]+$/, "") : "Booster"), "Booster");
+                                          const desktopName = newArtworkName ? `Booster_${boosterBaseName}_Desktop.png` : (boosterFile?.name ? boosterFile.name.replace(/(\.[^/.]+)$/, "_Desktop$1") : `Booster_${boosterBaseName}_Desktop.png`);
+                                          const mobileName = newArtworkName ? `Booster_${boosterBaseName}_Mobile.png` : (boosterFile?.name ? boosterFile.name.replace(/(\.[^/.]+)$/, "_Mobile$1") : `Booster_${boosterBaseName}_Mobile.png`);
                                           const filesToDownload = [
-                                            { url: boosterResultUrl, filename: `Booster_${boosterBaseName}_Desktop.png` },
-                                            { url: boosterVerticalResultUrl, filename: `Booster_${boosterBaseName}_Mobile.png` }
+                                            { url: boosterResultUrl, filename: desktopName },
+                                            { url: boosterVerticalResultUrl, filename: mobileName }
                                           ];
-                                          triggerZipDownload(filesToDownload, `Booster_${boosterBaseName}_Desktop_Mobile.zip`);
+                                          const zipName = newArtworkName ? `Booster_${boosterBaseName}_Desktop_Mobile.zip` : (boosterFile?.name ? boosterFile.name.replace(/(\.[^/.]+)$/, "_Desktop_Mobile.zip") : `Booster_${boosterBaseName}_Desktop_Mobile.zip`);
+                                          triggerZipDownload(filesToDownload, zipName);
                                         }}
                                         className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-purple-300 font-semibold flex items-center gap-2 transition-colors cursor-pointer"
                                       >
@@ -8285,7 +8355,8 @@ export default function Home() {
                                         onClick={() => {
                                           setIsBoosterDownloadOpen(false);
                                           const boosterBaseName = sanitizeNameForFile(newArtworkName || (boosterFile?.name ? boosterFile.name.replace(/\.[^/.]+$/, "") : "Booster"), "Booster");
-                                          triggerDownload(boosterResultUrl, `Booster_${boosterBaseName}_Desktop.png`);
+                                          const desktopName = newArtworkName ? `Booster_${boosterBaseName}_Desktop.png` : (boosterFile?.name ? boosterFile.name.replace(/(\.[^/.]+)$/, "_Desktop$1") : `Booster_${boosterBaseName}_Desktop.png`);
+                                          triggerDownload(boosterResultUrl, desktopName);
                                         }}
                                         className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer border-t border-zinc-800"
                                       >
@@ -8297,7 +8368,8 @@ export default function Home() {
                                         onClick={() => {
                                           setIsBoosterDownloadOpen(false);
                                           const boosterBaseName = sanitizeNameForFile(newArtworkName || (boosterFile?.name ? boosterFile.name.replace(/\.[^/.]+$/, "") : "Booster"), "Booster");
-                                          triggerDownload(boosterVerticalResultUrl, `Booster_${boosterBaseName}_Mobile.png`);
+                                          const mobileName = newArtworkName ? `Booster_${boosterBaseName}_Mobile.png` : (boosterFile?.name ? boosterFile.name.replace(/(\.[^/.]+)$/, "_Mobile$1") : `Booster_${boosterBaseName}_Mobile.png`);
+                                          triggerDownload(boosterVerticalResultUrl, mobileName);
                                         }}
                                         className="w-full px-3 py-2 rounded-lg hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
                                       >
@@ -8311,7 +8383,8 @@ export default function Home() {
                                       onClick={() => {
                                         setIsBoosterDownloadOpen(false);
                                         const boosterBaseName = sanitizeNameForFile(newArtworkName || (boosterFile?.name ? boosterFile.name.replace(/\.[^/.]+$/, "") : "Booster"), "Booster");
-                                        triggerDownload(boosterResultUrl, `Booster_${boosterBaseName}.png`);
+                                        const downloadName = newArtworkName ? `Booster_${boosterBaseName}.png` : (boosterFile?.name || `Booster_${boosterBaseName}.png`);
+                                        triggerDownload(boosterResultUrl, downloadName);
                                       }}
                                       className="w-full px-2.5 py-2 rounded hover:bg-zinc-800 text-left text-xs text-white font-medium flex items-center gap-2 transition-colors cursor-pointer"
                                     >
@@ -8606,22 +8679,18 @@ export default function Home() {
                       </div>
                       <p className="text-xs text-zinc-300 leading-relaxed mb-4">
                         Erweitert das Artwork der Sammelkarte per KI nahtlos auf quadratisches 1:1 Stream-Format. 
-                        Überlagert automatisch die leuchtenden Manacards-Rahmenlinien, die &quot;Stream Preview&quot;-Kennzeichnung, den Kartennamen, Kartennummer, Set-Namen und den Slogan &quot;MANACARDS – Unpack the magic&quot;.
+                        Überlagert automatisch die leuchtenden Manacards-Rahmenlinien, die &quot;Stream Preview&quot;-Kennzeichnung, den Kartennamen, Kartennummer, Set-Kürzel und den Slogan &quot;MANACARDS – Unpack the magic&quot;.
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-zinc-800/60">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-3 border-t border-zinc-800/60">
                       <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
                         <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Oben Links</span>
                         <span className="text-xs font-bold text-white">STREAM PREVIEW</span>
                       </div>
                       <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
-                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Zeile 1</span>
+                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Unten Zeile 1</span>
                         <span className="text-xs font-bold text-white truncate block">Name - Nr. - Set</span>
-                      </div>
-                      <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
-                        <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Zeile 2</span>
-                        <span className="text-xs font-bold text-white truncate block">Set-Name</span>
                       </div>
                       <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 text-center">
                         <span className="block text-[10px] text-zinc-500 uppercase font-semibold">Slogan</span>
@@ -9348,10 +9417,10 @@ export default function Home() {
                                 }
                               }}
                               className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(147,51,234,0.3)] cursor-pointer"
-                              title={`Herunterladen als ${streamFile.name.replace(/\.[^/.]+$/, "")}.png`}
+                              title={`Herunterladen als ${streamFile.name}`}
                             >
                               <Download className="w-4 h-4" />
-                              <span>Herunterladen (PNG)</span>
+                              <span>Bild herunterladen</span>
                             </button>
 
                             {streamCards.length > 0 && streamCards[activeStreamCardIndex]?.back?.resultImageUrl && (
@@ -10554,14 +10623,20 @@ export default function Home() {
 
                   <div className="flex items-center gap-2.5 ml-auto">
                     {currentImageUrl && (
-                      <a
-                        href={currentImageUrl}
-                        download={`TCG_${bulkPreviewData.title.replace(/[^a-zA-Z0-9_-]/g, "_")}_${bulkPreviewSide}_${bulkPreviewTab}.png`}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const baseDownloadName = currentSideData?.fileName || `${bulkPreviewData.title}.png`;
+                          const downloadName = bulkPreviewTab === "result"
+                            ? baseDownloadName
+                            : baseDownloadName.replace(/(\.[^/.]+)$/, `_${bulkPreviewTab}$1`);
+                          triggerDownload(currentImageUrl, downloadName);
+                        }}
                         className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-purple-600/20 hover:shadow-purple-600/40 transition-all cursor-pointer"
                       >
                         <Download className="w-3.5 h-3.5" />
                         Bild herunterladen
-                      </a>
+                      </button>
                     )}
                     <button
                       type="button"
