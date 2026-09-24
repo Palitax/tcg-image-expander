@@ -61,6 +61,13 @@ import {
   type DuplexScanOrder
 } from "@/utils/streamBatchPairing";
 import { calculateFileHash, getFileFallbackKey } from "@/utils/fileHash";
+import { 
+  saveClientCalibration, 
+  saveClientCalibrationsBatch, 
+  findClientCalibration, 
+  syncServerCalibrationsToClient 
+} from "@/utils/clientCalibration";
+import type { CardCalibrationRecord } from "@/utils/calibrationStorage";
 
 const isLocalMode = !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -1364,6 +1371,50 @@ export default function Home() {
           const allFiles = [...existingFiles, ...filesToAdd];
           const newCards = analyzeAndPairCardImages(allFiles, autoGroupDuplex, duplexScanOrder);
 
+          // Sofortiger 0ms-Abgleich mit dem lokalen Speicher (Client Cache & localStorage)
+          let restoredClientCount = 0;
+          newCards.forEach(card => {
+            const frontCal = findClientCalibration(card.front.file);
+            if (frontCal) {
+              card.front.cropBox = frontCal.cropBox;
+              card.front.isVisorCustomized = true;
+              if (frontCal.metadata && !card.front.metadata) {
+                card.front.metadata = {
+                  cardName: frontCal.metadata.cardName || "",
+                  cardNumber: frontCal.metadata.cardNumber || "",
+                  setCode: frontCal.metadata.setCode || "",
+                  setName: frontCal.metadata.setName || "",
+                  slogan: frontCal.metadata.slogan
+                };
+              }
+              if (frontCal.fileHash) card.front.fileHash = frontCal.fileHash;
+              restoredClientCount++;
+            }
+            if (card.back) {
+              const backCal = findClientCalibration(card.back.file);
+              if (backCal) {
+                card.back.cropBox = backCal.cropBox;
+                card.back.isVisorCustomized = true;
+                if (backCal.metadata && !card.back.metadata) {
+                  card.back.metadata = {
+                    cardName: backCal.metadata.cardName || "",
+                    cardNumber: backCal.metadata.cardNumber || "",
+                    setCode: backCal.metadata.setCode || "",
+                    setName: backCal.metadata.setName || "",
+                    slogan: backCal.metadata.slogan
+                  };
+                }
+                if (backCal.fileHash) card.back.fileHash = backCal.fileHash;
+                restoredClientCount++;
+              }
+            }
+          });
+
+          if (restoredClientCount > 0) {
+            setCalibrationToast(`🎯 ${restoredClientCount} ${restoredClientCount === 1 ? "gespeichertes Visier" : "gespeicherte Visiere"} sofort wiederhergestellt!`);
+            setTimeout(() => setCalibrationToast(null), 4000);
+          }
+
           if (prev.length === 0 && newCards.length > 0) {
             const firstCard = newCards[0];
             setActiveStreamCardIndex(0);
@@ -1428,6 +1479,9 @@ export default function Home() {
               const matchData = await matchRes.json();
               const matched = matchData.matched as Record<string, any>;
               if (matched && Object.keys(matched).length > 0) {
+                // Auch den Client-Speicher synchronisieren
+                syncServerCalibrationsToClient(Object.values(matched));
+
                 let restoredCount = 0;
                 setStreamCards(prev => prev.map((card, idx) => {
                   let updatedFront = card.front;
@@ -1435,15 +1489,21 @@ export default function Home() {
 
                   const fHash = card.front.fileHash || queryList.find(q => q.fileName === card.front.file.name && q.fileSize === card.front.file.size)?.hash;
                   const fKey = fHash || card.front.fallbackKey || `${card.front.file.name}_${card.front.file.size}`;
-                  if (matched[fKey]) {
-                    const cal = matched[fKey];
+                  const calFront = matched[fKey] || (fHash && matched[fHash]) || matched[card.front.file.name];
+                  if (calFront) {
                     updatedFront = {
                       ...card.front,
-                      fileHash: fHash,
+                      fileHash: fHash || calFront.fileHash,
                       fallbackKey: card.front.fallbackKey || getFileFallbackKey(card.front.file),
-                      cropBox: cal.cropBox,
+                      cropBox: calFront.cropBox,
                       isVisorCustomized: true,
-                      metadata: cal.metadata || card.front.metadata
+                      metadata: calFront.metadata ? {
+                        cardName: calFront.metadata.cardName || "",
+                        cardNumber: calFront.metadata.cardNumber || "",
+                        setCode: calFront.metadata.setCode || "",
+                        setName: calFront.metadata.setName || "",
+                        slogan: calFront.metadata.slogan
+                      } : card.front.metadata
                     };
                     restoredCount++;
                   }
@@ -1452,15 +1512,21 @@ export default function Home() {
                     const backSide = card.back;
                     const bHash = backSide.fileHash || queryList.find(q => q.fileName === backSide.file.name && q.fileSize === backSide.file.size)?.hash;
                     const bKey = bHash || backSide.fallbackKey || `${backSide.file.name}_${backSide.file.size}`;
-                    if (matched[bKey]) {
-                      const cal = matched[bKey];
+                    const calBack = matched[bKey] || (bHash && matched[bHash]) || matched[backSide.file.name];
+                    if (calBack) {
                       updatedBack = {
                         ...backSide,
-                        fileHash: bHash,
+                        fileHash: bHash || calBack.fileHash,
                         fallbackKey: backSide.fallbackKey || getFileFallbackKey(backSide.file),
-                        cropBox: cal.cropBox,
+                        cropBox: calBack.cropBox,
                         isVisorCustomized: true,
-                        metadata: cal.metadata || backSide.metadata
+                        metadata: calBack.metadata ? {
+                          cardName: calBack.metadata.cardName || "",
+                          cardNumber: calBack.metadata.cardNumber || "",
+                          setCode: calBack.metadata.setCode || "",
+                          setName: calBack.metadata.setName || "",
+                          slogan: calBack.metadata.slogan
+                        } : backSide.metadata
                       };
                       restoredCount++;
                     }
@@ -1479,7 +1545,7 @@ export default function Home() {
                 }));
 
                 if (restoredCount > 0) {
-                  setCalibrationToast(`🎯 ${restoredCount} ${restoredCount === 1 ? "gespeichertes Visier" : "gespeicherte Visiere"} automatisch wiederhergestellt!`);
+                  setCalibrationToast(`🎯 ${restoredCount} ${restoredCount === 1 ? "gespeichertes Visier" : "gespeicherte Visiere"} vom Server synchronisiert!`);
                   setTimeout(() => setCalibrationToast(null), 4500);
                 }
               }
@@ -1678,7 +1744,8 @@ export default function Home() {
   // Visier-Kalibrierungsspeicher & Auto-Save Zustände
   const [isCalibrationSaved, setIsCalibrationSaved] = useState<boolean>(false);
   const [calibrationToast, setCalibrationToast] = useState<string | null>(null);
-  const saveCalibrationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const saveCalibrationDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const saveCalibrationToastTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Case Maker states
   const [selectedArtworkId, setSelectedArtworkId] = useState<string | null>(null);
@@ -1825,6 +1892,18 @@ export default function Home() {
     } catch (e) {
       console.error("Failed to load Gemini API key from localStorage:", e);
     }
+  }, []);
+
+  // Visier-Kalibrierungen vom Server beim Laden der Seite vorab in den Client-Speicher laden
+  useEffect(() => {
+    fetch("/api/calibrations")
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.calibrations && Array.isArray(data.calibrations)) {
+          syncServerCalibrationsToClient(data.calibrations);
+        }
+      })
+      .catch(err => console.warn("Initialer Kalibrierungsabgleich fehlgeschlagen:", err));
   }, []);
 
   const handleSaveApiKey = () => {
@@ -4241,10 +4320,28 @@ export default function Home() {
       if (card.back.isVisorCustomized && card.back.cropBox) {
         targetCropBox = card.back.cropBox;
       } else {
-        targetCropBox = card.front.cropBox || card.back.cropBox || streamCropBox || null;
+        const cachedBack = findClientCalibration(card.back.file);
+        if (cachedBack) {
+          targetCropBox = cachedBack.cropBox;
+          card.back.cropBox = cachedBack.cropBox;
+          card.back.isVisorCustomized = true;
+        } else {
+          targetCropBox = card.front.cropBox || card.back.cropBox || streamCropBox || null;
+        }
       }
     } else {
-      targetCropBox = card.front.cropBox || streamCropBox || null;
+      if (card.front.cropBox) {
+        targetCropBox = card.front.cropBox;
+      } else {
+        const cachedFront = findClientCalibration(card.front.file);
+        if (cachedFront) {
+          targetCropBox = cachedFront.cropBox;
+          card.front.cropBox = cachedFront.cropBox;
+          card.front.isVisorCustomized = true;
+        } else {
+          targetCropBox = streamCropBox || null;
+        }
+      }
     }
     setStreamCropBox(targetCropBox);
 
@@ -4279,7 +4376,7 @@ export default function Home() {
     }
   };
 
-  // Speichert eine Visier-Kalibrierung dauerhaft auf dem Server (cache-unabhängig)
+  // Speichert eine Visier-Kalibrierung dauerhaft auf dem Server und im lokalen Speicher
   const saveCalibrationToServer = useCallback(async (
     cardSideData: StreamCardSide,
     box: CropBox,
@@ -4293,29 +4390,35 @@ export default function Home() {
       const fileHash = cardSideData.fileHash || await calculateFileHash(file);
       const fallbackKey = cardSideData.fallbackKey || getFileFallbackKey(file);
 
+      const record: CardCalibrationRecord = {
+        id: fileHash,
+        fileHash,
+        fallbackKey,
+        fileName: file.name,
+        fileSize: file.size,
+        cropBox: box,
+        isUserManual: true,
+        metadata: metadata || cardSideData.metadata,
+        cardSide: side,
+        updatedAt: Date.now()
+      };
+
+      // 1. Sofort im Client-Speicher sichern (0ms-Verfügbarkeit)
+      saveClientCalibration(record);
+
+      // 2. Persistent auf dem Server speichern
       await fetch("/api/calibrations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "save",
-          calibration: {
-            id: fileHash,
-            fileHash,
-            fallbackKey,
-            fileName: file.name,
-            fileSize: file.size,
-            cropBox: box,
-            isUserManual: true,
-            metadata: metadata || cardSideData.metadata,
-            cardSide: side,
-            updatedAt: Date.now()
-          }
+          calibration: record
         })
       });
 
       setIsCalibrationSaved(true);
-      if (saveCalibrationTimerRef.current) clearTimeout(saveCalibrationTimerRef.current);
-      saveCalibrationTimerRef.current = setTimeout(() => {
+      if (saveCalibrationToastTimerRef.current) clearTimeout(saveCalibrationToastTimerRef.current);
+      saveCalibrationToastTimerRef.current = setTimeout(() => {
         setIsCalibrationSaved(false);
       }, 2500);
     } catch (err) {
@@ -4326,6 +4429,27 @@ export default function Home() {
   // Speichert die Stanzvisier-Position exakt für die aktuell ausgewählte Karte & Seite
   const handleStreamCropBoxChange = (newBox: CropBox, isUserManual = false) => {
     setStreamCropBox(newBox);
+
+    // Bei manueller Nutzer-Anpassung sofort im lokalen Cache vormerken
+    if (isUserManual && streamCards[activeStreamCardIndex]) {
+      const activeCard = streamCards[activeStreamCardIndex];
+      const activeSideData = activeStreamSide === "front" ? activeCard.front : (activeCard.back || activeCard.front);
+      if (activeSideData?.file) {
+        saveClientCalibration({
+          id: activeSideData.fileHash || activeSideData.fallbackKey || activeSideData.file.name,
+          fileHash: activeSideData.fileHash,
+          fallbackKey: activeSideData.fallbackKey || getFileFallbackKey(activeSideData.file),
+          fileName: activeSideData.file.name,
+          fileSize: activeSideData.file.size,
+          cropBox: newBox,
+          isUserManual: true,
+          metadata: activeSideData.metadata,
+          cardSide: activeStreamSide,
+          updatedAt: Date.now()
+        });
+      }
+    }
+
     setStreamCards(prev => prev.map((card, idx) => {
       if (idx !== activeStreamCardIndex) return card;
 
@@ -4365,14 +4489,14 @@ export default function Home() {
       }
     }));
 
-    // Dauerhafte serverseitige Speicherung bei manueller Justierung (debounced)
+    // Dauerhafte serverseitige Speicherung bei manueller Justierung (debounced auf 300ms)
     if (isUserManual && streamCards[activeStreamCardIndex]) {
       const activeCard = streamCards[activeStreamCardIndex];
       const activeSideData = activeStreamSide === "front" ? activeCard.front : (activeCard.back || activeCard.front);
-      if (saveCalibrationTimerRef.current) clearTimeout(saveCalibrationTimerRef.current);
-      saveCalibrationTimerRef.current = setTimeout(() => {
+      if (saveCalibrationDebounceTimerRef.current) clearTimeout(saveCalibrationDebounceTimerRef.current);
+      saveCalibrationDebounceTimerRef.current = setTimeout(() => {
         saveCalibrationToServer(activeSideData, newBox, activeStreamSide, activeSideData.metadata);
-      }, 400);
+      }, 300);
     }
   };
 
@@ -4433,6 +4557,27 @@ export default function Home() {
       })));
     }
 
+    // Sofort im lokalen Client-Speicher sichern
+    const clientBatchRecords: CardCalibrationRecord[] = [];
+    streamCards.forEach(c => {
+      const targetSide = activeStreamSide === "front" ? c.front : (c.back || c.front);
+      if (targetSide?.file) {
+        clientBatchRecords.push({
+          id: targetSide.fileHash || targetSide.fallbackKey || targetSide.file.name,
+          fileHash: targetSide.fileHash,
+          fallbackKey: targetSide.fallbackKey || getFileFallbackKey(targetSide.file),
+          fileName: targetSide.file.name,
+          fileSize: targetSide.file.size,
+          cropBox: streamCropBox,
+          isUserManual: true,
+          metadata: targetSide.metadata,
+          cardSide: activeStreamSide,
+          updatedAt: Date.now()
+        });
+      }
+    });
+    saveClientCalibrationsBatch(clientBatchRecords);
+
     // Speichere die Kalibrierung für alle Karten im Stapel auf dem Server
     if (streamCropBox && streamCards.length > 0) {
       (async () => {
@@ -4462,7 +4607,8 @@ export default function Home() {
             body: JSON.stringify({ action: "import", calibrations: records })
           });
           setIsCalibrationSaved(true);
-          setTimeout(() => setIsCalibrationSaved(false), 2500);
+          if (saveCalibrationToastTimerRef.current) clearTimeout(saveCalibrationToastTimerRef.current);
+          saveCalibrationToastTimerRef.current = setTimeout(() => setIsCalibrationSaved(false), 2500);
         } catch (e) {
           console.warn("Fehler beim Batch-Speichern der Kalibrierungen:", e);
         }

@@ -3,8 +3,8 @@ import path from "path";
 
 export interface CardCalibrationRecord {
   id: string;
-  fileHash: string;
-  fallbackKey: string;
+  fileHash?: string;
+  fallbackKey?: string;
   fileName?: string;
   fileSize?: number;
   cropBox: {
@@ -48,13 +48,11 @@ export async function loadCalibrations(): Promise<Record<string, CardCalibration
 }
 
 /**
- * Schreibt alle Kalibrierungen atomar in die JSON-Datei.
+ * Schreibt alle Kalibrierungen in die JSON-Datei.
  */
 async function writeCalibrations(data: Record<string, CardCalibrationRecord>): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  const tempFile = `${CALIBRATIONS_FILE}.tmp.${Date.now()}`;
-  await fs.writeFile(tempFile, JSON.stringify(data, null, 2), "utf-8");
-  await fs.rename(tempFile, CALIBRATIONS_FILE);
+  await fs.writeFile(CALIBRATIONS_FILE, JSON.stringify(data, null, 2), "utf-8");
 }
 
 /**
@@ -63,13 +61,22 @@ async function writeCalibrations(data: Record<string, CardCalibrationRecord>): P
 export async function saveCalibration(record: CardCalibrationRecord): Promise<void> {
   const all = await loadCalibrations();
   
-  // Primärer Key: fileHash
   if (record.fileHash) {
     all[record.fileHash] = record;
   }
-  // Sekundärer Key: fallbackKey (fileName_fileSize) für schnellen Lookup
   if (record.fallbackKey) {
     all[record.fallbackKey] = record;
+  }
+  if (record.fileName) {
+    const trimmedName = record.fileName.trim();
+    all[trimmedName] = record;
+    if (record.fileSize !== undefined) {
+      all[`${trimmedName}_${record.fileSize}`] = record;
+    }
+    const base = trimmedName.replace(/\.[^/.]+$/, "").trim();
+    if (base) {
+      all[base] = record;
+    }
   }
 
   await writeCalibrations(all);
@@ -83,13 +90,22 @@ export async function saveCalibrationsBatch(records: CardCalibrationRecord[]): P
   for (const record of records) {
     if (record.fileHash) all[record.fileHash] = record;
     if (record.fallbackKey) all[record.fallbackKey] = record;
+    if (record.fileName) {
+      const trimmedName = record.fileName.trim();
+      all[trimmedName] = record;
+      if (record.fileSize !== undefined) {
+        all[`${trimmedName}_${record.fileSize}`] = record;
+      }
+      const base = trimmedName.replace(/\.[^/.]+$/, "").trim();
+      if (base) all[base] = record;
+    }
   }
   await writeCalibrations(all);
 }
 
 /**
  * Gleicht eine Liste hochgeladener Karten mit den gespeicherten Kalibrierungen ab.
- * Sucht zuerst nach fileHash, dann nach fallbackKey (Name + Größe).
+ * Sucht nach fileHash, fallbackKey, fileName_fileSize, fileName und baseName.
  */
 export async function matchCalibrations(
   queryList: Array<{ hash?: string; fallbackKey?: string; fileName?: string; fileSize?: number }>
@@ -104,16 +120,28 @@ export async function matchCalibrations(
       found = all[item.hash];
     } else if (item.fallbackKey && all[item.fallbackKey]) {
       found = all[item.fallbackKey];
-    } else if (item.fileName && item.fileSize !== undefined) {
-      const fbKey = `${item.fileName.trim()}_${item.fileSize}`;
-      if (all[fbKey]) {
-        found = all[fbKey];
+    } else if (item.fileName && item.fileSize !== undefined && all[`${item.fileName.trim()}_${item.fileSize}`]) {
+      found = all[`${item.fileName.trim()}_${item.fileSize}`];
+    } else if (item.fileName && all[item.fileName.trim()]) {
+      found = all[item.fileName.trim()];
+    } else if (item.fileName) {
+      const base = item.fileName.replace(/\.[^/.]+$/, "").trim();
+      if (all[base]) {
+        found = all[base];
       }
     }
 
     if (found) {
-      const responseKey = item.hash || item.fallbackKey || `${item.fileName}_${item.fileSize}`;
-      matched[responseKey] = found;
+      if (item.hash) matched[item.hash] = found;
+      if (item.fallbackKey) matched[item.fallbackKey] = found;
+      if (item.fileName) {
+        matched[item.fileName.trim()] = found;
+        if (item.fileSize !== undefined) {
+          matched[`${item.fileName.trim()}_${item.fileSize}`] = found;
+        }
+        const base = item.fileName.replace(/\.[^/.]+$/, "").trim();
+        if (base) matched[base] = found;
+      }
     }
   }
 

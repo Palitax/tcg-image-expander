@@ -79,6 +79,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
 
   // Drag-Modus
   const [dragMode, setDragMode] = useState<DragMode>(null);
+  const isDraggingRef = useRef<boolean>(false);
 
   const dragStartRef = useRef<{
     mouseX: number;
@@ -159,7 +160,10 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
       imageHeight: nh
     };
     setBox(newBox);
-    onChange(newBox, false);
+    // Nur benachrichtigen, wenn initialBox noch nicht vorab gesetzt war
+    if (!initialBox || initialBox.width === 0) {
+      onChange(newBox, false);
+    }
   };
 
   // Synchronisiere Zustand wenn sich das Bild ändert
@@ -169,6 +173,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
 
   // Synchronisiere Stanzrahmen wenn initialBox von der übergeordneten Komponente übergeben wird
   useEffect(() => {
+    if (isDraggingRef.current) return;
     if (initialBox && initialBox.width > 0 && initialBox.height > 0) {
       if (naturalSize && initialBox.imageWidth && initialBox.imageHeight && (initialBox.imageWidth !== naturalSize.width || initialBox.imageHeight !== naturalSize.height)) {
         const sx = naturalSize.width / initialBox.imageWidth;
@@ -351,6 +356,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    isDraggingRef.current = true;
     setDragMode(mode);
     dragStartRef.current = {
       mouseX: e.clientX,
@@ -424,6 +430,7 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
   };
 
   const stopDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    isDraggingRef.current = false;
     if (dragMode) {
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
