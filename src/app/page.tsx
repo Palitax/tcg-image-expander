@@ -1732,7 +1732,7 @@ export default function Home() {
   const [streamCustomBgFile, setStreamCustomBgFile] = useState<File | null>(null);
   const [streamCustomBgPreview, setStreamCustomBgPreview] = useState<string | null>(null);
   const [streamCardScale, setStreamCardScale] = useState<number>(0.62);
-  const [streamShowOverlay, setStreamShowOverlay] = useState<boolean>(false);
+  const [streamShowOverlay, setStreamShowOverlay] = useState<boolean>(true);
   const [streamShadowStyle, setStreamShadowStyle] = useState<"soft" | "intense" | "glow" | "none">("soft");
   const [streamVerticalOffset, setStreamVerticalOffset] = useState<number>(0);
   const [streamBottomTrim, setStreamBottomTrim] = useState<number>(0);

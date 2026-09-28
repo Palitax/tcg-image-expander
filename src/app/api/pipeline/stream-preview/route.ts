@@ -27,7 +27,7 @@ async function compositeStreamPreviewLayers(params: {
     metadata,
     cardScale = 0.54,
     shadowStyle = "soft",
-    showOverlay = false,
+    showOverlay = true,
     cardCenterYRatio = showOverlay ? 0.46 : 0.50
   } = params;
 
@@ -164,7 +164,7 @@ export async function POST(request: Request) {
         metadata: rawMetadata,
         cardScale = 0.54,
         shadowStyle = "soft",
-        showOverlay = false
+        showOverlay = true
       } = jsonBody;
 
       if (!backgroundImage || !cutoutImage) {
@@ -203,7 +203,7 @@ export async function POST(request: Request) {
     const customBgFile = formData.get("backgroundImage") as File | null;
     const cardScale = parseFloat((formData.get("cardScale") as string) || "0.54");
     const shadowStyle = ((formData.get("shadowStyle") as string) || "soft") as "soft" | "intense" | "glow" | "none";
-    const showOverlay = formData.get("showOverlay") === "true";
+    const showOverlay = formData.has("showOverlay") ? formData.get("showOverlay") === "true" : true;
     const mattingEngine = ((formData.get("mattingEngine") as string) || "gemini_homography") as "gemini_homography" | "ai_matting" | "tcg_cutout";
 
     const inheritedMetadataParam = formData.get("inheritedMetadata") as string | null;
