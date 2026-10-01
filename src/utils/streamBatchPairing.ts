@@ -28,7 +28,7 @@ export interface StreamBatchCard {
   id: string;
   cardNumberIndex: number; // 1, 2, ...
   cardName: string;        // z. B. "Karte 01" oder "Glurak"
-  front: StreamCardSide;
+  front: StreamCardSide | null;
   back?: StreamCardSide | null;
   isSaved?: boolean;
 }

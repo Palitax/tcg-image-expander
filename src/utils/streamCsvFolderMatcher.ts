@@ -554,7 +554,7 @@ function createMatchedCardSide(
  * Konvertiert die erfolgreich abgeglichenen Treffer in StreamBatchCard-Objekte für die Stapelverarbeitung.
  */
 export function convertMatchedCardsToStreamBatch(matches: MatchedCardItem[]): StreamBatchCard[] {
-  const validMatches = matches.filter(m => m.frontFile !== null);
+  const validMatches = matches.filter(m => m.frontFile !== null || m.backFile !== null);
 
   return validMatches.map((item, idx) => {
     const cardNum = idx + 1;
@@ -570,7 +570,7 @@ export function convertMatchedCardsToStreamBatch(matches: MatchedCardItem[]): St
       id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
       cardNumberIndex: cardNum,
       cardName: item.csvCard.cardName,
-      front: createMatchedCardSide(item.frontFile!, meta),
+      front: item.frontFile ? createMatchedCardSide(item.frontFile, meta) : null,
       back: item.backFile ? createMatchedCardSide(item.backFile, meta) : null,
       isSaved: false
     };
