@@ -72,23 +72,33 @@ export function normalizeSearchKey(str: string): string {
 }
 
 /**
- * Parst eine CSV-Datei und extrahiert die enthaltenen TCG-Karten (ideal für Whatnot- und Bestandslisten).
+ * Parst einen CSV-Text unter vollständiger Beachtung von RFC 4180:
+ * - Mehrzeilige Felder in Anführungszeichen (z. B. Beschreibungen mit Zeilenumbrüchen)
+ * - Escaped Anführungszeichen ("")
+ * - Automatische Trennzeichen-Erkennung (,, ;, \t, |)
  */
-export async function parseStreamCardCsv(file: File): Promise<ParsedCsvCard[]> {
-  let text = await file.text();
-  // Strip UTF-8 BOM if present
-  text = text.replace(/^\uFEFF/, "").trim();
-  if (!text) return [];
+export function parseCsvToRows(text: string): { separator: string; rows: string[][] } {
+  // Strip UTF-8 BOM
+  const cleaned = text.replace(/^\uFEFF/, "");
+  if (!cleaned.trim()) return { separator: ",", rows: [] };
 
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-  if (lines.length === 0) return [];
+  // Bestimme Trennzeichen anhand der Header-Zeile (erste Zeile vor dem ersten unquoted Zeilenumbruch)
+  let firstLine = "";
+  let inQ = false;
+  for (let i = 0; i < cleaned.length; i++) {
+    const c = cleaned[i];
+    if (c === '"') inQ = !inQ;
+    else if (!inQ && (c === '\n' || c === '\r')) {
+      firstLine = cleaned.slice(0, i);
+      break;
+    }
+  }
+  if (!firstLine) firstLine = cleaned;
 
-  // Trennzeichen anhand der ersten Zeile erkennen
-  const headerLine = lines[0];
-  const commaCount = (headerLine.match(/,/g) || []).length;
-  const semiCount = (headerLine.match(/;/g) || []).length;
-  const tabCount = (headerLine.match(/\t/g) || []).length;
-  const pipeCount = (headerLine.match(/\|/g) || []).length;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semiCount = (firstLine.match(/;/g) || []).length;
+  const tabCount = (firstLine.match(/\t/g) || []).length;
+  const pipeCount = (firstLine.match(/\|/g) || []).length;
 
   let separator = ",";
   let maxCount = commaCount;
@@ -96,49 +106,124 @@ export async function parseStreamCardCsv(file: File): Promise<ParsedCsvCard[]> {
   if (tabCount > maxCount) { separator = "\t"; maxCount = tabCount; }
   if (pipeCount > maxCount) { separator = "|"; maxCount = pipeCount; }
 
-  // Zeilen in Spalten parsen unter Berücksichtigung von Anführungszeichen
-  const parseLine = (line: string): string[] => {
-    const cells: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"' || char === "'") {
-        inQuotes = !inQuotes;
-      } else if (char === separator && !inQuotes) {
-        cells.push(current.trim());
-        current = "";
-      } else {
-        current += char;
-      }
-    }
-    cells.push(current.trim());
-    return cells;
-  };
+  // RFC-4180 State Machine
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentCell = "";
+  let insideQuotes = false;
 
-  const rawRows = lines.map(parseLine);
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    const nextChar = cleaned[i + 1];
+
+    if (char === '"') {
+      if (insideQuotes && nextChar === '"') {
+        // Escaped double quote ("")
+        currentCell += '"';
+        i++; // skip next quote
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (char === separator && !insideQuotes) {
+      currentRow.push(currentCell.trim());
+      currentCell = "";
+    } else if ((char === '\r' || char === '\n') && !insideQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i++; // skip \n in \r\n
+      }
+      currentRow.push(currentCell.trim());
+      currentCell = "";
+      if (currentRow.length > 0 && currentRow.some(cell => cell.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+    } else {
+      currentCell += char;
+    }
+  }
+
+  // Letzte Zelle / Zeile
+  if (currentCell.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentCell.trim());
+    if (currentRow.some(cell => cell.length > 0)) {
+      rows.push(currentRow);
+    }
+  }
+
+  return { separator, rows };
+}
+
+/**
+ * Extrahiert den reinen Bilddateinamen aus einer URL oder einem Pfad.
+ */
+export function extractFilenameFromUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const cleanUrl = url.split("?")[0].split("#")[0].trim();
+    const parts = cleanUrl.split("/");
+    const last = parts[parts.length - 1];
+    return last && /\.(jpe?g|png|webp|bmp|tiff)$/i.test(last) ? decodeURIComponent(last) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Extrahiert Kartennummer und Set-Kürzel aus einem Titel (z. B. "#1 Toxtricity #s12a 181/172 AR 🇯🇵").
+ */
+export function extractMetadataFromTitle(title: string): { setCode?: string; cardNumber?: string } {
+  let cardNumber: string | undefined;
+  let setCode: string | undefined;
+
+  const setNumMatch = title.match(/#([a-zA-Z0-9]+)\s+([0-9]+[\/-][0-9]+)/i);
+  if (setNumMatch) {
+    setCode = setNumMatch[1];
+    cardNumber = setNumMatch[2];
+  } else {
+    const numOnlyMatch = title.match(/([0-9]{2,4}[\/-][0-9]{2,4})/);
+    if (numOnlyMatch) cardNumber = numOnlyMatch[1];
+  }
+
+  return { setCode, cardNumber };
+}
+
+/**
+ * Parst eine CSV-Datei und extrahiert die enthaltenen TCG-Karten (ideal für Whatnot- und Bestandslisten).
+ */
+export async function parseStreamCardCsv(file: File): Promise<ParsedCsvCard[]> {
+  const text = await file.text();
+  const { rows: rawRows } = parseCsvToRows(text);
   if (rawRows.length === 0) return [];
 
   const cleanHeader = (s: string) => s.toLowerCase().replace(/[\uFEFF"'\s\-_#]/g, "");
   const headers = rawRows[0].map(cleanHeader);
 
+  // Spalten, die NIEMALS als Kartenname verwendet werden dürfen (z. B. lange Beschreibungen)
+  const ignoredForNameHeaders = [
+    "beschreibung", "description", "details", "hinweis", "notes", "kommentar", 
+    "menge", "quantity", "preis", "price", "versandprofil", "shippingprofile", 
+    "zustand", "condition", "kategorie", "unterkategorie", "verkaufsformat", "gefahrgut"
+  ];
+
   // Spalten-Indizes erkennen
   const nameHeaders = [
-    "name", "cardname", "kartenname", "title", "titel", "listingtitle", 
-    "item", "itemname", "product", "productname", "card", "karte", 
-    "bezeichnung", "artikel", "sku"
+    "titel", "title", "cardname", "kartenname", "listingtitle", "name", 
+    "item", "itemname", "product", "productname", "card", "karte"
   ];
   const numberHeaders = [
-    "number", "cardnumber", "kartennummer", "nr", "kartennr", "setnumber", "num"
+    "number", "cardnumber", "kartennummer", "nr", "kartennr", "setnumber", "num", 
+    "artikelnummer", "sku"
   ];
   const setHeaders = [
     "set", "setname", "setcode", "edition", "serie", "series"
   ];
   const frontHeaders = [
-    "frontfile", "frontimage", "front", "vorderseite", "vs", "frontfilename"
+    "frontfile", "frontimage", "front", "vorderseite", "vs", "frontfilename", 
+    "bildurl1", "imageurl1", "bild1", "image1", "url1"
   ];
   const backHeaders = [
-    "backfile", "backimage", "back", "rueckseite", "rückseite", "rs", "backfilename"
+    "backfile", "backimage", "back", "rueckseite", "rückseite", "rs", "backfilename", 
+    "bildurl2", "imageurl2", "bild2", "image2", "url2"
   ];
   const genericFileHeaders = [
     "file", "filename", "datei", "dateiname", "image", "bild"
@@ -165,7 +250,7 @@ export async function parseStreamCardCsv(file: File): Promise<ParsedCsvCard[]> {
 
   for (let r = startRow; r < rawRows.length; r++) {
     const row = rawRows[r];
-    if (row.length === 0 || row.every(c => !c)) continue;
+    if (row.length === 0 || row.every(c => !c || !c.trim())) continue;
 
     const rawMap: Record<string, string> = {};
     row.forEach((val, i) => {
@@ -179,21 +264,36 @@ export async function parseStreamCardCsv(file: File): Promise<ParsedCsvCard[]> {
     } else if (genericFileCol !== -1 && row[genericFileCol]) {
       cardName = row[genericFileCol].replace(/\.[^/.]+$/, "");
     } else {
-      // Erste nicht-leere Spalte als Kartenname
-      cardName = row.find(c => c.trim().length > 0) || `Karte ${r}`;
+      // Erste nicht-leere Spalte, die KEINE Beschreibung/Menge ist
+      for (let cIdx = 0; cIdx < row.length; cIdx++) {
+        const hName = headers[cIdx] || "";
+        if (!ignoredForNameHeaders.includes(hName) && row[cIdx]?.trim()) {
+          cardName = row[cIdx];
+          break;
+        }
+      }
+      if (!cardName) cardName = `Karte ${r}`;
     }
 
     // Anführungszeichen bereinigen
     cardName = cardName.replace(/^["']|["']$/g, "").trim();
     if (!cardName) continue;
 
-    const cardNumber = numCol !== -1 && row[numCol] ? row[numCol].replace(/^["']|["']$/g, "").trim() : undefined;
-    const setName = setCol !== -1 && row[setCol] ? row[setCol].replace(/^["']|["']$/g, "").trim() : undefined;
-    const frontFileName = frontCol !== -1 && row[frontCol] ? row[frontCol].replace(/^["']|["']$/g, "").trim() : undefined;
-    const backFileName = backCol !== -1 && row[backCol] ? row[backCol].replace(/^["']|["']$/g, "").trim() : undefined;
+    const titleMeta = extractMetadataFromTitle(cardName);
+    const rawNumber = numCol !== -1 && row[numCol] ? row[numCol].replace(/^["']|["']$/g, "").trim() : undefined;
+    const cardNumber = titleMeta.cardNumber || rawNumber;
+
+    const rawSet = setCol !== -1 && row[setCol] ? row[setCol].replace(/^["']|["']$/g, "").trim() : undefined;
+    const setName = rawSet || titleMeta.setCode;
+
+    const rawFront = frontCol !== -1 && row[frontCol] ? row[frontCol].replace(/^["']|["']$/g, "").trim() : undefined;
+    const rawBack = backCol !== -1 && row[backCol] ? row[backCol].replace(/^["']|["']$/g, "").trim() : undefined;
+
+    const frontFileName = extractFilenameFromUrl(rawFront) || rawFront;
+    const backFileName = extractFilenameFromUrl(rawBack) || rawBack;
 
     parsedCards.push({
-      rowIndex: r,
+      rowIndex: parsedCards.length + 1,
       cardName,
       cardNumber,
       setName,
