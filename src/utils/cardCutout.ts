@@ -169,6 +169,15 @@ export async function detectCardBordersCV(
   width: number,
   height: number
 ): Promise<{ x1: number; y1: number; x2: number; y2: number }> {
+  const imgRatio = height / width;
+  const isPreCroppedCard =
+    Math.abs(imgRatio - (88 / 63)) <= 0.045 ||
+    Math.abs(imgRatio - 1.4576) <= 0.045;
+
+  if (isPreCroppedCard) {
+    return { x1: 0, y1: 0, x2: width, y2: height };
+  }
+
   try {
     const { data } = await sharp(originalBuf)
       .greyscale()
@@ -321,6 +330,11 @@ export async function extractCardCutout(
     };
   }
 
+  const imgRatio = height / width;
+  const isPreCroppedCard =
+    Math.abs(imgRatio - (88 / 63)) <= 0.045 ||
+    Math.abs(imgRatio - 1.4576) <= 0.045;
+
   let cardCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
 
   // Wenn cropBox vom Visier übergeben wurde, exakt diese Koordinaten fest arretieren
@@ -369,6 +383,14 @@ export async function extractCardCutout(
       y2: clampedY + clampedH
     };
     console.log(`[Card Cutout] Manuelles Visier aktiv: Verwende exakte Koordinaten [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}] (${clampedW}x${clampedH})`);
+  } else if (isPreCroppedCard) {
+    cardCoords = {
+      x1: 0,
+      y1: 0,
+      x2: width,
+      y2: height
+    };
+    console.log(`[Card Cutout] Pre-cropped TCG-Kartenverhältnis (${width}x${height}, ratio=${imgRatio.toFixed(4)}) erkannt -> 100% Vollbild als Basis.`);
   }
 
   let illustrationCoords: { x1: number; y1: number; x2: number; y2: number } | null = null;
@@ -635,9 +657,9 @@ Your task is to detect the EXACT pixel coordinates of high-contrast printed grap
     cardCoords = await detectCardBordersCV(normalizedBuffer, width, height);
   }
 
-  // 4 & 5: Überspringe automatische Heuristiken und Randbeschnitte, wenn der Nutzer das Visier manuell gesetzt hat!
-  if (cropBox) {
-    console.log(`[Card Cutout] Manuelles Visier aktiv: Behalte exakte Koordinaten [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}] 1:1 bei.`);
+  // 4 & 5: Überspringe automatische Heuristiken und Randbeschnitte, wenn der Nutzer das Visier manuell gesetzt hat oder das Bild bereits pre-cropped ist!
+  if (cropBox || isPreCroppedCard) {
+    console.log(`[Card Cutout] Manuelles Visier/Pre-Cropped aktiv: Behalte exakte Koordinaten [${cardCoords.x1}, ${cardCoords.y1}, ${cardCoords.x2}, ${cardCoords.y2}] 1:1 bei.`);
   } else {
     // 4. Inward Border Refinement & Sleeve Stripping (ONLY FOR CV FALLBACK!)
     // When Gemini AI successfully detects the card bounding box, we do NOT run 1D gradient refinement.

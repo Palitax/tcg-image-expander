@@ -37,6 +37,23 @@ export async function POST(request: Request) {
     const bottomTrimPx = parseInt((formData.get("bottomTrim") as string) || "0", 10) || 0;
     const topPaddingPx = parseInt((formData.get("topPadding") as string) || "0", 10) || 0;
 
+    let cropBox: { x: number; y: number; width: number; height: number; imageWidth?: number; imageHeight?: number } | null = null;
+    const cropBoxParam = formData.get("cropBox") as string | null;
+    if (cropBoxParam) {
+      try {
+        if (cropBoxParam.startsWith("{")) {
+          cropBox = JSON.parse(cropBoxParam);
+        } else {
+          const parts = cropBoxParam.split(",").map(Number);
+          if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+            cropBox = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+          }
+        }
+      } catch (e) {
+        console.warn("[Crop API] Ungültiges cropBox-Format:", cropBoxParam);
+      }
+    }
+
     const cutoutResult = await extractCardCutout(originalImageBuffer, {
       apiKey,
       skipCardCrop,
@@ -45,7 +62,8 @@ export async function POST(request: Request) {
       edgePaddingPx,
       verticalOffsetPx,
       bottomTrimPx,
-      topPaddingPx
+      topPaddingPx,
+      cropBox
     });
 
     console.log(`[Crop API] Extracted card cutout:`, {

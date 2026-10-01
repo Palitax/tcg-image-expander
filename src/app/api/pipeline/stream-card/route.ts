@@ -329,7 +329,8 @@ export async function POST(request: Request) {
           edgePaddingPx,
           verticalOffsetPx,
           bottomTrimPx,
-          topPaddingPx
+          topPaddingPx,
+          cropBox
         })
       ]);
 
@@ -349,7 +350,8 @@ export async function POST(request: Request) {
         edgePaddingPx,
         verticalOffsetPx,
         bottomTrimPx,
-        topPaddingPx
+        topPaddingPx,
+        cropBox
       });
       roundedCardBuffer = cardCutoutResult.cutoutCardBuffer;
       usedFallback = cardCutoutResult.usedFallback;
