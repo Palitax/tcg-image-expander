@@ -42,8 +42,22 @@ import {
   EyeOff,
   Key,
   KeyRound,
-  RotateCcw
+  RotateCcw,
+  Folder,
+  FolderCheck,
+  FolderOpen,
+  FolderArchive,
+  Filter
 } from "lucide-react";
+import {
+  parseStreamCardCsv,
+  matchCsvCardsWithFolderFiles,
+  convertMatchedCardsToStreamBatch,
+  downloadStreamCardSampleCsv,
+  type ParsedCsvCard,
+  type MatchedCardItem,
+  type StreamFolderMatchResult
+} from "@/utils/streamCsvFolderMatcher";
 import { 
   getSavedArtworks, 
   saveArtwork, 
@@ -1580,6 +1594,10 @@ export default function Home() {
     try {
       const csvRows = await parseCsvFile(csvFile);
       if (csvRows.length === 0) {
+        if (studioType === "stream") {
+          await handleStreamCsvUpload(csvFile);
+          return;
+        }
         alert(
           "Keine gültigen Bild-URLs in der CSV-Datei gefunden.\n\n" +
           "Stelle sicher, dass deine CSV vollständige Bild-URLs enthält (z.B. https://domain.com/bild.png).\n" +
@@ -1740,6 +1758,17 @@ export default function Home() {
   const [lastExtractedEngine, setLastExtractedEngine] = useState<"gemini_homography" | "ai_matting" | "tcg_cutout">("gemini_homography");
   const [isStreamDownloadOpen, setIsStreamDownloadOpen] = useState<boolean>(false);
   const streamVisorRef = useRef<HTMLDivElement | null>(null);
+
+  // CSV-gestützter Ordner-Kartenimport states (Whatnot / Bestandslisten)
+  const [streamCardCsvFile, setStreamCardCsvFile] = useState<File | null>(null);
+  const [streamParsedCsvCards, setStreamParsedCsvCards] = useState<ParsedCsvCard[]>([]);
+  const [streamFolderMatchResult, setStreamFolderMatchResult] = useState<StreamFolderMatchResult | null>(null);
+  const [isStreamMatchModalOpen, setIsStreamMatchModalOpen] = useState<boolean>(false);
+  const [isStreamCsvListModalOpen, setIsStreamCsvListModalOpen] = useState<boolean>(false);
+  const [isAnalyzingFolderMatch, setIsAnalyzingFolderMatch] = useState<boolean>(false);
+  const [streamMatchFilter, setStreamMatchFilter] = useState<"all" | "exact_pair" | "front_only" | "missing">("all");
+  const streamFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const streamCsvInputRef = useRef<HTMLInputElement | null>(null);
 
   // Visier-Kalibrierungsspeicher & Auto-Save Zustände
   const [isCalibrationSaved, setIsCalibrationSaved] = useState<boolean>(false);
@@ -4791,6 +4820,162 @@ export default function Home() {
   };
 
   // =========================================================================
+  // CSV-gestützter Ordner-Kartenimport Handlers (Whatnot / Bestandslisten)
+  // =========================================================================
+
+  // Verarbeitet den Upload einer CSV-Kartenliste im Stream / Whatnot Studio
+  const handleStreamCsvUpload = async (file: File) => {
+    setIsCsvLoading(true);
+    setCsvStatusMsg("CSV-Kartenliste wird analysiert...");
+    try {
+      const cards = await parseStreamCardCsv(file);
+      if (cards.length === 0) {
+        alert(
+          "In der CSV-Datei wurden keine gültigen Kartennamen oder Titel gefunden.\n\n" +
+          "Stelle sicher, dass deine CSV Spalten wie 'Name', 'Kartenname', 'Title', 'Item' oder 'Datei' enthält.\n" +
+          "Klicke auf 'Muster-CSV', um eine passende Beispiel-Vorlage herunterzuladen."
+        );
+        return;
+      }
+      setStreamCardCsvFile(file);
+      setStreamParsedCsvCards(cards);
+      setCalibrationToast(`📄 CSV '${file.name}' geladen: ${cards.length} ${cards.length === 1 ? "Karte" : "Karten"} erkannt! Wähle jetzt den Bilder-Ordner aus.`);
+      setTimeout(() => setCalibrationToast(null), 5000);
+    } catch (err) {
+      console.error("Fehler beim Einlesen der Stream-CSV:", err);
+      alert("Fehler beim Lesen der CSV-Datei: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsCsvLoading(false);
+      setCsvStatusMsg("");
+    }
+  };
+
+  // Gleicht die Dateien eines ausgewählten Ordners mit der geladenen CSV ab
+  const handleStreamFolderSelected = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    if (streamParsedCsvCards.length === 0) {
+      alert("Bitte lade zuerst in Schritt 1 eine CSV-Kartenliste hoch, bevor du den Bilder-Ordner abgleichst.");
+      return;
+    }
+
+    setIsAnalyzingFolderMatch(true);
+    setImportStatusMsg(`${files.length} Dateien aus dem Ordner werden mit der CSV-Kartenliste abgeglichen...`);
+    setIsImportingCards(true);
+    await new Promise(r => setTimeout(r, 20));
+
+    try {
+      const matchResult = matchCsvCardsWithFolderFiles(streamParsedCsvCards, files);
+      setStreamFolderMatchResult(matchResult);
+      setStreamMatchFilter("all");
+      setIsStreamMatchModalOpen(true);
+    } catch (err) {
+      console.error("Fehler beim Abgleich der Ordnerdateien mit CSV:", err);
+      alert("Fehler beim Abgleich der Ordner-Dateien: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsAnalyzingFolderMatch(false);
+      setIsImportingCards(false);
+      setImportStatusMsg("");
+    }
+  };
+
+  // Übernimmt die erfolgreich zugeordneten Karten in die Stream-Stapelverarbeitung
+  const handleConfirmApplyMatchedCards = async () => {
+    if (!streamFolderMatchResult) return;
+    const validMatches = streamFolderMatchResult.matchedCards.filter(m => m.frontFile !== null);
+    if (validMatches.length === 0) {
+      alert("Es wurden keine passenden Karten im Ordner gefunden, die in die Stapelverarbeitung übernommen werden können.");
+      return;
+    }
+
+    // Bei Bedarf Bilddateien optimieren, falls > 2MB
+    const matchedFilesList: File[] = [];
+    validMatches.forEach(m => {
+      if (m.frontFile) matchedFilesList.push(m.frontFile);
+      if (m.backFile) matchedFilesList.push(m.backFile);
+    });
+
+    const oversized = matchedFilesList.filter(f => f.size > MAX_SAFE_FILE_SIZE);
+    if (oversized.length > 0) {
+      setIsImportingCards(true);
+      setIsOptimizingUploads(true);
+      setUploadOptimizationMsg(`${oversized.length} große Scans werden für die Pipeline optimiert...`);
+      try {
+        const optimizedFiles = await ensureSafeUploadedFiles(matchedFilesList, (curr, total, name) => {
+          setImportProgressCount({ current: curr, total });
+          setUploadOptimizationMsg(`Bild ${curr} von ${total} wird optimiert (${name})...`);
+        });
+        const fileMap = new Map<string, File>();
+        optimizedFiles.forEach(f => fileMap.set(f.name, f));
+        validMatches.forEach(m => {
+          if (m.frontFile && fileMap.has(m.frontFile.name)) m.frontFile = fileMap.get(m.frontFile.name)!;
+          if (m.backFile && fileMap.has(m.backFile.name)) m.backFile = fileMap.get(m.backFile.name)!;
+        });
+      } catch (err) {
+        console.warn("Fehler bei der Bildoptimierung:", err);
+      } finally {
+        setIsImportingCards(false);
+        setIsOptimizingUploads(false);
+        setUploadOptimizationMsg("");
+        setImportProgressCount(null);
+      }
+    }
+
+    const newBatchCards = convertMatchedCardsToStreamBatch(validMatches);
+    if (newBatchCards.length === 0) {
+      alert("Fehler beim Erstellen der Stapelkarten.");
+      return;
+    }
+
+    setStreamCards(newBatchCards);
+
+    // Synchronisation mit streamBatchItems für Abwärtskompatibilität
+    const newBatchItems: BatchItem[] = [];
+    newBatchCards.forEach(c => {
+      newBatchItems.push({
+        id: c.front.id,
+        file: c.front.file,
+        previewUrl: c.front.previewUrl,
+        name: `${c.cardName} (Vorderseite)`,
+        status: "pending",
+        isSaved: false
+      });
+      if (c.back) {
+        newBatchItems.push({
+          id: c.back.id,
+          file: c.back.file,
+          previewUrl: c.back.previewUrl,
+          name: `${c.cardName} (Rückseite)`,
+          status: "pending",
+          isSaved: false
+        });
+      }
+    });
+    setStreamBatchItems(newBatchItems);
+
+    // Erste Karte als aktiv setzen
+    const firstCard = newBatchCards[0];
+    setActiveStreamCardIndex(0);
+    setActiveStreamSide("front");
+    setStreamFile(firstCard.front.file);
+    setStreamPreviewUrl(firstCard.front.previewUrl);
+    setStreamCropBox(firstCard.front.cropBox);
+    setStreamResultUrl(null);
+    setStreamCutoutUrl(null);
+    setStreamBgImageUrl(null);
+    setStreamErrorMessage(null);
+    setStreamSteps(STREAM_EXTENDED_STEPS.map(s => ({ ...s, status: "idle" })));
+    setStreamElapsedTime(0);
+    setStreamActiveStepMessage("");
+    setNewArtworkName(`${firstCard.cardName} - Vorderseite`);
+
+    setIsStreamMatchModalOpen(false);
+    setCalibrationToast(`🎯 ${newBatchCards.length} ${newBatchCards.length === 1 ? "Karte" : "Karten"} aus der CSV erfolgreich in die Stapelverarbeitung übernommen!`);
+    setTimeout(() => setCalibrationToast(null), 5000);
+  };
+
+  // =========================================================================
   // Stream Bildverarbeitung (Single & Batch)
   // =========================================================================
 
@@ -6217,6 +6402,25 @@ export default function Home() {
               >
                 <X className="w-4 h-4" />
                 Verarbeitung abbrechen
+              </button>
+            )}
+
+            {/* CSV & Ordner-Import button */}
+            {!isStreamBatchProcessing && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (streamParsedCsvCards.length > 0) {
+                    streamFolderInputRef.current?.click();
+                  } else {
+                    streamCsvInputRef.current?.click();
+                  }
+                }}
+                className="px-3 py-2 rounded-xl border border-purple-500/30 hover:border-purple-500/50 bg-purple-950/20 hover:bg-purple-950/40 text-purple-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                title={streamParsedCsvCards.length > 0 ? "Bilder-Ordner auswählen und mit CSV abgleichen" : "CSV-Kartenliste auswählen"}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-purple-400" />
+                {streamParsedCsvCards.length > 0 ? "Ordner abgleichen" : "CSV-Kartenfilter"}
               </button>
             )}
 
@@ -9042,6 +9246,247 @@ export default function Home() {
               )}
             </div>
 
+            {/* CSV-gestützter Ordner-Kartenimport (Whatnot / Bestandslisten) */}
+            <div className="w-full rounded-3xl border border-purple-500/30 bg-gradient-to-b from-purple-950/30 via-zinc-900/50 to-zinc-950/60 backdrop-blur-xl p-6 sm:p-7 shadow-2xl flex flex-col gap-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0 shadow-[0_0_15px_rgba(168,85,247,0.2)]">
+                    <FileSpreadsheet className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base font-bold text-white">
+                        CSV-Kartenfilter & Ordner-Import
+                      </h2>
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 uppercase tracking-wider">
+                        100% Exakter Abgleich
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Lade eine CSV (z. B. Whatnot-Verkäufe oder Bestandsliste) und wähle deinen Scan-Ordner. Es werden ausschließlich die genannten Karten (VS & RS) in den Stapel geladen.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={downloadStreamCardSampleCsv}
+                    className="px-3 py-1.5 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/60 text-zinc-400 hover:text-zinc-200 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                    title="Muster-CSV herunterladen"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-purple-400" />
+                    Muster-CSV
+                  </button>
+                </div>
+              </div>
+
+              {/* 2-Schritte Raster */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Schritt 1: CSV hochladen */}
+                <div 
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const dropped = Array.from(e.dataTransfer.files).find(f => f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv");
+                    if (dropped) handleStreamCsvUpload(dropped);
+                  }}
+                  className={`p-5 rounded-2xl border transition-all flex flex-col justify-between gap-4 ${
+                    streamCardCsvFile 
+                      ? "border-emerald-500/40 bg-emerald-950/10" 
+                      : "border-zinc-800/80 bg-zinc-950/40 hover:border-purple-500/40"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center text-[10px]">1</span>
+                        CSV-Kartenliste
+                      </span>
+                      {streamCardCsvFile && (
+                        <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1">
+                          <Check className="w-3 h-3" /> Geladen
+                        </span>
+                      )}
+                    </div>
+
+                    {!streamCardCsvFile ? (
+                      <p className="text-xs text-zinc-400 mb-3">
+                        Lade eine CSV-Datei mit den gewünschten Kartennamen (Titel, Name, Nummer, SKU).
+                      </p>
+                    ) : (
+                      <div className="flex flex-col gap-1 mb-3">
+                        <p className="text-xs font-semibold text-white truncate" title={streamCardCsvFile.name}>
+                          {streamCardCsvFile.name}
+                        </p>
+                        <p className="text-[11px] text-zinc-400">
+                          {streamParsedCsvCards.length} {streamParsedCsvCards.length === 1 ? "Karte" : "Karten"} in der Liste identifiziert
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={streamCsvInputRef}
+                      type="file"
+                      accept=".csv,text/csv,text/plain"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          handleStreamCsvUpload(file);
+                          e.target.value = "";
+                        }
+                      }}
+                    />
+                    {!streamCardCsvFile ? (
+                      <button
+                        type="button"
+                        onClick={() => streamCsvInputRef.current?.click()}
+                        className="w-full py-2.5 px-4 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-200 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-purple-400" />
+                        CSV-Datei auswählen
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setIsStreamCsvListModalOpen(true)}
+                          className="flex-1 py-2 px-3 rounded-xl border border-zinc-750 hover:border-zinc-600 bg-zinc-900/60 text-zinc-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-purple-400" />
+                          Karten anzeigen ({streamParsedCsvCards.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => streamCsvInputRef.current?.click()}
+                          className="py-2 px-3 rounded-xl border border-zinc-750 hover:border-zinc-600 bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 text-xs font-semibold flex items-center justify-center transition-all cursor-pointer"
+                          title="Andere CSV wählen"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStreamCardCsvFile(null);
+                            setStreamParsedCsvCards([]);
+                            setStreamFolderMatchResult(null);
+                          }}
+                          className="py-2 px-2.5 rounded-xl border border-zinc-750 hover:border-red-500/40 bg-zinc-900/60 text-zinc-400 hover:text-red-400 text-xs font-semibold flex items-center justify-center transition-all cursor-pointer"
+                          title="CSV entfernen"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Schritt 2: Bilder-Ordner auswählen & abgleichen */}
+                <div 
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                      handleStreamFolderSelected(e.dataTransfer.files);
+                    }
+                  }}
+                  className={`p-5 rounded-2xl border transition-all flex flex-col justify-between gap-4 ${
+                    !streamCardCsvFile
+                      ? "border-zinc-800/50 bg-zinc-950/20 opacity-70"
+                      : streamFolderMatchResult
+                      ? "border-purple-500/50 bg-purple-950/15"
+                      : "border-purple-500/30 bg-purple-950/10"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400 flex items-center gap-1.5">
+                        <span className="w-4 h-4 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center text-[10px]">2</span>
+                        Scan-Ordner abgleichen
+                      </span>
+                      {streamFolderMatchResult && (
+                        <span className="text-[10px] font-semibold text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded-md border border-purple-500/30 flex items-center gap-1">
+                          <CheckCheck className="w-3 h-3 text-purple-400" /> Abgeglichen
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-zinc-400 mb-3">
+                      {streamCardCsvFile
+                        ? `Wähle deinen Ordner. Das System sucht automatisch die Vorder- & Rückseiten der ${streamParsedCsvCards.length} Karten.`
+                        : "Lade zuerst in Schritt 1 eine CSV hoch, um den Scan-Ordner abzugleichen."}
+                    </p>
+
+                    {streamFolderMatchResult && (
+                      <div className="flex items-center gap-2 text-[11px] text-zinc-300 bg-zinc-900/80 p-2 rounded-xl border border-zinc-800 mb-2">
+                        <span className="text-emerald-400 font-semibold">{streamFolderMatchResult.pairedCount + streamFolderMatchResult.frontOnlyCount} Karten erkannt</span>
+                        <span className="text-zinc-600">•</span>
+                        <span className="text-zinc-400">{streamFolderMatchResult.ignoredFolderImagesCount} andere Bilder ignoriert</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <input
+                      ref={streamFolderInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleStreamFolderSelected(e.target.files);
+                          e.target.value = "";
+                        }
+                      }}
+                      {...({ webkitdirectory: "", directory: "", mozdirectory: "" } as any)}
+                      multiple
+                    />
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!streamCardCsvFile || isAnalyzingFolderMatch}
+                        onClick={() => streamFolderInputRef.current?.click()}
+                        className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                          !streamCardCsvFile
+                            ? "bg-zinc-900 border border-zinc-800 text-zinc-500 cursor-not-allowed"
+                            : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-[0_0_20px_rgba(147,51,234,0.3)]"
+                        }`}
+                      >
+                        {isAnalyzingFolderMatch ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-purple-200" />
+                            Gleiche Ordner ab...
+                          </>
+                        ) : (
+                          <>
+                            <FolderOpen className="w-4 h-4" />
+                            {streamFolderMatchResult ? "Anderen Ordner abgleichen" : "Bilder-Ordner auswählen"}
+                          </>
+                        )}
+                      </button>
+
+                      {streamFolderMatchResult && (
+                        <button
+                          type="button"
+                          onClick={() => setIsStreamMatchModalOpen(true)}
+                          className="py-2.5 px-3 rounded-xl border border-purple-500/40 bg-purple-950/30 text-purple-300 hover:bg-purple-900/40 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                          title="Abgleich-Ergebnis prüfen"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Prüfen
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Upload Area for Scanned Cards */}
             <div className="w-full">
               <div 
@@ -10974,6 +11419,327 @@ export default function Home() {
                     Speichern
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stream CSV-Ordner Match Review Modal */}
+        {isStreamMatchModalOpen && streamFolderMatchResult && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-xl animate-in fade-in duration-200"
+            onClick={() => setIsStreamMatchModalOpen(false)}
+          >
+            <div
+              className="relative w-full max-w-4xl max-h-[92vh] flex flex-col bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-850 bg-zinc-900/60 backdrop-blur-md">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400 shrink-0 shadow-sm">
+                    <CheckCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-white">
+                      Kartenabgleich: CSV ⇄ Scan-Ordner
+                    </h2>
+                    <p className="text-xs text-zinc-400">
+                      Prüfe die identifizierten Karten und übernimm sie mit einem Klick in den Stapel.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsStreamMatchModalOpen(false)}
+                  className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+                  title="Schließen"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Stat-Übersichtsbalken */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-6 py-3 bg-zinc-950 border-b border-zinc-850 text-xs">
+                <div className="p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-center">
+                  <span className="block text-[10px] text-zinc-500 font-semibold uppercase">In CSV gelistet</span>
+                  <span className="text-sm font-bold text-white">{streamFolderMatchResult.totalCsvCards} Karten</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 text-center">
+                  <span className="block text-[10px] text-emerald-400 font-semibold uppercase">Mit VS & RS</span>
+                  <span className="text-sm font-bold text-emerald-300">{streamFolderMatchResult.pairedCount} Karten</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-center">
+                  <span className="block text-[10px] text-amber-400 font-semibold uppercase">Nur Vorderseite</span>
+                  <span className="text-sm font-bold text-amber-300">{streamFolderMatchResult.frontOnlyCount} Karten</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-center">
+                  <span className="block text-[10px] text-zinc-500 font-semibold uppercase">Ordner-Bilder ignoriert</span>
+                  <span className="text-sm font-bold text-zinc-400">{streamFolderMatchResult.ignoredFolderImagesCount} Bilder</span>
+                </div>
+              </div>
+
+              {/* Filter-Leiste */}
+              <div className="flex items-center gap-2 px-6 py-2.5 border-b border-zinc-850 bg-zinc-900/30 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setStreamMatchFilter("all")}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    streamMatchFilter === "all"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Alle ({streamFolderMatchResult.matchedCards.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStreamMatchFilter("exact_pair")}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    streamMatchFilter === "exact_pair"
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Vorder- & Rückseite ({streamFolderMatchResult.pairedCount})
+                </button>
+                {streamFolderMatchResult.frontOnlyCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setStreamMatchFilter("front_only")}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      streamMatchFilter === "front_only"
+                        ? "bg-amber-600 text-white shadow-sm"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    Nur Vorderseite ({streamFolderMatchResult.frontOnlyCount})
+                  </button>
+                )}
+                {streamFolderMatchResult.missingCards.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setStreamMatchFilter("missing")}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      streamMatchFilter === "missing"
+                        ? "bg-red-600 text-white shadow-sm"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    Nicht gefunden ({streamFolderMatchResult.missingCards.length})
+                  </button>
+                )}
+              </div>
+
+              {/* Scrollbare Trefferliste */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-3 max-h-[50vh]">
+                {streamFolderMatchResult.matchedCards
+                  .filter((m) => {
+                    if (streamMatchFilter === "all") return true;
+                    return m.matchStatus === streamMatchFilter;
+                  })
+                  .map((item, idx) => (
+                    <div
+                      key={item.id || idx}
+                      className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
+                        item.matchStatus === "exact_pair"
+                          ? "border-emerald-500/30 bg-emerald-950/10"
+                          : item.matchStatus === "front_only"
+                          ? "border-amber-500/30 bg-amber-950/10"
+                          : "border-red-500/30 bg-red-950/10"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="font-mono text-xs text-zinc-500 w-6 shrink-0">
+                          #{item.csvCard.rowIndex}
+                        </span>
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-bold text-white truncate" title={item.csvCard.cardName}>
+                            {item.csvCard.cardName}
+                          </h3>
+                          <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+                            {item.csvCard.cardNumber && (
+                              <span>Nr: <strong className="text-zinc-300">{item.csvCard.cardNumber}</strong></span>
+                            )}
+                            {item.csvCard.setName && (
+                              <span>Set: <strong className="text-zinc-300">{item.csvCard.setName}</strong></span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Bild-Zuordnung */}
+                      <div className="flex items-center gap-3 shrink-0">
+                        {item.frontFile ? (
+                          <div className="flex items-center gap-2 bg-zinc-950/80 px-2.5 py-1.5 rounded-xl border border-zinc-800">
+                            {item.frontPreviewUrl && (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={item.frontPreviewUrl}
+                                alt="VS"
+                                className="w-8 h-8 rounded-lg object-cover border border-zinc-700 shrink-0"
+                              />
+                            )}
+                            <div className="text-[11px] max-w-[130px] truncate">
+                              <span className="block text-[9px] text-purple-400 uppercase font-bold">Vorderseite</span>
+                              <span className="text-zinc-300 truncate block" title={item.frontFile.name}>
+                                {item.frontFile.name}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-red-400 font-semibold bg-red-950/30 border border-red-500/30 px-2.5 py-1 rounded-lg">
+                            Kein Bild im Ordner
+                          </span>
+                        )}
+
+                        {item.backFile ? (
+                          <div className="flex items-center gap-2 bg-zinc-950/80 px-2.5 py-1.5 rounded-xl border border-zinc-800">
+                            {item.backPreviewUrl && (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={item.backPreviewUrl}
+                                alt="RS"
+                                className="w-8 h-8 rounded-lg object-cover border border-zinc-700 shrink-0"
+                              />
+                            )}
+                            <div className="text-[11px] max-w-[130px] truncate">
+                              <span className="block text-[9px] text-blue-400 uppercase font-bold">Rückseite</span>
+                              <span className="text-zinc-300 truncate block" title={item.backFile.name}>
+                                {item.backFile.name}
+                              </span>
+                            </div>
+                          </div>
+                        ) : item.frontFile ? (
+                          <div className="px-2.5 py-1.5 rounded-xl border border-zinc-800/80 bg-zinc-950/40 text-[11px] text-zinc-500">
+                            Keine Rückseite
+                          </div>
+                        ) : null}
+
+                        {/* Status Badge */}
+                        <div className="hidden sm:block">
+                          {item.matchStatus === "exact_pair" ? (
+                            <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-full whitespace-nowrap">
+                              VS + RS ✓
+                            </span>
+                          ) : item.matchStatus === "front_only" ? (
+                            <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full whitespace-nowrap">
+                              Nur VS
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-red-400 bg-red-500/10 border border-red-500/30 px-2.5 py-1 rounded-full whitespace-nowrap">
+                              Fehlt
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+
+              {/* Footer */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-6 py-4 border-t border-zinc-850 bg-zinc-900/60 backdrop-blur-md">
+                <p className="text-xs text-zinc-400">
+                  Es werden nur die <strong className="text-white">{streamFolderMatchResult.pairedCount + streamFolderMatchResult.frontOnlyCount} identifizierten Karten</strong> in die Stapelverarbeitung übernommen.
+                  {streamFolderMatchResult.ignoredFolderImagesCount > 0 && (
+                    <span className="block text-[11px] text-zinc-500 mt-0.5">
+                      {streamFolderMatchResult.ignoredFolderImagesCount} nicht in der CSV genannte Dateien werden ignoriert.
+                    </span>
+                  )}
+                </p>
+
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsStreamMatchModalOpen(false)}
+                    className="px-4 py-2 rounded-xl border border-zinc-750 hover:border-zinc-600 bg-zinc-900 text-zinc-300 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Abbrechen
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streamFolderMatchResult.pairedCount + streamFolderMatchResult.frontOnlyCount === 0}
+                    onClick={handleConfirmApplyMatchedCards}
+                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-[0_4px_15px_rgba(147,51,234,0.3)] cursor-pointer"
+                  >
+                    In Stapelverarbeitung übernehmen ({streamFolderMatchResult.pairedCount + streamFolderMatchResult.frontOnlyCount} Karten)
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stream CSV-Kartenliste Detail-Modal */}
+        {isStreamCsvListModalOpen && streamCardCsvFile && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-xl animate-in fade-in duration-200"
+            onClick={() => setIsStreamCsvListModalOpen(false)}
+          >
+            <div
+              className="relative w-full max-w-3xl max-h-[85vh] flex flex-col bg-zinc-950 border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-850 bg-zinc-900/60 backdrop-blur-md">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-white truncate max-w-md">
+                      {streamCardCsvFile.name}
+                    </h2>
+                    <p className="text-xs text-zinc-400">
+                      {streamParsedCsvCards.length} erkannte Karten in der CSV-Liste
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsStreamCsvListModalOpen(false)}
+                  className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 max-h-[55vh]">
+                <table className="w-full text-left text-xs text-zinc-300">
+                  <thead className="text-[11px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 bg-zinc-900/40">
+                    <tr>
+                      <th className="py-2.5 px-3">#</th>
+                      <th className="py-2.5 px-3">Kartenname / Titel</th>
+                      <th className="py-2.5 px-3">Nummer</th>
+                      <th className="py-2.5 px-3">Set</th>
+                      <th className="py-2.5 px-3">Dateinamen (optional)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-850">
+                    {streamParsedCsvCards.map((c, i) => (
+                      <tr key={i} className="hover:bg-zinc-900/30">
+                        <td className="py-2 px-3 font-mono text-zinc-500">#{c.rowIndex}</td>
+                        <td className="py-2 px-3 font-semibold text-white">{c.cardName}</td>
+                        <td className="py-2 px-3 text-zinc-400">{c.cardNumber || "—"}</td>
+                        <td className="py-2 px-3 text-zinc-400">{c.setName || "—"}</td>
+                        <td className="py-2 px-3 text-zinc-500 font-mono text-[10px]">
+                          {c.frontFileName ? `${c.frontFileName}${c.backFileName ? ` | ${c.backFileName}` : ""}` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-end px-6 py-4 border-t border-zinc-850 bg-zinc-900/60">
+                <button
+                  type="button"
+                  onClick={() => setIsStreamCsvListModalOpen(false)}
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Schließen
+                </button>
               </div>
             </div>
           </div>
