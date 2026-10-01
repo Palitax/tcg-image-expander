@@ -337,6 +337,12 @@ class TCGStreamEngine:
             tr[0] += edge_padding_px
             br[0] += edge_padding_px
 
+        # Sichere Begrenzung der Stanzpunkte auf die Bilddimensionen
+        # Verhindert schwarze Abtast-Artefakte an den Kanten
+        for pt in [tl, tr, br, bl]:
+            pt[0] = max(0.0, min(float(orig_w), pt[0]))
+            pt[1] = max(0.0, min(float(orig_h), pt[1]))
+
         src_pts = np.array([tl, tr, br, bl], dtype=np.float32)
 
         # Standard-TCG Seitenverhältnis: 63mm x 88mm = 1:1.396825
@@ -351,13 +357,14 @@ class TCGStreamEngine:
             [0, target_height - 1]
         ], dtype=np.float32)
 
-        # 1. Homographie-Matrix berechnen und anwenden
+        # 1. Homographie-Matrix berechnen und anwenden (BORDER_REPLICATE verhindert schwarze Ränder)
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped_bgr = cv2.warpPerspective(
             image_bgr,
             M,
             (target_width, target_height),
-            flags=cv2.INTER_LANCZOS4
+            flags=cv2.INTER_LANCZOS4,
+            borderMode=cv2.BORDER_REPLICATE
         )
 
         # 2. Vektormaske für abgerundete Die-Cut Ecken (Radius ~3.6% der Breite)
@@ -439,15 +446,31 @@ class TCGStreamEngine:
         image_bgr = self.normalize_input_image(image_input)
         orig_h, orig_w = image_bgr.shape[:2]
 
+        img_ratio = orig_h / float(orig_w)
+        is_edge_to_edge = (abs(img_ratio - (88.0 / 63.0)) <= 0.045) or (abs(img_ratio - 1.4576) <= 0.045)
+
         if crop_box is not None:
             # Explizite Stanzrahmen-Koordinaten (x, y, width, height) aus dem Web-Interface
-            bx, by, bw, bh = crop_box
+            if isinstance(crop_box, dict):
+                bx = float(crop_box.get("x", 0))
+                by = float(crop_box.get("y", 0))
+                bw = float(crop_box.get("width", orig_w))
+                bh = float(crop_box.get("height", orig_h))
+            else:
+                bx, by, bw, bh = crop_box
+
             # Falls normalisiert in [0..1], auf Pixel skalieren
             if bw <= 1.0 and bh <= 1.0:
                 bx = bx * orig_w
                 by = by * orig_h
                 bw = bw * orig_w
                 bh = bh * orig_h
+
+            # Begrenzung auf Bildgrenzen
+            bx = max(0.0, min(float(orig_w - 1), bx))
+            by = max(0.0, min(float(orig_h - 1), by))
+            bw = max(10.0, min(float(orig_w - bx), bw))
+            bh = max(10.0, min(float(orig_h - by), bh))
 
             corners = CardCorners(
                 top_left=[int(round(by * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))],
@@ -468,8 +491,30 @@ class TCGStreamEngine:
                     scene_prompt="",
                     corners=corners
                 )
+        elif is_edge_to_edge:
+            # Bild entspricht bereits exakt dem TCG-Kartenverhältnis (Randlos / Pre-Cropped)
+            # Volles Bild als Karte nutzen, kein ADF-Abschnitt nötig!
+            corners = CardCorners(
+                top_left=[0, 0],
+                top_right=[0, 1000],
+                bottom_right=[1000, 1000],
+                bottom_left=[1000, 0]
+            )
+            try:
+                analysis = self.analyze_card_with_gemini(image_bgr)
+                analysis.corners = corners
+            except Exception as e:
+                import sys
+                print(f"[card_engine] Gemini Analyse bei randlosem Scan fehlgeschlagen: {e}", file=sys.stderr)
+                analysis = CardAnalysisResult(
+                    card_name="Sammelkarte",
+                    collector_number="",
+                    set_code="",
+                    scene_prompt="",
+                    corners=corners
+                )
         elif 1150 <= orig_w <= 1450 and 1650 <= orig_h <= 1950:
-            # Vollautomatischer TCG Auto-Snap für Epson DS-530 ADF-Scans
+            # Vollautomatischer TCG Auto-Snap für Epson DS-530 ADF-Scans mit Scannerrand
             bx, by, bw, bh = self.auto_detect_adf_tcg_crop(image_bgr)
             corners = CardCorners(
                 top_left=[int(round(by * 1000.0 / orig_h)), int(round(bx * 1000.0 / orig_w))],

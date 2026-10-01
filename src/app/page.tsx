@@ -67,7 +67,7 @@ import {
   type SavedArtwork
 } from "@/utils/db";
 import { supabase } from "@/utils/supabaseClient";
-import { CardCropVisor, type CropBox } from "@/components/CardCropVisor";
+import { CardCropVisor, getDefaultCropBoxForImage, type CropBox } from "@/components/CardCropVisor";
 import { 
   analyzeAndPairCardImages, 
   sanitizeCardFileName,
@@ -5232,9 +5232,10 @@ export default function Home() {
       }
 
       const cropToUse = customCropBox !== undefined ? customCropBox : streamCropBox;
-      if (cropToUse) {
-        const scaledCrop = adaptCropBoxToImage(cropToUse, optimizedWidth, optimizedHeight, originalWidth, originalHeight);
-        console.log(`[Stream Studio] cropBox angepasst: [${cropToUse.x}, ${cropToUse.y}, ${cropToUse.width}, ${cropToUse.height}] (${originalWidth}x${originalHeight}) -> [${scaledCrop.x}, ${scaledCrop.y}, ${scaledCrop.width}, ${scaledCrop.height}] (${optimizedWidth}x${optimizedHeight})`);
+      const effectiveCrop = cropToUse || getDefaultCropBoxForImage(originalWidth, originalHeight);
+      if (effectiveCrop) {
+        const scaledCrop = adaptCropBoxToImage(effectiveCrop, optimizedWidth, optimizedHeight, originalWidth, originalHeight);
+        console.log(`[Stream Studio] cropBox angepasst: [${effectiveCrop.x}, ${effectiveCrop.y}, ${effectiveCrop.width}, ${effectiveCrop.height}] (${originalWidth}x${originalHeight}) -> [${scaledCrop.x}, ${scaledCrop.y}, ${scaledCrop.width}, ${scaledCrop.height}] (${optimizedWidth}x${optimizedHeight})`);
         formData.append("cropBox", JSON.stringify(scaledCrop));
         formData.append("cropX", scaledCrop.x.toString());
         formData.append("cropY", scaledCrop.y.toString());

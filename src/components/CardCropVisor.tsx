@@ -43,6 +43,62 @@ type DragMode =
   | "corner-tl"
   | null;
 
+export function getDefaultCropBoxForImage(
+  nw: number,
+  nh: number,
+  targetRatio = 88 / 63
+): CropBox {
+  const imgRatio = nh / nw;
+  const isAlreadyCardCropped =
+    Math.abs(imgRatio - targetRatio) <= 0.045 ||
+    Math.abs(imgRatio - 1.4576) <= 0.045;
+
+  let initialW: number;
+  let initialH: number;
+  let initialX: number;
+  let initialY: number;
+
+  if (isAlreadyCardCropped) {
+    // Bereits randnah/exakt als TCG-Karte zugeschnitten -> 100% Vollbild
+    if (imgRatio >= targetRatio) {
+      initialW = nw;
+      initialH = Math.min(nh, Math.round(initialW * targetRatio));
+      initialX = 0;
+      initialY = Math.round((nh - initialH) / 2);
+    } else {
+      initialH = nh;
+      initialW = Math.min(nw, Math.round(initialH / targetRatio));
+      initialY = 0;
+      initialX = Math.round((nw - initialW) / 2);
+    }
+  } else if (nw >= 1200 && nw <= 1400 && nh >= 1700 && nh <= 1900) {
+    // Unbeschnittener Epson DS-530 ADF-Scan mit Scannereinzugs-Rändern (1299 x 1800 px)
+    initialW = Math.round(nw * 0.9007); // ca. 1170px bei 1299px Scanbreite
+    initialH = Math.round(initialW * targetRatio); // 1634px
+    initialX = Math.round((nw - initialW) * 0.42);
+    initialY = Math.round((nh - initialH) * 0.22);
+  } else {
+    // Standard-Zuschnitt: 90% der Bildbreite im Zentrum
+    initialW = Math.round(nw * 0.90);
+    initialH = Math.round(initialW * targetRatio);
+    initialX = Math.round((nw - initialW) / 2);
+    initialY = Math.round((nh - initialH) / 2);
+  }
+
+  // Grenzwerte absichern
+  initialX = Math.max(0, Math.min(nw - initialW, initialX));
+  initialY = Math.max(0, Math.min(nh - initialH, initialY));
+
+  return {
+    x: initialX,
+    y: initialY,
+    width: initialW,
+    height: initialH,
+    imageWidth: nw,
+    imageHeight: nh
+  };
+}
+
 export const CardCropVisor: React.FC<CardCropVisorProps> = ({
   imageUrl,
   onChange,
@@ -133,18 +189,12 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
         initialW = initialBox.width;
         initialH = initialBox.height;
       }
-    } else if (nw >= 1200 && nw <= 1400 && nh >= 1700 && nh <= 1900) {
-      // Epson DS-530 Scan (1299 x 1800 px) -> Exakte TCG-Kartenmaße
-      initialW = 1170;
-      initialH = Math.round(initialW * targetRatio); // 1634px
-      initialX = 54;
-      initialY = 36;
     } else {
-      // Universelle Karte: 90% der Breite
-      initialW = Math.round(nw * 0.90);
-      initialH = Math.round(initialW * targetRatio);
-      initialX = Math.round((nw - initialW) / 2);
-      initialY = Math.round((nh - initialH) / 2);
+      const def = getDefaultCropBoxForImage(nw, nh, targetRatio);
+      initialX = def.x;
+      initialY = def.y;
+      initialW = def.width;
+      initialH = def.height;
     }
 
     // Grenzwerte absichern
@@ -284,13 +334,44 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
   }, [updateBox, targetRatio]);
 
   // Schnell-Presets
+  const applyPresetFull = () => {
+    if (!naturalSize) return;
+    const { width: nw, height: nh } = naturalSize;
+    const imgRatio = nh / nw;
+    let w: number;
+    let h: number;
+    let x: number;
+    let y: number;
+
+    if (imgRatio >= targetRatio) {
+      w = nw;
+      h = Math.min(nh, Math.round(w * targetRatio));
+      x = 0;
+      y = Math.round((nh - h) / 2);
+    } else {
+      h = nh;
+      w = Math.min(nw, Math.round(h / targetRatio));
+      y = 0;
+      x = Math.round((nw - w) / 2);
+    }
+
+    updateBox(() => ({
+      x: Math.max(0, Math.min(nw - w, x)),
+      y: Math.max(0, Math.min(nh - h, y)),
+      width: w,
+      height: h
+    }));
+  };
+
   const applyPresetEpson = () => {
     if (!naturalSize) return;
-    const w = 1170;
-    const h = Math.round(w * targetRatio); // 1634px
+    const w = Math.round(naturalSize.width * 0.9007);
+    const h = Math.round(w * targetRatio);
+    const x = Math.round((naturalSize.width - w) * 0.42);
+    const y = Math.round((naturalSize.height - h) * 0.22);
     updateBox(() => ({
-      x: 54,
-      y: 36,
+      x: Math.max(0, Math.min(naturalSize.width - w, x)),
+      y: Math.max(0, Math.min(naturalSize.height - h, y)),
       width: w,
       height: h
     }));
@@ -875,16 +956,27 @@ export const CardCropVisor: React.FC<CardCropVisorProps> = ({
             <div className="flex flex-col gap-1.5">
               <button
                 type="button"
+                onClick={applyPresetFull}
+                className="w-full py-1.5 px-2.5 rounded-lg bg-blue-950/60 hover:bg-blue-900/80 text-blue-200 text-xs font-medium border border-blue-700/50 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                title="Stanzvisier exakt auf die gesamte Karte ausrichten (100% ohne Randverlust)"
+              >
+                <Maximize2 className="w-3.5 h-3.5 text-blue-400" />
+                Randlos / Vollbild (100%)
+              </button>
+              <button
+                type="button"
                 onClick={applyPresetEpson}
                 className="w-full py-1.5 px-2.5 rounded-lg bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 text-xs font-medium border border-purple-700/50 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                title="Zuschnitt für unbeschnittene Epson DS-530 Einzugs-Scans"
               >
                 <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                Auto Epson DS-530 (1170×1634 px)
+                Auto Epson DS-530 Einzug
               </button>
               <button
                 type="button"
                 onClick={applyPresetCenter}
                 className="w-full py-1.5 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                title="Stanzvisier im Bild zentrieren"
               >
                 <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
                 Zentrieren

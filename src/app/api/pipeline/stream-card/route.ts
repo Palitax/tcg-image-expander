@@ -202,6 +202,35 @@ export async function POST(request: Request) {
           imageHeight: height
         };
       }
+
+      // Begrenzung auf Bildgrenzen
+      const cx = Math.max(0, Math.min(width - 10, cropBox.x));
+      const cy = Math.max(0, Math.min(height - 10, cropBox.y));
+      const cw = Math.max(10, Math.min(width - cx, cropBox.width));
+      const ch = Math.max(10, Math.min(height - cy, cropBox.height));
+      cropBox = {
+        x: cx,
+        y: cy,
+        width: cw,
+        height: ch,
+        imageWidth: width,
+        imageHeight: height
+      };
+    } else if (!cropBox && width && height) {
+      // Falls kein cropBox übermittelt wurde: Prüfe ob Bild bereits dem TCG-Seitenverhältnis entspricht
+      const imgRatio = height / width;
+      const isAlreadyCardCropped = Math.abs(imgRatio - (88 / 63)) <= 0.045 || Math.abs(imgRatio - 1.4576) <= 0.045;
+      if (isAlreadyCardCropped) {
+        cropBox = {
+          x: 0,
+          y: 0,
+          width: width,
+          height: height,
+          imageWidth: width,
+          imageHeight: height
+        };
+        console.log(`[Stream Card API] Pre-cropped TCG-Karte erkannt: Verwende 100% Vollbild-Stanzung (${width}x${height})`);
+      }
     }
 
     if (cropBox) {
